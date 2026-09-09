@@ -1,10 +1,10 @@
 
 import { 
-  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, feeStructures, feePayments, staff,
+  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, feeStructures, feePayments, staff,
   type User, type InsertUser, type School, type InsertSchool,
   type AcademicSession, type InsertAcademicSession, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
-  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult,
+  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll,
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
 } from "@shared/schema";
 import { db } from "./db";
@@ -78,6 +78,19 @@ export interface IStorage {
   createFeePayment(payment: StoredFeePaymentInsert): Promise<FeePayment>;
   createFeePaymentForSchool(payment: StoredFeePaymentInsert, schoolId: number): Promise<FeePayment | undefined>;
   getDefaulters(schoolId: number, classStr?: string, month?: string, year?: number): Promise<{ studentId: number, name: string, class: string, section: string, amountPaid: number, amountPending: number, month: string, year: number }[]>;
+
+  // Payroll
+  createStaffUserLink(link: InsertStaffUserLink & { schoolId: number }): Promise<StaffUserLink | undefined>;
+  getStaffForUser(userId: number, schoolId: number): Promise<Staff | undefined>;
+  getSalaryStructures(schoolId: number, sessionId: number, staffId?: number): Promise<SalaryStructure[]>;
+  createSalaryStructure(structure: InsertSalaryStructure & { staffId: number; schoolId: number; sessionId: number }): Promise<SalaryStructure>;
+  updateSalaryStructure(id: number, schoolId: number, sessionId: number, updates: Partial<InsertSalaryStructure>): Promise<SalaryStructure | undefined>;
+  setSalaryStructureActive(id: number, schoolId: number, sessionId: number, isActive: boolean): Promise<SalaryStructure | undefined>;
+  getPayroll(schoolId: number, sessionId: number, filters?: { month?: number; year?: number; staffId?: number }): Promise<PayrollRecord[]>;
+  getPayrollRecord(id: number, schoolId: number, sessionId: number): Promise<PayrollRecord | undefined>;
+  createPayroll(payroll: InsertPayroll & { staffId: number; schoolId: number; sessionId: number; basicAmount?: number }): Promise<PayrollRecord>;
+  updatePayroll(id: number, schoolId: number, sessionId: number, updates: Partial<InsertPayroll>): Promise<PayrollRecord | undefined>;
+  setPayrollStatus(id: number, schoolId: number, sessionId: number, status: PayrollRecord["status"]): Promise<PayrollRecord | undefined>;
 
   // Staff
   getStaff(schoolId: number): Promise<Staff[]>;
@@ -529,6 +542,90 @@ export class DatabaseStorage implements IStorage {
       const amountPending = Math.max(expected - amountPaid, 0);
       return amountPending > 0 ? [{ studentId: student.id, name: student.name, class: student.class, section: student.section, amountPaid, amountPending, month, year: targetYear }] : [];
     });
+  }
+
+  // === Payroll ===
+  async createStaffUserLink(insertLink: InsertStaffUserLink & { schoolId: number }): Promise<StaffUserLink | undefined> {
+    const [staffMember] = await db.select({ id: staff.id }).from(staff).where(and(eq(staff.id, insertLink.staffId), eq(staff.schoolId, insertLink.schoolId)));
+    const [user] = await db.select({ id: users.id, role: users.role }).from(users).where(and(eq(users.id, insertLink.userId), eq(users.schoolId, insertLink.schoolId)));
+    if (!staffMember || !user || !["staff", "teacher"].includes(user.role)) return undefined;
+    const [link] = await db.insert(staffUserLinks).values(insertLink).returning();
+    return link;
+  }
+
+  async getStaffForUser(userId: number, schoolId: number): Promise<Staff | undefined> {
+    const [row] = await db.select({ staff }).from(staffUserLinks).innerJoin(staff, and(eq(staffUserLinks.staffId, staff.id), eq(staffUserLinks.schoolId, staff.schoolId))).where(and(eq(staffUserLinks.userId, userId), eq(staffUserLinks.schoolId, schoolId)));
+    return row?.staff;
+  }
+
+  async getSalaryStructures(schoolId: number, sessionId: number, staffId?: number): Promise<SalaryStructure[]> {
+    const conditions = [eq(salaryStructures.schoolId, schoolId), eq(salaryStructures.sessionId, sessionId)];
+    if (staffId !== undefined) conditions.push(eq(salaryStructures.staffId, staffId));
+    return db.select().from(salaryStructures).where(and(...conditions));
+  }
+
+  async createSalaryStructure(insertStructure: InsertSalaryStructure & { staffId: number; schoolId: number; sessionId: number }): Promise<SalaryStructure> {
+    const [staffMember] = await db.select({ id: staff.id }).from(staff).where(and(eq(staff.id, insertStructure.staffId), eq(staff.schoolId, insertStructure.schoolId)));
+    if (!staffMember) throw new Error("Staff member not found in this school");
+    const [structure] = await db.insert(salaryStructures).values(insertStructure).returning();
+    return structure;
+  }
+
+  async updateSalaryStructure(id: number, schoolId: number, sessionId: number, updates: Partial<InsertSalaryStructure>): Promise<SalaryStructure | undefined> {
+    const [structure] = await db.update(salaryStructures).set({ ...updates, updatedAt: new Date() }).where(and(eq(salaryStructures.id, id), eq(salaryStructures.schoolId, schoolId), eq(salaryStructures.sessionId, sessionId))).returning();
+    return structure;
+  }
+
+  async setSalaryStructureActive(id: number, schoolId: number, sessionId: number, isActive: boolean): Promise<SalaryStructure | undefined> {
+    const [structure] = await db.update(salaryStructures).set({ isActive, updatedAt: new Date() }).where(and(eq(salaryStructures.id, id), eq(salaryStructures.schoolId, schoolId), eq(salaryStructures.sessionId, sessionId))).returning();
+    return structure;
+  }
+
+  async getPayroll(schoolId: number, sessionId: number, filters: { month?: number; year?: number; staffId?: number } = {}): Promise<PayrollRecord[]> {
+    const conditions = [eq(payrollRecords.schoolId, schoolId), eq(payrollRecords.sessionId, sessionId)];
+    if (filters.month !== undefined) conditions.push(eq(payrollRecords.payrollMonth, filters.month));
+    if (filters.year !== undefined) conditions.push(eq(payrollRecords.payrollYear, filters.year));
+    if (filters.staffId !== undefined) conditions.push(eq(payrollRecords.staffId, filters.staffId));
+    return db.select().from(payrollRecords).where(and(...conditions));
+  }
+
+  async getPayrollRecord(id: number, schoolId: number, sessionId: number): Promise<PayrollRecord | undefined> {
+    const [record] = await db.select().from(payrollRecords).where(and(eq(payrollRecords.id, id), eq(payrollRecords.schoolId, schoolId), eq(payrollRecords.sessionId, sessionId)));
+    return record;
+  }
+
+  async createPayroll(insertPayroll: InsertPayroll & { staffId: number; schoolId: number; sessionId: number; basicAmount?: number }): Promise<PayrollRecord> {
+    const [structure] = await db.select().from(salaryStructures).where(and(eq(salaryStructures.staffId, insertPayroll.staffId), eq(salaryStructures.schoolId, insertPayroll.schoolId), eq(salaryStructures.sessionId, insertPayroll.sessionId), eq(salaryStructures.isActive, true))).orderBy(sql`${salaryStructures.effectiveDate} DESC`).limit(1);
+    if (!structure) throw new Error("No active salary structure for staff member");
+    if (insertPayroll.advanceDeduction > structure.advanceOutstanding) throw new Error("Advance deduction exceeds outstanding advance");
+    const basicAmount = structure.basicSalary;
+    const netSalary = basicAmount + insertPayroll.allowances - insertPayroll.deductions - insertPayroll.advanceDeduction;
+    if (netSalary < 0) throw new Error("Deductions cannot exceed salary");
+    const [record] = await db.insert(payrollRecords).values({ ...insertPayroll, basicAmount, netSalary, status: "draft" }).returning();
+    return record;
+  }
+
+  async updatePayroll(id: number, schoolId: number, sessionId: number, updates: Partial<InsertPayroll>): Promise<PayrollRecord | undefined> {
+    const existing = await this.getPayrollRecord(id, schoolId, sessionId);
+    if (!existing) return undefined;
+    if (existing.status !== "draft") throw new Error("Only draft payroll can be edited");
+    const allowances = updates.allowances ?? existing.allowances;
+    const deductions = updates.deductions ?? existing.deductions;
+    const advanceDeduction = updates.advanceDeduction ?? existing.advanceDeduction;
+    if (allowances < 0 || deductions < 0 || advanceDeduction < 0) throw new Error("Salary amounts cannot be negative");
+    const netSalary = existing.basicAmount + allowances - deductions - advanceDeduction;
+    if (netSalary < 0) throw new Error("Deductions cannot exceed salary");
+    const [updated] = await db.update(payrollRecords).set({ ...updates, basicAmount: existing.basicAmount, netSalary, updatedAt: new Date() }).where(and(eq(payrollRecords.id, id), eq(payrollRecords.schoolId, schoolId), eq(payrollRecords.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  async setPayrollStatus(id: number, schoolId: number, sessionId: number, status: PayrollRecord["status"]): Promise<PayrollRecord | undefined> {
+    const existing = await this.getPayrollRecord(id, schoolId, sessionId);
+    if (!existing) return undefined;
+    const allowed: Record<string, string[]> = { draft: ["finalized"], finalized: ["paid"], paid: [] };
+    if (!allowed[existing.status]?.includes(status)) throw new Error(`Invalid payroll status transition from ${existing.status} to ${status}`);
+    const [updated] = await db.update(payrollRecords).set({ status, paymentDate: status === "paid" ? new Date() : existing.paymentDate, updatedAt: new Date() }).where(and(eq(payrollRecords.id, id), eq(payrollRecords.schoolId, schoolId), eq(payrollRecords.sessionId, sessionId))).returning();
+    return updated;
   }
 
   // === Staff ===

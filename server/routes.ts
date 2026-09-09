@@ -504,6 +504,78 @@ export async function registerRoutes(
     return res.json({ ...counts, total, percentage: total === 0 ? 0 : Math.round(((counts.present + counts.late) / total) * 10000) / 100 });
   });
 
+  // === Payroll ===
+  const payrollManagers = requireRole("admin", "accountant");
+  const payrollReaders = requireRole("admin", "principal", "accountant", "staff", "teacher");
+  async function payrollSession(user: ReturnType<typeof currentUser>) { return dataStore.getActiveSession(user.schoolId); }
+  async function ownStaffId(user: ReturnType<typeof currentUser>, sessionId?: number) {
+    if (!["staff", "teacher"].includes(user.role)) return undefined;
+    const staffMember = await dataStore.getStaffForUser(user.id, user.schoolId);
+    return staffMember?.id;
+  }
+  app.post(api.payroll.staffLinks.path, requireRole("admin"), async (req, res) => {
+    const input = api.payroll.staffLinks.input.parse(req.body); const user = currentUser(req);
+    const link = await dataStore.createStaffUserLink({ ...input, schoolId: user.schoolId });
+    return link ? res.status(201).json(link) : res.status(400).json({ message: "Staff or user is invalid for this school" });
+  });
+  app.get(api.payroll.structures.list.path, payrollReaders, async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.json([]);
+    const staffId = await ownStaffId(user, session.id);
+    if (["staff", "teacher"].includes(user.role) && staffId === undefined) return res.json([]);
+    const structures = await dataStore.getSalaryStructures(user.schoolId, session.id, staffId);
+    return res.json(structures.map(({ ...structure }) => structure));
+  });
+  app.post(api.payroll.structures.create.path, payrollManagers, async (req, res) => {
+    const input = api.payroll.structures.create.input.parse(req.body); const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { return res.status(201).json(await dataStore.createSalaryStructure({ ...input, staffId: input.staffId, schoolId: user.schoolId, sessionId: session.id })); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to create salary structure" }); }
+  });
+  app.patch(api.payroll.structures.update.path, payrollManagers, async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { const updated = await dataStore.updateSalaryStructure(routeId(req.params.id), user.schoolId, session.id, api.payroll.structures.update.input.parse(req.body)); return updated ? res.json(updated) : res.status(404).json({ message: "Salary structure not found" }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to update salary structure" }); }
+  });
+  app.post(api.payroll.structures.status.path, payrollManagers, async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    const updated = await dataStore.setSalaryStructureActive(routeId(req.params.id), user.schoolId, session.id, api.payroll.structures.status.input.parse(req.body).isActive);
+    return updated ? res.json(updated) : res.status(404).json({ message: "Salary structure not found" });
+  });
+  app.get(api.payroll.list.path, payrollReaders, async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.json([]);
+    const own = await ownStaffId(user, session.id); const staffId = ["staff", "teacher"].includes(user.role) ? own : (typeof req.query.staffId === "string" ? idSchema.parse(req.query.staffId) : undefined);
+    if (["staff", "teacher"].includes(user.role) && own === undefined) return res.json([]);
+    const records = await dataStore.getPayroll(user.schoolId, session.id, { staffId, month: typeof req.query.month === "string" ? idSchema.parse(req.query.month) : undefined, year: typeof req.query.year === "string" ? idSchema.parse(req.query.year) : undefined });
+    return res.json(records);
+  });
+  app.get(api.payroll.summary.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.json({ count: 0, totalBasic: 0, totalAllowances: 0, totalDeductions: 0, totalAdvanceDeduction: 0, totalNet: 0, paid: 0, pending: 0 });
+    const records = await dataStore.getPayroll(user.schoolId, session.id, { month: typeof req.query.month === "string" ? idSchema.parse(req.query.month) : undefined, year: typeof req.query.year === "string" ? idSchema.parse(req.query.year) : undefined });
+    return res.json({ count: records.length, totalBasic: records.reduce((sum, row) => sum + row.basicAmount, 0), totalAllowances: records.reduce((sum, row) => sum + row.allowances, 0), totalDeductions: records.reduce((sum, row) => sum + row.deductions, 0), totalAdvanceDeduction: records.reduce((sum, row) => sum + row.advanceDeduction, 0), totalNet: records.reduce((sum, row) => sum + row.netSalary, 0), paid: records.filter(row => row.status === "paid").length, pending: records.filter(row => row.status !== "paid").length });
+  });
+  app.get(api.payroll.get.path, payrollReaders, async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    const record = await dataStore.getPayrollRecord(routeId(req.params.id), user.schoolId, session.id); if (!record) return res.status(404).json({ message: "Payroll record not found" });
+    const own = await ownStaffId(user, session.id); if (["staff", "teacher"].includes(user.role) && own !== record.staffId) return res.status(404).json({ message: "Payroll record not found" });
+    return res.json(record);
+  });
+  app.get(api.payroll.staffHistory.path, payrollReaders, async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.json([]);
+    const requested = routeId(req.params.staffId); const own = await ownStaffId(user, session.id); const staffId = ["staff", "teacher"].includes(user.role) ? own : requested;
+    if (["staff", "teacher"].includes(user.role) && own !== requested) return res.status(404).json({ message: "Payroll history not found" });
+    return res.json(staffId === undefined ? [] : await dataStore.getPayroll(user.schoolId, session.id, { staffId }));
+  });
+  app.post(api.payroll.create.path, payrollManagers, async (req, res) => {
+    const input = api.payroll.create.input.parse(req.body); const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { return res.status(201).json(await dataStore.createPayroll({ ...input, schoolId: user.schoolId, sessionId: session.id })); } catch (error) { return res.status(error instanceof Error && error.message.includes("No active") ? 400 : 409).json({ message: error instanceof Error ? error.message : "Unable to create payroll" }); }
+  });
+  app.patch(api.payroll.update.path, payrollManagers, async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { const updated = await dataStore.updatePayroll(routeId(req.params.id), user.schoolId, session.id, api.payroll.update.input.parse(req.body)); return updated ? res.json(updated) : res.status(404).json({ message: "Payroll record not found" }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to update payroll" }); }
+  });
+  app.post(api.payroll.status.path, payrollManagers, async (req, res) => {
+    const user = currentUser(req); const session = await payrollSession(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { const updated = await dataStore.setPayrollStatus(routeId(req.params.id), user.schoolId, session.id, api.payroll.status.input.parse(req.body).status); return updated ? res.json(updated) : res.status(404).json({ message: "Payroll record not found" }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid payroll status transition" }); }
+  });
+
+
   // === Students ===
   app.get(api.students.list.path, requireAuth, async (req, res) => {
     const user = currentUser(req);

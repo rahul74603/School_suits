@@ -2,10 +2,10 @@
 import { z } from 'zod';
 import { 
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
-  insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema,
+  insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema, insertStaffUserLinkSchema, insertSalaryStructureSchema, insertPayrollSchema,
   insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema, insertAttendanceSchema,
   insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema, insertExamResultSchema,
-  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults
+  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords
 } from './schema';
 
 export const errorSchemas = {
@@ -317,6 +317,24 @@ export const api = {
       input: z.object({ from: z.string().optional(), to: z.string().optional(), studentId: z.string().optional(), class: z.string().optional(), section: z.string().optional(), subjectId: z.string().optional() }).optional(),
       responses: { 200: z.object({ total: z.number(), present: z.number(), absent: z.number(), late: z.number(), leave: z.number(), percentage: z.number() }) },
     },
+  },
+
+  // === Payroll ===
+  payroll: {
+    staffLinks: { method: 'POST' as const, path: '/api/payroll/staff-links', input: insertStaffUserLinkSchema, responses: { 201: z.custom<typeof staffUserLinks.$inferSelect>() } },
+    structures: {
+      list: { method: 'GET' as const, path: '/api/payroll/salary-structures', responses: { 200: z.array(z.custom<typeof salaryStructures.$inferSelect>()) } },
+      create: { method: 'POST' as const, path: '/api/payroll/salary-structures', input: insertSalaryStructureSchema, responses: { 201: z.custom<typeof salaryStructures.$inferSelect>() } },
+      update: { method: 'PATCH' as const, path: '/api/payroll/salary-structures/:id', input: insertSalaryStructureSchema.partial(), responses: { 200: z.custom<typeof salaryStructures.$inferSelect>() } },
+      status: { method: 'POST' as const, path: '/api/payroll/salary-structures/:id/status', input: z.object({ isActive: z.boolean() }), responses: { 200: z.custom<typeof salaryStructures.$inferSelect>() } },
+    },
+    list: { method: 'GET' as const, path: '/api/payroll', input: z.object({ month: z.string().optional(), year: z.string().optional(), staffId: z.string().optional() }).optional(), responses: { 200: z.array(z.custom<typeof payrollRecords.$inferSelect>()) } },
+    get: { method: 'GET' as const, path: '/api/payroll/:id', responses: { 200: z.custom<typeof payrollRecords.$inferSelect>() } },
+    staffHistory: { method: 'GET' as const, path: '/api/payroll/staff/:staffId', responses: { 200: z.array(z.custom<typeof payrollRecords.$inferSelect>()) } },
+    create: { method: 'POST' as const, path: '/api/payroll', input: insertPayrollSchema, responses: { 201: z.custom<typeof payrollRecords.$inferSelect>() } },
+    update: { method: 'PATCH' as const, path: '/api/payroll/:id', input: insertPayrollSchema.partial(), responses: { 200: z.custom<typeof payrollRecords.$inferSelect>() } },
+    status: { method: 'POST' as const, path: '/api/payroll/:id/status', input: z.object({ status: z.enum(["draft", "finalized", "paid"]) }), responses: { 200: z.custom<typeof payrollRecords.$inferSelect>() } },
+    summary: { method: 'GET' as const, path: '/api/payroll/summary', input: z.object({ month: z.string().optional(), year: z.string().optional() }).optional(), responses: { 200: z.object({ count: z.number(), totalBasic: z.number(), totalAllowances: z.number(), totalDeductions: z.number(), totalAdvanceDeduction: z.number(), totalNet: z.number(), paid: z.number(), pending: z.number() }) } },
   },
 
   // === Staff ===

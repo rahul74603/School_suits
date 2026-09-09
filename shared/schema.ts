@@ -367,8 +367,70 @@ export const staff = pgTable("staff", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
+  idSchoolUnique: uniqueIndex("staff_id_school_unique").on(table.id, table.schoolId),
   schoolIndex: index("staff_school_idx").on(table.schoolId),
   salaryCheck: check("staff_basic_salary_nonnegative", sql`${table.basicSalary} >= 0`),
+}));
+
+// === Staff users and payroll ===
+export const staffUserLinks = pgTable("staff_user_links", {
+  id: serial("id").primaryKey(),
+  staffId: integer("staff_id").notNull(),
+  userId: integer("user_id").notNull(),
+  schoolId: integer("school_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  staffUnique: uniqueIndex("staff_user_links_staff_unique").on(table.staffId, table.schoolId),
+  userUnique: uniqueIndex("staff_user_links_user_unique").on(table.userId, table.schoolId),
+  staffSchoolForeignKey: foreignKey({ columns: [table.staffId, table.schoolId], foreignColumns: [staff.id, staff.schoolId], name: "staff_user_links_staff_school_fk" }),
+  userSchoolForeignKey: foreignKey({ columns: [table.userId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "staff_user_links_user_school_fk" }),
+}));
+
+export const salaryStructures = pgTable("salary_structures", {
+  id: serial("id").primaryKey(),
+  staffId: integer("staff_id").notNull(),
+  schoolId: integer("school_id").notNull(),
+  sessionId: integer("session_id").notNull(),
+  basicSalary: integer("basic_salary").notNull(),
+  allowances: integer("allowances").notNull().default(0),
+  deductions: integer("deductions").notNull().default(0),
+  advanceOutstanding: integer("advance_outstanding").notNull().default(0),
+  effectiveDate: date("effective_date").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  staffSessionIndex: index("salary_structures_staff_session_idx").on(table.schoolId, table.sessionId, table.staffId),
+  amountsCheck: check("salary_structures_amounts_nonnegative", sql`${table.basicSalary} >= 0 AND ${table.allowances} >= 0 AND ${table.deductions} >= 0 AND ${table.advanceOutstanding} >= 0`),
+  staffSchoolForeignKey: foreignKey({ columns: [table.staffId, table.schoolId], foreignColumns: [staff.id, staff.schoolId], name: "salary_structures_staff_school_fk" }),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "salary_structures_session_school_fk" }),
+}));
+
+export const payrollRecords = pgTable("payroll_records", {
+  id: serial("id").primaryKey(),
+  staffId: integer("staff_id").notNull(),
+  schoolId: integer("school_id").notNull(),
+  sessionId: integer("session_id").notNull(),
+  payrollMonth: integer("payroll_month").notNull(),
+  payrollYear: integer("payroll_year").notNull(),
+  basicAmount: integer("basic_amount").notNull(),
+  allowances: integer("allowances").notNull(),
+  deductions: integer("deductions").notNull(),
+  advanceDeduction: integer("advance_deduction").notNull().default(0),
+  netSalary: integer("net_salary").notNull(),
+  status: text("status").notNull().default("draft"),
+  paymentDate: timestamp("payment_date"),
+  remarks: text("remarks"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  staffMonthUnique: uniqueIndex("payroll_staff_month_unique").on(table.staffId, table.schoolId, table.sessionId, table.payrollMonth, table.payrollYear),
+  schoolMonthIndex: index("payroll_school_month_idx").on(table.schoolId, table.sessionId, table.payrollYear, table.payrollMonth),
+  amountsCheck: check("payroll_amounts_nonnegative", sql`${table.basicAmount} >= 0 AND ${table.allowances} >= 0 AND ${table.deductions} >= 0 AND ${table.advanceDeduction} >= 0 AND ${table.netSalary} >= 0`),
+  monthYearCheck: check("payroll_month_year_valid", sql`${table.payrollMonth} BETWEEN 1 AND 12 AND ${table.payrollYear} BETWEEN 1900 AND 2200`),
+  statusCheck: check("payroll_status_valid", sql`${table.status} IN ('draft', 'finalized', 'paid')`),
+  staffSchoolForeignKey: foreignKey({ columns: [table.staffId, table.schoolId], foreignColumns: [staff.id, staff.schoolId], name: "payroll_staff_school_fk" }),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "payroll_session_school_fk" }),
 }));
 
 // === Relations ===
@@ -429,6 +491,13 @@ export const insertStaffSchema = createInsertSchema(staff).omit({ id: true, scho
   basicSalary: z.number().int().nonnegative(),
   name: z.string().trim().min(1),
 });
+export const insertStaffUserLinkSchema = createInsertSchema(staffUserLinks).omit({ id: true, schoolId: true, createdAt: true });
+export const insertSalaryStructureSchema = createInsertSchema(salaryStructures).omit({ id: true, schoolId: true, sessionId: true, createdAt: true, updatedAt: true }).extend({
+  basicSalary: z.number().int().nonnegative(), allowances: z.number().int().nonnegative(), deductions: z.number().int().nonnegative(), advanceOutstanding: z.number().int().nonnegative(),
+});
+export const insertPayrollSchema = createInsertSchema(payrollRecords).omit({ id: true, schoolId: true, sessionId: true, basicAmount: true, netSalary: true, status: true, paymentDate: true, createdAt: true, updatedAt: true }).extend({
+  payrollMonth: z.number().int().min(1).max(12), payrollYear: z.number().int().min(1900).max(2200), allowances: z.number().int().nonnegative(), deductions: z.number().int().nonnegative(), advanceDeduction: z.number().int().nonnegative(), remarks: z.string().max(500).nullable().optional(),
+});
 export const attendanceStatusSchema = z.enum(["present", "absent", "late", "leave"]);
 export const examStatusSchema = z.enum(["draft", "published", "completed", "archived"]);
 export const examDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
@@ -481,6 +550,9 @@ export type Student = typeof students.$inferSelect;
 export type FeeStructure = typeof feeStructures.$inferSelect;
 export type FeePayment = typeof feePayments.$inferSelect;
 export type Staff = typeof staff.$inferSelect;
+export type StaffUserLink = typeof staffUserLinks.$inferSelect;
+export type SalaryStructure = typeof salaryStructures.$inferSelect;
+export type PayrollRecord = typeof payrollRecords.$inferSelect;
 export type Subject = typeof subjects.$inferSelect;
 export type TeacherSubjectAssignment = typeof teacherSubjectAssignments.$inferSelect;
 export type TeacherClassAssignment = typeof teacherClassAssignments.$inferSelect;
@@ -498,6 +570,9 @@ export type InsertStudent = z.infer<typeof insertStudentSchema>;
 export type InsertFeeStructure = z.infer<typeof insertFeeStructureSchema>;
 export type InsertFeePayment = z.infer<typeof insertFeePaymentSchema>;
 export type InsertStaff = z.infer<typeof insertStaffSchema>;
+export type InsertStaffUserLink = z.infer<typeof insertStaffUserLinkSchema>;
+export type InsertSalaryStructure = z.infer<typeof insertSalaryStructureSchema>;
+export type InsertPayroll = z.infer<typeof insertPayrollSchema>;
 export type InsertSubject = z.infer<typeof insertSubjectSchema>;
 export type InsertTeacherSubjectAssignment = z.infer<typeof insertTeacherSubjectAssignmentSchema>;
 export type InsertTeacherClassAssignment = z.infer<typeof insertTeacherClassAssignmentSchema>;
