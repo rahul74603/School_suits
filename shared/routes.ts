@@ -257,6 +257,15 @@ export const api = {
     removeSchedule: { method: 'DELETE' as const, path: '/api/exam-schedules/:id', responses: { 204: z.null() } },
   },
 
+  // === Student ID cards ===
+  studentIdCards: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/student-id-cards/:studentId',
+      responses: { 200: z.object({ card: z.custom() }) },
+    },
+  },
+
   // === Marksheet / report cards ===
   reportCards: {
     get: {

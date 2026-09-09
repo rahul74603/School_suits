@@ -20,6 +20,7 @@ import Attendance from "@/pages/Attendance";
 import Exams from "@/pages/Exams";
 import ExamResults from "@/pages/ExamResults";
 import ReportCards from "@/pages/ReportCards";
+import StudentIdCards from "@/pages/StudentIdCards";
 
 function Router() {
   return (
@@ -32,6 +33,7 @@ function Router() {
       <Route path="/exams" component={Exams} />
       <Route path="/exam-results" component={ExamResults} />
       <Route path="/report-cards" component={ReportCards} />
+      <Route path="/student-id-cards" component={StudentIdCards} />
       <Route path="/fees" component={Fees} />
       <Route path="/staff" component={Staff} />
       <Route path="/admissions" component={Admissions} />

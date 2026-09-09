@@ -20,6 +20,7 @@ const navigation = [
   { name: "Exams", href: "/exams", icon: FileText, roles: ["admin", "principal", "teacher", "student"] },
   { name: "Exam Results", href: "/exam-results", icon: FileText, roles: ["admin", "principal", "teacher", "student"] },
   { name: "Report Cards", href: "/report-cards", icon: FileText, roles: ["admin", "principal", "teacher", "student"] },
+  { name: "Student ID Cards", href: "/student-id-cards", icon: FileText, roles: ["admin", "principal", "teacher", "student"] },
   { name: "Admissions", href: "/admissions", icon: UserPlus, roles: ["admin", "principal", "staff", "teacher"] },
   { name: "Fees & Payments", href: "/fees", icon: CreditCard, roles: ["admin", "principal", "accountant", "staff"] },
   { name: "Staff", href: "/staff", icon: School, roles: ["admin", "principal"] },

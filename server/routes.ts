@@ -270,6 +270,30 @@ export async function registerRoutes(
     catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to remove schedule" }); }
   });
 
+  // === Student ID cards ===
+  app.get(api.studentIdCards.get.path, requireRole("admin", "principal", "teacher", "student"), async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const requestedStudentId = routeId(req.params.studentId);
+    const student = user.role === "student"
+      ? await dataStore.getStudentForUser(user.id, user.schoolId, session.id)
+      : await dataStore.getStudent(requestedStudentId, user.schoolId);
+    if (!student || student.id !== requestedStudentId || student.sessionId !== session.id || !student.isActive) return res.status(404).json({ message: "ID card not found" });
+    if (user.role === "teacher") {
+      const assignments = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id);
+      if (!assignments.some(item => item.className === student.class && item.section === student.section)) return res.status(404).json({ message: "ID card outside teacher assignment" });
+    }
+    const school = await dataStore.getSchool(user.schoolId);
+    return res.json({ card: {
+      school: school ? { id: school.id, name: school.name, logo: school.logo, address: school.address, contact: school.contact } : null,
+      student: { id: student.id, name: student.name, admissionNo: student.admissionNo, class: student.class, section: student.section, rollNo: student.rollNo },
+      session: { id: session.id, name: session.name },
+      photoUrl: null,
+      photoAvailable: false,
+    } });
+  });
+
   // === Marksheet / report cards ===
   app.get(api.reportCards.get.path, requireRole("admin", "principal", "teacher", "student"), async (req, res) => {
     const user = currentUser(req);
