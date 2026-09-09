@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import type { NextFunction, Request, Response } from "express";
 import type { User } from "@shared/schema";
 
-export const roles = ["admin", "staff", "teacher", "accountant"] as const;
+export const roles = ["admin", "principal", "staff", "teacher", "accountant", "student"] as const;
 export type Role = (typeof roles)[number];
 
 export interface AuthenticatedUser {

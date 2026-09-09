@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { 
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
   insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema,
-  students, feePayments, schools, staff, feeStructures, academicSessions
+  insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema,
+  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks
 } from './schema';
 
 export const errorSchemas = {
@@ -177,6 +178,69 @@ export const api = {
           })),
         },
       },
+    },
+  },
+
+  // === Role and assignment foundation ===
+  subjects: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/subjects',
+      responses: { 200: z.array(z.custom<typeof subjects.$inferSelect>()) },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/subjects',
+      input: insertSubjectSchema,
+      responses: { 201: z.custom<typeof subjects.$inferSelect>() },
+    },
+    update: {
+      method: 'PATCH' as const,
+      path: '/api/subjects/:id',
+      input: insertSubjectSchema.partial(),
+      responses: { 200: z.custom<typeof subjects.$inferSelect>() },
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/subjects/:id',
+      responses: { 204: z.null() },
+    },
+  },
+  assignments: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/teacher-assignments',
+      responses: { 200: z.object({ subjects: z.array(z.custom<typeof teacherSubjectAssignments.$inferSelect>()), classes: z.array(z.custom<typeof teacherClassAssignments.$inferSelect>()) }) },
+    },
+    assignSubject: {
+      method: 'POST' as const,
+      path: '/api/teacher-subject-assignments',
+      input: insertTeacherSubjectAssignmentSchema,
+      responses: { 201: z.custom<typeof teacherSubjectAssignments.$inferSelect>() },
+    },
+    removeSubject: {
+      method: 'DELETE' as const,
+      path: '/api/teacher-subject-assignments/:id',
+      responses: { 204: z.null() },
+    },
+    assignClass: {
+      method: 'POST' as const,
+      path: '/api/teacher-class-assignments',
+      input: insertTeacherClassAssignmentSchema,
+      responses: { 201: z.custom<typeof teacherClassAssignments.$inferSelect>() },
+    },
+    removeClass: {
+      method: 'DELETE' as const,
+      path: '/api/teacher-class-assignments/:id',
+      responses: { 204: z.null() },
+    },
+  },
+  studentLinks: {
+    create: {
+      method: 'POST' as const,
+      path: '/api/student-user-links',
+      input: insertStudentUserLinkSchema,
+      responses: { 201: z.custom<typeof studentUserLinks.$inferSelect>() },
     },
   },
 

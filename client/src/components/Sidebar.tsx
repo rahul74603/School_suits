@@ -9,22 +9,24 @@ import {
   School,
   LogOut
 } from "lucide-react";
-import { useLogout } from "@/hooks/use-auth";
+import { useAuth, useLogout } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
 const navigation = [
-  { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Students", href: "/students", icon: Users },
-  { name: "Admissions", href: "/admissions", icon: UserPlus },
-  { name: "Fees & Payments", href: "/fees", icon: CreditCard },
-  { name: "Staff", href: "/staff", icon: School },
-  { name: "Reports", href: "/reports", icon: FileText },
-  { name: "Settings", href: "/settings", icon: Settings },
+  { name: "Dashboard", href: "/", icon: LayoutDashboard, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
+  { name: "Students", href: "/students", icon: Users, roles: ["admin", "principal", "staff", "teacher", "student"] },
+  { name: "Admissions", href: "/admissions", icon: UserPlus, roles: ["admin", "principal", "staff", "teacher"] },
+  { name: "Fees & Payments", href: "/fees", icon: CreditCard, roles: ["admin", "principal", "accountant", "staff"] },
+  { name: "Staff", href: "/staff", icon: School, roles: ["admin", "principal"] },
+  { name: "Reports", href: "/reports", icon: FileText, roles: ["admin", "principal", "accountant", "staff", "teacher"] },
+  { name: "Settings", href: "/settings", icon: Settings, roles: ["admin", "principal"] },
 ];
 
 export function Sidebar() {
   const [location, setLocation] = useLocation();
+  const { data: user } = useAuth();
   const logout = useLogout();
+  const visibleNavigation = navigation.filter((item) => !user || item.roles.includes(user.role));
 
   async function handleLogout() {
     await logout.mutateAsync();
@@ -40,7 +42,7 @@ export function Sidebar() {
       
       <div className="flex-1 overflow-y-auto py-4">
         <nav className="space-y-1 px-3">
-          {navigation.map((item) => {
+          {visibleNavigation.map((item) => {
             const isActive = location === item.href;
             return (
               <Link key={item.name} href={item.href}>

@@ -1,9 +1,11 @@
 
 import { 
-  users, schools, academicSessions, students, feeStructures, feePayments, staff,
+  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, feeStructures, feePayments, staff,
   type User, type InsertUser, type School, type InsertSchool,
   type AcademicSession, type InsertAcademicSession, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
-  type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
+  type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink,
+  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink,
+  type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, ilike, and, or, sql } from "drizzle-orm";
@@ -20,6 +22,20 @@ export interface IStorage {
   // Academic sessions
   getActiveSession(schoolId: number): Promise<AcademicSession | undefined>;
   createAcademicSession(session: InsertAcademicSession & { schoolId: number }): Promise<AcademicSession>;
+
+  // Subjects and assignments
+  getSubjects(schoolId: number, sessionId: number): Promise<Subject[]>;
+  createSubject(subject: InsertSubject & { schoolId: number; sessionId: number }): Promise<Subject>;
+  updateSubject(id: number, schoolId: number, sessionId: number, updates: Partial<InsertSubject>): Promise<Subject | undefined>;
+  deleteSubject(id: number, schoolId: number, sessionId: number): Promise<boolean>;
+  getTeacherSubjectAssignments(schoolId: number, sessionId: number, teacherUserId?: number): Promise<TeacherSubjectAssignment[]>;
+  createTeacherSubjectAssignment(assignment: InsertTeacherSubjectAssignment & { schoolId: number; sessionId: number }): Promise<TeacherSubjectAssignment | undefined>;
+  deleteTeacherSubjectAssignment(id: number, schoolId: number, sessionId: number): Promise<boolean>;
+  getTeacherClassAssignments(schoolId: number, sessionId: number, teacherUserId?: number): Promise<TeacherClassAssignment[]>;
+  createTeacherClassAssignment(assignment: InsertTeacherClassAssignment & { schoolId: number; sessionId: number }): Promise<TeacherClassAssignment>;
+  deleteTeacherClassAssignment(id: number, schoolId: number, sessionId: number): Promise<boolean>;
+  createStudentUserLink(link: InsertStudentUserLink & { schoolId: number; sessionId: number }): Promise<StudentUserLink | undefined>;
+  getStudentForUser(userId: number, schoolId: number, sessionId: number): Promise<Student | undefined>;
 
   // Students
   getStudent(id: number, schoolId: number): Promise<Student | undefined>;
@@ -88,6 +104,102 @@ export class DatabaseStorage implements IStorage {
   async createAcademicSession(insertSession: InsertAcademicSession & { schoolId: number }): Promise<AcademicSession> {
     const [session] = await db.insert(academicSessions).values(insertSession).returning();
     return session;
+  }
+
+  // === Subjects and assignments ===
+  async getSubjects(schoolId: number, sessionId: number): Promise<Subject[]> {
+    return db.select().from(subjects).where(and(eq(subjects.schoolId, schoolId), eq(subjects.sessionId, sessionId)));
+  }
+
+  async createSubject(insertSubject: InsertSubject & { schoolId: number; sessionId: number }): Promise<Subject> {
+    const [subject] = await db.insert(subjects).values(insertSubject).returning();
+    return subject;
+  }
+
+  async updateSubject(id: number, schoolId: number, sessionId: number, updates: Partial<InsertSubject>): Promise<Subject | undefined> {
+    const [subject] = await db.update(subjects).set({ ...updates, updatedAt: new Date() }).where(and(
+      eq(subjects.id, id), eq(subjects.schoolId, schoolId), eq(subjects.sessionId, sessionId),
+    )).returning();
+    return subject;
+  }
+
+  async deleteSubject(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const assignment = await db.select({ id: teacherSubjectAssignments.id }).from(teacherSubjectAssignments).where(and(
+      eq(teacherSubjectAssignments.subjectId, id), eq(teacherSubjectAssignments.schoolId, schoolId), eq(teacherSubjectAssignments.sessionId, sessionId),
+    )).limit(1);
+    if (assignment.length > 0) return false;
+    const deleted = await db.delete(subjects).where(and(
+      eq(subjects.id, id), eq(subjects.schoolId, schoolId), eq(subjects.sessionId, sessionId),
+    )).returning({ id: subjects.id });
+    return deleted.length > 0;
+  }
+
+  async getTeacherSubjectAssignments(schoolId: number, sessionId: number, teacherUserId?: number): Promise<TeacherSubjectAssignment[]> {
+    const conditions = [eq(teacherSubjectAssignments.schoolId, schoolId), eq(teacherSubjectAssignments.sessionId, sessionId)];
+    if (teacherUserId !== undefined) conditions.push(eq(teacherSubjectAssignments.teacherUserId, teacherUserId));
+    return db.select().from(teacherSubjectAssignments).where(and(...conditions));
+  }
+
+  async createTeacherSubjectAssignment(insertAssignment: InsertTeacherSubjectAssignment & { schoolId: number; sessionId: number }): Promise<TeacherSubjectAssignment | undefined> {
+    const [teacher] = await db.select({ id: users.id, role: users.role, schoolId: users.schoolId }).from(users).where(and(
+      eq(users.id, insertAssignment.teacherUserId), eq(users.schoolId, insertAssignment.schoolId), eq(users.role, "teacher"),
+    ));
+    if (!teacher) return undefined;
+    const [subject] = await db.select({ id: subjects.id }).from(subjects).where(and(
+      eq(subjects.id, insertAssignment.subjectId), eq(subjects.schoolId, insertAssignment.schoolId), eq(subjects.sessionId, insertAssignment.sessionId),
+    ));
+    if (!subject) return undefined;
+    const [assignment] = await db.insert(teacherSubjectAssignments).values(insertAssignment).returning();
+    return assignment;
+  }
+
+  async deleteTeacherSubjectAssignment(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const deleted = await db.delete(teacherSubjectAssignments).where(and(
+      eq(teacherSubjectAssignments.id, id), eq(teacherSubjectAssignments.schoolId, schoolId), eq(teacherSubjectAssignments.sessionId, sessionId),
+    )).returning({ id: teacherSubjectAssignments.id });
+    return deleted.length > 0;
+  }
+
+  async getTeacherClassAssignments(schoolId: number, sessionId: number, teacherUserId?: number): Promise<TeacherClassAssignment[]> {
+    const conditions = [eq(teacherClassAssignments.schoolId, schoolId), eq(teacherClassAssignments.sessionId, sessionId)];
+    if (teacherUserId !== undefined) conditions.push(eq(teacherClassAssignments.teacherUserId, teacherUserId));
+    return db.select().from(teacherClassAssignments).where(and(...conditions));
+  }
+
+  async createTeacherClassAssignment(insertAssignment: InsertTeacherClassAssignment & { schoolId: number; sessionId: number }): Promise<TeacherClassAssignment> {
+    const [teacher] = await db.select({ id: users.id }).from(users).where(and(
+      eq(users.id, insertAssignment.teacherUserId), eq(users.schoolId, insertAssignment.schoolId), eq(users.role, "teacher"),
+    ));
+    if (!teacher) throw new Error("Teacher user not found in this school");
+    const [assignment] = await db.insert(teacherClassAssignments).values(insertAssignment).returning();
+    return assignment;
+  }
+
+  async deleteTeacherClassAssignment(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const deleted = await db.delete(teacherClassAssignments).where(and(
+      eq(teacherClassAssignments.id, id), eq(teacherClassAssignments.schoolId, schoolId), eq(teacherClassAssignments.sessionId, sessionId),
+    )).returning({ id: teacherClassAssignments.id });
+    return deleted.length > 0;
+  }
+
+  async createStudentUserLink(insertLink: InsertStudentUserLink & { schoolId: number; sessionId: number }): Promise<StudentUserLink | undefined> {
+    const [student] = await db.select({ id: students.id }).from(students).where(and(
+      eq(students.id, insertLink.studentId), eq(students.schoolId, insertLink.schoolId), eq(students.sessionId, insertLink.sessionId),
+    ));
+    const [user] = await db.select({ id: users.id }).from(users).where(and(
+      eq(users.id, insertLink.userId), eq(users.schoolId, insertLink.schoolId), eq(users.role, "student"),
+    ));
+    if (!student || !user) return undefined;
+    const [link] = await db.insert(studentUserLinks).values(insertLink).returning();
+    return link;
+  }
+
+  async getStudentForUser(userId: number, schoolId: number, sessionId: number): Promise<Student | undefined> {
+    const [row] = await db.select({ student: students }).from(studentUserLinks).innerJoin(students, eq(studentUserLinks.studentId, students.id)).where(and(
+      eq(studentUserLinks.userId, userId), eq(studentUserLinks.schoolId, schoolId), eq(studentUserLinks.sessionId, sessionId),
+      eq(students.schoolId, schoolId), eq(students.sessionId, sessionId), eq(students.isActive, true),
+    ));
+    return row?.student;
   }
 
   // === Students ===

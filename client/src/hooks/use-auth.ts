@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 export interface AuthUser {
   id: number;
   username: string;
-  role: "admin" | "staff" | "teacher" | "accountant";
+  role: "admin" | "principal" | "staff" | "teacher" | "accountant" | "student";
   name: string;
   schoolId: number;
 }

@@ -40,7 +40,30 @@ export const users = pgTable("users", {
   role: text("role").notNull().default("staff"),
   name: text("name").notNull(),
   schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }),
-});
+}, (table) => ({
+  idSchoolUnique: uniqueIndex("users_id_school_unique").on(table.id, table.schoolId),
+}));
+
+// === Subjects ===
+export const subjects = pgTable("subjects", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
+  name: text("name").notNull(),
+  code: text("code"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolSessionNameUnique: uniqueIndex("subjects_school_session_name_unique").on(table.schoolId, table.sessionId, table.name),
+  schoolSessionCodeUnique: uniqueIndex("subjects_school_session_code_unique").on(table.schoolId, table.sessionId, table.code),
+  idSchoolSessionUnique: uniqueIndex("subjects_id_school_session_unique").on(table.id, table.schoolId, table.sessionId),
+  sessionSchoolForeignKey: foreignKey({
+    columns: [table.sessionId, table.schoolId],
+    foreignColumns: [academicSessions.id, academicSessions.schoolId],
+    name: "subjects_session_school_fk",
+  }),
+}));
 
 // === Students Master ===
 export const students = pgTable("students", {
@@ -71,6 +94,82 @@ export const students = pgTable("students", {
     columns: [table.sessionId, table.schoolId],
     foreignColumns: [academicSessions.id, academicSessions.schoolId],
     name: "students_session_school_fk",
+  }),
+}));
+
+// === Teacher/Class/Subject assignments ===
+export const teacherSubjectAssignments = pgTable("teacher_subject_assignments", {
+  id: serial("id").primaryKey(),
+  teacherUserId: integer("teacher_user_id").notNull(),
+  subjectId: integer("subject_id").notNull(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  assignmentUnique: uniqueIndex("teacher_subject_assignments_unique").on(table.teacherUserId, table.subjectId, table.schoolId, table.sessionId),
+  teacherSchoolForeignKey: foreignKey({
+    columns: [table.teacherUserId, table.schoolId],
+    foreignColumns: [users.id, users.schoolId],
+    name: "teacher_subject_assignments_teacher_school_fk",
+  }),
+  subjectSchoolSessionForeignKey: foreignKey({
+    columns: [table.subjectId, table.schoolId, table.sessionId],
+    foreignColumns: [subjects.id, subjects.schoolId, subjects.sessionId],
+    name: "teacher_subject_assignments_subject_scope_fk",
+  }),
+  sessionSchoolForeignKey: foreignKey({
+    columns: [table.sessionId, table.schoolId],
+    foreignColumns: [academicSessions.id, academicSessions.schoolId],
+    name: "teacher_subject_assignments_session_school_fk",
+  }),
+}));
+
+export const teacherClassAssignments = pgTable("teacher_class_assignments", {
+  id: serial("id").primaryKey(),
+  teacherUserId: integer("teacher_user_id").notNull(),
+  className: text("class_name").notNull(),
+  section: text("section").notNull(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  assignmentUnique: uniqueIndex("teacher_class_assignments_unique").on(table.teacherUserId, table.className, table.section, table.schoolId, table.sessionId),
+  teacherSchoolForeignKey: foreignKey({
+    columns: [table.teacherUserId, table.schoolId],
+    foreignColumns: [users.id, users.schoolId],
+    name: "teacher_class_assignments_teacher_school_fk",
+  }),
+  sessionSchoolForeignKey: foreignKey({
+    columns: [table.sessionId, table.schoolId],
+    foreignColumns: [academicSessions.id, academicSessions.schoolId],
+    name: "teacher_class_assignments_session_school_fk",
+  }),
+}));
+
+// === Student login ownership ===
+export const studentUserLinks = pgTable("student_user_links", {
+  id: serial("id").primaryKey(),
+  studentId: integer("student_id").notNull(),
+  userId: integer("user_id").notNull(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  linkUnique: uniqueIndex("student_user_links_unique").on(table.studentId, table.userId, table.schoolId, table.sessionId),
+  studentSchoolForeignKey: foreignKey({
+    columns: [table.studentId, table.schoolId],
+    foreignColumns: [students.id, students.schoolId],
+    name: "student_user_links_student_school_fk",
+  }),
+  userSchoolForeignKey: foreignKey({
+    columns: [table.userId, table.schoolId],
+    foreignColumns: [users.id, users.schoolId],
+    name: "student_user_links_user_school_fk",
+  }),
+  sessionSchoolForeignKey: foreignKey({
+    columns: [table.sessionId, table.schoolId],
+    foreignColumns: [academicSessions.id, academicSessions.schoolId],
+    name: "student_user_links_session_school_fk",
   }),
 }));
 
@@ -203,6 +302,16 @@ export const insertStaffSchema = createInsertSchema(staff).omit({ id: true, scho
   basicSalary: z.number().int().nonnegative(),
   name: z.string().trim().min(1),
 });
+export const insertSubjectSchema = createInsertSchema(subjects).omit({ id: true, schoolId: true, sessionId: true, createdAt: true, updatedAt: true }).extend({
+  name: z.string().trim().min(1).max(100),
+  code: z.string().trim().max(50).optional(),
+});
+export const insertTeacherSubjectAssignmentSchema = createInsertSchema(teacherSubjectAssignments).omit({ id: true, schoolId: true, sessionId: true, createdAt: true });
+export const insertTeacherClassAssignmentSchema = createInsertSchema(teacherClassAssignments).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({
+  className: z.string().trim().min(1).max(100),
+  section: z.string().trim().min(1).max(50),
+});
+export const insertStudentUserLinkSchema = createInsertSchema(studentUserLinks).omit({ id: true, schoolId: true, sessionId: true, createdAt: true });
 
 // === Types ===
 export type School = typeof schools.$inferSelect;
@@ -212,6 +321,10 @@ export type Student = typeof students.$inferSelect;
 export type FeeStructure = typeof feeStructures.$inferSelect;
 export type FeePayment = typeof feePayments.$inferSelect;
 export type Staff = typeof staff.$inferSelect;
+export type Subject = typeof subjects.$inferSelect;
+export type TeacherSubjectAssignment = typeof teacherSubjectAssignments.$inferSelect;
+export type TeacherClassAssignment = typeof teacherClassAssignments.$inferSelect;
+export type StudentUserLink = typeof studentUserLinks.$inferSelect;
 
 export type InsertSchool = z.infer<typeof insertSchoolSchema>;
 export type InsertAcademicSession = z.infer<typeof insertAcademicSessionSchema>;
@@ -220,6 +333,10 @@ export type InsertStudent = z.infer<typeof insertStudentSchema>;
 export type InsertFeeStructure = z.infer<typeof insertFeeStructureSchema>;
 export type InsertFeePayment = z.infer<typeof insertFeePaymentSchema>;
 export type InsertStaff = z.infer<typeof insertStaffSchema>;
+export type InsertSubject = z.infer<typeof insertSubjectSchema>;
+export type InsertTeacherSubjectAssignment = z.infer<typeof insertTeacherSubjectAssignmentSchema>;
+export type InsertTeacherClassAssignment = z.infer<typeof insertTeacherClassAssignmentSchema>;
+export type InsertStudentUserLink = z.infer<typeof insertStudentUserLinkSchema>;
 
 // Server-side insert types retain tenant columns; client input schemas intentionally omit them.
 export type StoredStudentInsert = typeof students.$inferInsert;

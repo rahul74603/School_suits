@@ -5,6 +5,7 @@ import {
   requireRole,
   toAuthenticatedUser,
   verifyPassword,
+  roles,
 } from "../server/auth";
 
 async function run() {
