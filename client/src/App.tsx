@@ -23,6 +23,7 @@ import ReportCards from "@/pages/ReportCards";
 import StudentIdCards from "@/pages/StudentIdCards";
 import Payroll from "@/pages/Payroll";
 import Financial from "@/pages/Financial";
+import Settings from "@/pages/Settings";
 
 function Router() {
   return (
@@ -42,7 +43,7 @@ function Router() {
       <Route path="/staff" component={Staff} />
       <Route path="/admissions" component={Admissions} />
       <Route path="/reports"><ModulePlaceholder title="Reports" description="Reporting is not available yet. No fabricated financial or operational data is shown." /></Route>
-      <Route path="/settings"><ModulePlaceholder title="Settings" description="Settings are limited to authenticated session and school data in this phase." /></Route>
+      <Route path="/settings" component={Settings} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -1,8 +1,8 @@
 
 import { 
-  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
+  users, schools, academicSessions, schoolClasses, schoolSections, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
   type User, type InsertUser, type School, type InsertSchool,
-  type AcademicSession, type InsertAcademicSession, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
+  type AcademicSession, type InsertAcademicSession, type SchoolClass, type SchoolSection, type InsertClass, type InsertSection, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
   type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
@@ -14,6 +14,7 @@ export interface IStorage {
   // Users & Schools
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
+  getUsersBySchool(schoolId: number): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
   getSchool(id: number): Promise<School | undefined>;
   createSchool(school: InsertSchool): Promise<School>;
@@ -21,7 +22,16 @@ export interface IStorage {
 
   // Academic sessions
   getActiveSession(schoolId: number): Promise<AcademicSession | undefined>;
+  getAcademicSessions(schoolId: number): Promise<AcademicSession[]>;
   createAcademicSession(session: InsertAcademicSession & { schoolId: number }): Promise<AcademicSession>;
+  updateAcademicSession(id: number, schoolId: number, updates: Partial<InsertAcademicSession>): Promise<AcademicSession | undefined>;
+  activateAcademicSession(id: number, schoolId: number): Promise<AcademicSession | undefined>;
+  getClasses(schoolId: number, sessionId: number): Promise<SchoolClass[]>;
+  createClass(input: InsertClass & { schoolId: number; sessionId: number }): Promise<SchoolClass>;
+  updateClass(id: number, schoolId: number, sessionId: number, updates: Partial<InsertClass>): Promise<SchoolClass | undefined>;
+  getSections(schoolId: number, sessionId: number, classId?: number): Promise<SchoolSection[]>;
+  createSection(input: InsertSection & { schoolId: number; sessionId: number; classId: number }): Promise<SchoolSection>;
+  updateSection(id: number, schoolId: number, sessionId: number, updates: Partial<InsertSection>): Promise<SchoolSection | undefined>;
 
   // Subjects and assignments
   getSubjects(schoolId: number, sessionId: number): Promise<Subject[]>;
@@ -122,6 +132,10 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
+  async getUsersBySchool(schoolId: number): Promise<User[]> {
+    return db.select().from(users).where(eq(users.schoolId, schoolId));
+  }
+
   async createUser(insertUser: InsertUser): Promise<User> {
     const [user] = await db.insert(users).values(insertUser).returning();
     return user;
@@ -150,9 +164,45 @@ export class DatabaseStorage implements IStorage {
     return session;
   }
 
+  async getAcademicSessions(schoolId: number): Promise<AcademicSession[]> {
+    return db.select().from(academicSessions).where(eq(academicSessions.schoolId, schoolId)).orderBy(academicSessions.startDate);
+  }
+
   async createAcademicSession(insertSession: InsertAcademicSession & { schoolId: number }): Promise<AcademicSession> {
     const [session] = await db.insert(academicSessions).values(insertSession).returning();
     return session;
+  }
+
+  async updateAcademicSession(id: number, schoolId: number, updates: Partial<InsertAcademicSession>): Promise<AcademicSession | undefined> {
+    const [session] = await db.update(academicSessions).set({ ...updates, updatedAt: new Date() }).where(and(eq(academicSessions.id, id), eq(academicSessions.schoolId, schoolId))).returning();
+    return session;
+  }
+
+  async activateAcademicSession(id: number, schoolId: number): Promise<AcademicSession | undefined> {
+    return db.transaction(async (tx) => {
+      await tx.update(academicSessions).set({ isActive: false, updatedAt: new Date() }).where(eq(academicSessions.schoolId, schoolId));
+      const [session] = await tx.update(academicSessions).set({ isActive: true, updatedAt: new Date() }).where(and(eq(academicSessions.id, id), eq(academicSessions.schoolId, schoolId))).returning();
+      return session;
+    });
+  }
+
+  async getClasses(schoolId: number, sessionId: number): Promise<SchoolClass[]> {
+    return db.select().from(schoolClasses).where(and(eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.sessionId, sessionId))).orderBy(schoolClasses.displayOrder, schoolClasses.name);
+  }
+  async createClass(input: InsertClass & { schoolId: number; sessionId: number }): Promise<SchoolClass> {
+    const [value] = await db.insert(schoolClasses).values(input).returning(); return value;
+  }
+  async updateClass(id: number, schoolId: number, sessionId: number, updates: Partial<InsertClass>): Promise<SchoolClass | undefined> {
+    const [value] = await db.update(schoolClasses).set(updates).where(and(eq(schoolClasses.id, id), eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.sessionId, sessionId))).returning(); return value;
+  }
+  async getSections(schoolId: number, sessionId: number, classId?: number): Promise<SchoolSection[]> {
+    return db.select().from(schoolSections).where(and(eq(schoolSections.schoolId, schoolId), eq(schoolSections.sessionId, sessionId), ...(classId ? [eq(schoolSections.classId, classId)] : []))).orderBy(schoolSections.displayOrder, schoolSections.name);
+  }
+  async createSection(input: InsertSection & { schoolId: number; sessionId: number; classId: number }): Promise<SchoolSection> {
+    const [value] = await db.insert(schoolSections).values(input).returning(); return value;
+  }
+  async updateSection(id: number, schoolId: number, sessionId: number, updates: Partial<InsertSection>): Promise<SchoolSection | undefined> {
+    const [value] = await db.update(schoolSections).set(updates).where(and(eq(schoolSections.id, id), eq(schoolSections.schoolId, schoolId), eq(schoolSections.sessionId, sessionId))).returning(); return value;
   }
 
   // === Subjects and assignments ===

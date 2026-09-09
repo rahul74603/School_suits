@@ -32,6 +32,35 @@ export const academicSessions = pgTable("academic_sessions", {
   dateOrderCheck: check("academic_sessions_date_order_check", sql`${table.endDate} IS NULL OR ${table.startDate} IS NULL OR ${table.endDate} >= ${table.startDate}`),
 }));
 
+// === Classes and sections ===
+export const schoolClasses = pgTable("school_classes", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull(),
+  sessionId: integer("session_id").notNull(),
+  name: text("name").notNull(),
+  displayOrder: integer("display_order").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+}, (table) => ({
+  nameUnique: uniqueIndex("school_classes_scope_name_unique").on(table.schoolId, table.sessionId, table.name),
+  idScopeUnique: uniqueIndex("school_classes_id_scope_unique").on(table.id, table.schoolId, table.sessionId),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "school_classes_session_school_fk" }),
+}));
+
+export const schoolSections = pgTable("school_sections", {
+  id: serial("id").primaryKey(),
+  classId: integer("class_id").notNull(),
+  schoolId: integer("school_id").notNull(),
+  sessionId: integer("session_id").notNull(),
+  name: text("name").notNull(),
+  displayOrder: integer("display_order").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+}, (table) => ({
+  nameUnique: uniqueIndex("school_sections_class_name_unique").on(table.classId, table.schoolId, table.sessionId, table.name),
+  idScopeUnique: uniqueIndex("school_sections_id_scope_unique").on(table.id, table.classId, table.schoolId, table.sessionId),
+  classScopeForeignKey: foreignKey({ columns: [table.classId, table.schoolId, table.sessionId], foreignColumns: [schoolClasses.id, schoolClasses.schoolId, schoolClasses.sessionId], name: "school_sections_class_scope_fk" }),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "school_sections_session_school_fk" }),
+}));
+
 // === Users (Admin/Staff Login) ===
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -503,6 +532,8 @@ export const feePaymentsRelations = relations(feePayments, ({ one }) => ({
 }));
 
 // === Zod Schemas ===
+export const insertClassSchema = createInsertSchema(schoolClasses).omit({ id: true, schoolId: true, sessionId: true }).extend({ name: z.string().trim().min(1).max(100), displayOrder: z.number().int().optional() });
+export const insertSectionSchema = createInsertSchema(schoolSections).omit({ id: true, classId: true, schoolId: true, sessionId: true }).extend({ name: z.string().trim().min(1).max(50), displayOrder: z.number().int().optional() });
 export const insertSchoolSchema = createInsertSchema(schools).omit({ id: true, createdAt: true });
 export const insertAcademicSessionSchema = createInsertSchema(academicSessions).omit({ id: true, createdAt: true, updatedAt: true, schoolId: true }).extend({
   name: z.string().trim().min(1).max(100),
@@ -582,6 +613,8 @@ export const insertTeacherClassAssignmentSchema = createInsertSchema(teacherClas
 export const insertStudentUserLinkSchema = createInsertSchema(studentUserLinks).omit({ id: true, schoolId: true, sessionId: true, createdAt: true });
 
 // === Types ===
+export type SchoolClass = typeof schoolClasses.$inferSelect;
+export type SchoolSection = typeof schoolSections.$inferSelect;
 export type School = typeof schools.$inferSelect;
 export type AcademicSession = typeof academicSessions.$inferSelect;
 export type User = typeof users.$inferSelect;
@@ -604,6 +637,8 @@ export type ExamClassScope = typeof examClassScopes.$inferSelect;
 export type ExamSchedule = typeof examSchedules.$inferSelect;
 export type ExamResult = typeof examResults.$inferSelect;
 
+export type InsertClass = z.infer<typeof insertClassSchema>;
+export type InsertSection = z.infer<typeof insertSectionSchema>;
 export type InsertSchool = z.infer<typeof insertSchoolSchema>;
 export type InsertAcademicSession = z.infer<typeof insertAcademicSessionSchema>;
 export type InsertUser = z.infer<typeof insertUserSchema>;

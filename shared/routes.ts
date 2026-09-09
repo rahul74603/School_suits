@@ -4,7 +4,7 @@ import {
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
   insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema, insertStaffUserLinkSchema, insertSalaryStructureSchema, insertPayrollSchema, insertExpenseCategorySchema, insertExpenseSchema,
   insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema, insertAttendanceSchema,
-  insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema, insertExamResultSchema,
+  insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema, insertExamResultSchema, insertClassSchema, insertSectionSchema,
   students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses
 } from './schema';
 
@@ -44,6 +44,8 @@ export const api = {
 
   // === Academic sessions ===
   sessions: {
+    list: { method: 'GET' as const, path: '/api/academic-sessions', responses: { 200: z.array(z.custom<import('./schema').AcademicSession>()) } },
+    create: { method: 'POST' as const, path: '/api/academic-sessions', input: z.object({ name: z.string(), startDate: z.string().nullable().optional(), endDate: z.string().nullable().optional() }), responses: { 201: z.custom<import('./schema').AcademicSession>() } },
     active: {
       method: 'GET' as const,
       path: '/api/academic-sessions/active',

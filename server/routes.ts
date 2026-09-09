@@ -76,6 +76,39 @@ export async function registerRoutes(
     return res.json({ user: toPublicUser(currentUser(req)) });
   });
 
+  // === School management ===
+  app.get("/api/school-users", requireRole("admin", "principal"), async (req, res) => {
+    const users = await dataStore.getUsersBySchool(currentUser(req).schoolId);
+    res.json(users.map(({ id, username, name, role, schoolId }) => ({ id, username, name, role, schoolId })));
+  });
+  app.get("/api/academic-sessions", requireAuth, async (req, res) => res.json(await dataStore.getAcademicSessions(currentUser(req).schoolId)));
+  app.post("/api/academic-sessions", requireRole("admin", "principal"), async (req, res) => {
+    const input = z.object({ name: z.string().trim().min(1).max(100), startDate: z.string().optional().nullable(), endDate: z.string().optional().nullable(), isActive: z.boolean().optional() }).parse(req.body);
+    const user = currentUser(req); const session = await dataStore.createAcademicSession({ ...input, schoolId: user.schoolId, isActive: false });
+    res.status(201).json(session);
+  });
+  app.patch("/api/academic-sessions/:id", requireRole("admin", "principal"), async (req, res) => {
+    const input = z.object({ name: z.string().trim().min(1).max(100).optional(), startDate: z.string().nullable().optional(), endDate: z.string().nullable().optional() }).parse(req.body);
+    const result = await dataStore.updateAcademicSession(routeId(req.params.id), currentUser(req).schoolId, input);
+    if (!result) return res.status(404).json({ message: "Session not found" }); res.json(result);
+  });
+  app.post("/api/academic-sessions/:id/activate", requireRole("admin", "principal"), async (req, res) => {
+    const result = await dataStore.activateAcademicSession(routeId(req.params.id), currentUser(req).schoolId);
+    if (!result) return res.status(404).json({ message: "Session not found" }); res.json(result);
+  });
+  app.get("/api/management/classes", requireAuth, async (req, res) => {
+    const user = currentUser(req); const sessionId = idSchema.parse(req.query.sessionId);
+    res.json(await dataStore.getClasses(user.schoolId, sessionId));
+  });
+  app.post("/api/management/classes", requireRole("admin", "principal"), async (req, res) => {
+    const input = z.object({ sessionId: z.number().int().positive(), name: z.string().trim().min(1).max(100), displayOrder: z.number().int().optional(), isActive: z.boolean().optional() }).parse(req.body); const user = currentUser(req);
+    res.status(201).json(await dataStore.createClass({ ...input, schoolId: user.schoolId, isActive: input.isActive ?? true }));
+  });
+  app.patch("/api/management/classes/:id", requireRole("admin", "principal"), async (req, res) => { const user=currentUser(req); const sessionId=idSchema.parse(req.body.sessionId); const input=z.object({name:z.string().trim().min(1).max(100).optional(),displayOrder:z.number().int().optional(),isActive:z.boolean().optional()}).parse(req.body); const result=await dataStore.updateClass(routeId(req.params.id),user.schoolId,sessionId,input); if(!result)return res.status(404).json({message:"Class not found"}); res.json(result); });
+  app.get("/api/management/sections", requireAuth, async (req, res) => { const user=currentUser(req); res.json(await dataStore.getSections(user.schoolId,idSchema.parse(req.query.sessionId),req.query.classId ? idSchema.parse(req.query.classId) : undefined)); });
+  app.post("/api/management/sections", requireRole("admin", "principal"), async (req, res) => { const input=z.object({sessionId:z.number().int().positive(),classId:z.number().int().positive(),name:z.string().trim().min(1).max(50),displayOrder:z.number().int().optional(),isActive:z.boolean().optional()}).parse(req.body); const user=currentUser(req); res.status(201).json(await dataStore.createSection({...input,schoolId:user.schoolId,isActive:input.isActive ?? true})); });
+  app.patch("/api/management/sections/:id", requireRole("admin", "principal"), async (req, res) => { const user=currentUser(req); const sessionId=idSchema.parse(req.body.sessionId); const input=z.object({name:z.string().trim().min(1).max(50).optional(),displayOrder:z.number().int().optional(),isActive:z.boolean().optional()}).parse(req.body); const result=await dataStore.updateSection(routeId(req.params.id),user.schoolId,sessionId,input); if(!result)return res.status(404).json({message:"Section not found"}); res.json(result); });
+
   // === Academic sessions ===
   app.get(api.sessions.active.path, requireAuth, async (req, res) => {
     res.json(await dataStore.getActiveSession(currentUser(req).schoolId) ?? null);
