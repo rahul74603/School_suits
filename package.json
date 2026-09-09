@@ -12,7 +12,8 @@
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "build:desktop": "npx vite build && npx electron-builder --win",
-    "build:desktop:dev": "npx vite build && npx electron-builder --win --dir"
+    "build:desktop:dev": "npx vite build && npx electron-builder --win --dir",
+    "db:migrate": "tsx script/migrate.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

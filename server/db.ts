@@ -1,10 +1,15 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
-import pg from 'pg';
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
 import * as schema from "@shared/schema";
 
-// Humne Check hata diya hai. Agar URL nahi hai to Fake URL use karega taaki crash na ho.
-const connectionString = process.env.DATABASE_URL || "postgres://user:pass@localhost:5432/offline_mode";
+const { Pool } = pg;
 
-const pool = new pg.Pool({ connectionString });
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL must be set");
+}
+
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
 
 export const db = drizzle(pool, { schema });
