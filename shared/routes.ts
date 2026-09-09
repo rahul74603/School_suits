@@ -2,10 +2,10 @@
 import { z } from 'zod';
 import { 
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
-  insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema, insertStaffUserLinkSchema, insertSalaryStructureSchema, insertPayrollSchema,
+  insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema, insertStaffUserLinkSchema, insertSalaryStructureSchema, insertPayrollSchema, insertExpenseCategorySchema, insertExpenseSchema,
   insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema, insertAttendanceSchema,
   insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema, insertExamResultSchema,
-  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords
+  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses
 } from './schema';
 
 export const errorSchemas = {
@@ -335,6 +335,20 @@ export const api = {
     update: { method: 'PATCH' as const, path: '/api/payroll/:id', input: insertPayrollSchema.partial(), responses: { 200: z.custom<typeof payrollRecords.$inferSelect>() } },
     status: { method: 'POST' as const, path: '/api/payroll/:id/status', input: z.object({ status: z.enum(["draft", "finalized", "paid"]) }), responses: { 200: z.custom<typeof payrollRecords.$inferSelect>() } },
     summary: { method: 'GET' as const, path: '/api/payroll/summary', input: z.object({ month: z.string().optional(), year: z.string().optional() }).optional(), responses: { 200: z.object({ count: z.number(), totalBasic: z.number(), totalAllowances: z.number(), totalDeductions: z.number(), totalAdvanceDeduction: z.number(), totalNet: z.number(), paid: z.number(), pending: z.number() }) } },
+  },
+
+  // === Financial dashboard ===
+  financial: {
+    summary: { method: 'GET' as const, path: '/api/financial/summary', input: z.object({ from: z.string().optional(), to: z.string().optional(), month: z.string().optional(), year: z.string().optional() }).optional(), responses: { 200: z.custom() } },
+    income: { method: 'GET' as const, path: '/api/financial/income', input: z.object({ from: z.string().optional(), to: z.string().optional(), month: z.string().optional(), year: z.string().optional() }).optional(), responses: { 200: z.custom() } },
+    expenses: { method: 'GET' as const, path: '/api/financial/expenses', input: z.object({ from: z.string().optional(), to: z.string().optional(), categoryId: z.string().optional() }).optional(), responses: { 200: z.array(z.custom<typeof expenses.$inferSelect>()) } },
+    createExpense: { method: 'POST' as const, path: '/api/financial/expenses', input: insertExpenseSchema, responses: { 201: z.custom<typeof expenses.$inferSelect>() } },
+    updateExpense: { method: 'PATCH' as const, path: '/api/financial/expenses/:id', input: insertExpenseSchema.partial(), responses: { 200: z.custom<typeof expenses.$inferSelect>() } },
+    deleteExpense: { method: 'DELETE' as const, path: '/api/financial/expenses/:id', responses: { 204: z.null() } },
+    expenseStatus: { method: 'POST' as const, path: '/api/financial/expenses/:id/status', input: z.object({ status: z.enum(["draft", "finalized"]) }), responses: { 200: z.custom<typeof expenses.$inferSelect>() } },
+    categories: { method: 'GET' as const, path: '/api/financial/expense-categories', responses: { 200: z.array(z.custom<typeof expenseCategories.$inferSelect>()) } },
+    createCategory: { method: 'POST' as const, path: '/api/financial/expense-categories', input: insertExpenseCategorySchema, responses: { 201: z.custom<typeof expenseCategories.$inferSelect>() } },
+    updateCategory: { method: 'PATCH' as const, path: '/api/financial/expense-categories/:id', input: insertExpenseCategorySchema.partial(), responses: { 200: z.custom<typeof expenseCategories.$inferSelect>() } },
   },
 
   // === Staff ===

@@ -433,6 +433,43 @@ export const payrollRecords = pgTable("payroll_records", {
   sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "payroll_session_school_fk" }),
 }));
 
+// === Financial management ===
+export const expenseCategories = pgTable("expense_categories", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull(),
+  name: text("name").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolNameUnique: uniqueIndex("expense_categories_school_name_unique").on(table.schoolId, table.name),
+  idSchoolUnique: uniqueIndex("expense_categories_id_school_unique").on(table.id, table.schoolId),
+  schoolForeignKey: foreignKey({ columns: [table.schoolId], foreignColumns: [schools.id], name: "expense_categories_school_fk" }),
+}));
+
+export const expenses = pgTable("expenses", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull(),
+  sessionId: integer("session_id").notNull(),
+  categoryId: integer("category_id").notNull(),
+  description: text("description").notNull(),
+  amount: integer("amount").notNull(),
+  expenseDate: date("expense_date").notNull(),
+  paymentReference: text("payment_reference"),
+  status: text("status").notNull().default("draft"),
+  createdByUserId: integer("created_by_user_id").notNull(),
+  remarks: text("remarks"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  dateIndex: index("expenses_school_session_date_idx").on(table.schoolId, table.sessionId, table.expenseDate),
+  categoryIndex: index("expenses_category_idx").on(table.schoolId, table.sessionId, table.categoryId),
+  amountCheck: check("expenses_amount_positive", sql`${table.amount} > 0`),
+  statusCheck: check("expenses_status_valid", sql`${table.status} IN ('draft', 'finalized')`),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "expenses_session_school_fk" }),
+  categorySchoolForeignKey: foreignKey({ columns: [table.categoryId, table.schoolId], foreignColumns: [expenseCategories.id, expenseCategories.schoolId], name: "expenses_category_school_fk" }),
+  creatorSchoolForeignKey: foreignKey({ columns: [table.createdByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "expenses_creator_school_fk" }),
+}));
+
 // === Relations ===
 export const schoolsRelations = relations(schools, ({ many }) => ({
   users: many(users),
@@ -487,6 +524,8 @@ export const insertFeePaymentSchema = createInsertSchema(feePayments).omit({ id:
   year: z.number().int().min(1900).max(2200),
   receiptNo: z.string().trim().min(1).max(100),
 });
+export const insertExpenseCategorySchema = createInsertSchema(expenseCategories).omit({ id: true, schoolId: true, createdAt: true }).extend({ name: z.string().trim().min(1).max(100) });
+export const insertExpenseSchema = createInsertSchema(expenses).omit({ id: true, schoolId: true, sessionId: true, createdByUserId: true, status: true, createdAt: true, updatedAt: true }).extend({ description: z.string().trim().min(1).max(200), amount: z.number().int().positive(), expenseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), remarks: z.string().max(500).nullable().optional(), paymentReference: z.string().max(100).nullable().optional() });
 export const insertStaffSchema = createInsertSchema(staff).omit({ id: true, schoolId: true, createdAt: true, updatedAt: true }).extend({
   basicSalary: z.number().int().nonnegative(),
   name: z.string().trim().min(1),
@@ -553,6 +592,8 @@ export type Staff = typeof staff.$inferSelect;
 export type StaffUserLink = typeof staffUserLinks.$inferSelect;
 export type SalaryStructure = typeof salaryStructures.$inferSelect;
 export type PayrollRecord = typeof payrollRecords.$inferSelect;
+export type ExpenseCategory = typeof expenseCategories.$inferSelect;
+export type Expense = typeof expenses.$inferSelect;
 export type Subject = typeof subjects.$inferSelect;
 export type TeacherSubjectAssignment = typeof teacherSubjectAssignments.$inferSelect;
 export type TeacherClassAssignment = typeof teacherClassAssignments.$inferSelect;
@@ -573,6 +614,8 @@ export type InsertStaff = z.infer<typeof insertStaffSchema>;
 export type InsertStaffUserLink = z.infer<typeof insertStaffUserLinkSchema>;
 export type InsertSalaryStructure = z.infer<typeof insertSalaryStructureSchema>;
 export type InsertPayroll = z.infer<typeof insertPayrollSchema>;
+export type InsertExpenseCategory = z.infer<typeof insertExpenseCategorySchema>;
+export type InsertExpense = z.infer<typeof insertExpenseSchema>;
 export type InsertSubject = z.infer<typeof insertSubjectSchema>;
 export type InsertTeacherSubjectAssignment = z.infer<typeof insertTeacherSubjectAssignmentSchema>;
 export type InsertTeacherClassAssignment = z.infer<typeof insertTeacherClassAssignmentSchema>;

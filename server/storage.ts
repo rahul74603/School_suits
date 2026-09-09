@@ -1,10 +1,10 @@
 
 import { 
-  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, feeStructures, feePayments, staff,
+  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
   type User, type InsertUser, type School, type InsertSchool,
   type AcademicSession, type InsertAcademicSession, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
-  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll,
+  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
 } from "@shared/schema";
 import { db } from "./db";
@@ -91,6 +91,18 @@ export interface IStorage {
   createPayroll(payroll: InsertPayroll & { staffId: number; schoolId: number; sessionId: number; basicAmount?: number }): Promise<PayrollRecord>;
   updatePayroll(id: number, schoolId: number, sessionId: number, updates: Partial<InsertPayroll>): Promise<PayrollRecord | undefined>;
   setPayrollStatus(id: number, schoolId: number, sessionId: number, status: PayrollRecord["status"]): Promise<PayrollRecord | undefined>;
+
+  // Financial management
+  getExpenseCategories(schoolId: number): Promise<ExpenseCategory[]>;
+  createExpenseCategory(category: InsertExpenseCategory & { schoolId: number }): Promise<ExpenseCategory>;
+  updateExpenseCategory(id: number, schoolId: number, updates: Partial<InsertExpenseCategory>): Promise<ExpenseCategory | undefined>;
+  getExpenses(schoolId: number, sessionId: number, filters?: { from?: string; to?: string; categoryId?: number }): Promise<Expense[]>;
+  createExpense(expense: InsertExpense & { schoolId: number; sessionId: number; createdByUserId: number }): Promise<Expense>;
+  updateExpense(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExpense>): Promise<Expense | undefined>;
+  deleteExpense(id: number, schoolId: number, sessionId: number): Promise<boolean>;
+  setExpenseStatus(id: number, schoolId: number, sessionId: number, status: Expense["status"]): Promise<Expense | undefined>;
+  getFinancialFeeIncome(schoolId: number, sessionId: number, filters?: { from?: string; to?: string }): Promise<FeePayment[]>;
+  getPaidPayroll(schoolId: number, sessionId: number, filters?: { from?: string; to?: string }): Promise<PayrollRecord[]>;
 
   // Staff
   getStaff(schoolId: number): Promise<Staff[]>;
@@ -626,6 +638,58 @@ export class DatabaseStorage implements IStorage {
     if (!allowed[existing.status]?.includes(status)) throw new Error(`Invalid payroll status transition from ${existing.status} to ${status}`);
     const [updated] = await db.update(payrollRecords).set({ status, paymentDate: status === "paid" ? new Date() : existing.paymentDate, updatedAt: new Date() }).where(and(eq(payrollRecords.id, id), eq(payrollRecords.schoolId, schoolId), eq(payrollRecords.sessionId, sessionId))).returning();
     return updated;
+  }
+
+  // === Financial management ===
+  async getExpenseCategories(schoolId: number): Promise<ExpenseCategory[]> {
+    return db.select().from(expenseCategories).where(eq(expenseCategories.schoolId, schoolId));
+  }
+  async createExpenseCategory(insertCategory: InsertExpenseCategory & { schoolId: number }): Promise<ExpenseCategory> {
+    const [category] = await db.insert(expenseCategories).values(insertCategory).returning(); return category;
+  }
+  async updateExpenseCategory(id: number, schoolId: number, updates: Partial<InsertExpenseCategory>): Promise<ExpenseCategory | undefined> {
+    const [category] = await db.update(expenseCategories).set(updates).where(and(eq(expenseCategories.id, id), eq(expenseCategories.schoolId, schoolId))).returning(); return category;
+  }
+  async getExpenses(schoolId: number, sessionId: number, filters: { from?: string; to?: string; categoryId?: number } = {}): Promise<Expense[]> {
+    const conditions = [eq(expenses.schoolId, schoolId), eq(expenses.sessionId, sessionId)];
+    if (filters.from) conditions.push(sql`${expenses.expenseDate} >= ${filters.from}`);
+    if (filters.to) conditions.push(sql`${expenses.expenseDate} <= ${filters.to}`);
+    if (filters.categoryId !== undefined) conditions.push(eq(expenses.categoryId, filters.categoryId));
+    return db.select().from(expenses).where(and(...conditions)).orderBy(expenses.expenseDate);
+  }
+  async createExpense(insertExpense: InsertExpense & { schoolId: number; sessionId: number; createdByUserId: number }): Promise<Expense> {
+    const [category] = await db.select({ id: expenseCategories.id }).from(expenseCategories).where(and(eq(expenseCategories.id, insertExpense.categoryId), eq(expenseCategories.schoolId, insertExpense.schoolId), eq(expenseCategories.isActive, true)));
+    if (!category) throw new Error("Expense category not found in this school");
+    const [expense] = await db.insert(expenses).values({ ...insertExpense, status: "draft" }).returning(); return expense;
+  }
+  async updateExpense(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExpense>): Promise<Expense | undefined> {
+    const [existing] = await db.select().from(expenses).where(and(eq(expenses.id, id), eq(expenses.schoolId, schoolId), eq(expenses.sessionId, sessionId)));
+    if (!existing) return undefined; if (existing.status !== "draft") throw new Error("Finalized expense cannot be edited");
+    if (updates.categoryId !== undefined) { const [category] = await db.select({ id: expenseCategories.id }).from(expenseCategories).where(and(eq(expenseCategories.id, updates.categoryId), eq(expenseCategories.schoolId, schoolId), eq(expenseCategories.isActive, true))); if (!category) throw new Error("Expense category not found in this school"); }
+    const [updated] = await db.update(expenses).set({ ...updates, updatedAt: new Date() }).where(and(eq(expenses.id, id), eq(expenses.schoolId, schoolId), eq(expenses.sessionId, sessionId))).returning(); return updated;
+  }
+  async deleteExpense(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const [existing] = await db.select().from(expenses).where(and(eq(expenses.id, id), eq(expenses.schoolId, schoolId), eq(expenses.sessionId, sessionId)));
+    if (!existing) return false; if (existing.status !== "draft") throw new Error("Finalized expense cannot be deleted");
+    const deleted = await db.delete(expenses).where(and(eq(expenses.id, id), eq(expenses.schoolId, schoolId), eq(expenses.sessionId, sessionId))).returning({ id: expenses.id }); return deleted.length > 0;
+  }
+  async setExpenseStatus(id: number, schoolId: number, sessionId: number, status: Expense["status"]): Promise<Expense | undefined> {
+    const [existing] = await db.select().from(expenses).where(and(eq(expenses.id, id), eq(expenses.schoolId, schoolId), eq(expenses.sessionId, sessionId)));
+    if (!existing) return undefined;
+    if (existing.status === "finalized" && status !== "finalized") throw new Error("Finalized expense cannot be reopened");
+    const [updated] = await db.update(expenses).set({ status, updatedAt: new Date() }).where(and(eq(expenses.id, id), eq(expenses.schoolId, schoolId), eq(expenses.sessionId, sessionId))).returning(); return updated;
+  }
+  async getFinancialFeeIncome(schoolId: number, sessionId: number, filters: { from?: string; to?: string } = {}): Promise<FeePayment[]> {
+    const conditions = [eq(feePayments.schoolId, schoolId), eq(feePayments.sessionId, sessionId)];
+    if (filters.from) conditions.push(sql`${feePayments.paymentDate} >= ${filters.from}`);
+    if (filters.to) conditions.push(sql`${feePayments.paymentDate} <= ${filters.to}::date + interval '1 day'`);
+    return db.select().from(feePayments).where(and(...conditions));
+  }
+  async getPaidPayroll(schoolId: number, sessionId: number, filters: { from?: string; to?: string } = {}): Promise<PayrollRecord[]> {
+    const conditions = [eq(payrollRecords.schoolId, schoolId), eq(payrollRecords.sessionId, sessionId), eq(payrollRecords.status, "paid")];
+    if (filters.from) conditions.push(sql`${payrollRecords.paymentDate} >= ${filters.from}`);
+    if (filters.to) conditions.push(sql`${payrollRecords.paymentDate} <= ${filters.to}::date + interval '1 day'`);
+    return db.select().from(payrollRecords).where(and(...conditions));
   }
 
   // === Staff ===

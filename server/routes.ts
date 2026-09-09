@@ -576,6 +576,40 @@ export async function registerRoutes(
   });
 
 
+  // === Financial management ===
+  const financialReaders = requireRole("admin", "principal", "accountant");
+  const financialManagers = requireRole("admin", "accountant");
+  function financialRange(query: any): { from?: string; to?: string } {
+    const month = typeof query.month === "string" ? Number(query.month) : undefined;
+    const year = typeof query.year === "string" ? Number(query.year) : undefined;
+    if (month !== undefined || year !== undefined) {
+      if (!month || !year || month < 1 || month > 12 || year < 1900 || year > 2200) throw new Error("Invalid month or year");
+      const from = `${year}-${String(month).padStart(2, "0")}-01`;
+      const last = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+      return { from, to: last };
+    }
+    return { from: typeof query.from === "string" ? query.from : undefined, to: typeof query.to === "string" ? query.to : undefined };
+  }
+  app.get(api.financial.income.path, financialReaders, async (req, res) => {
+    const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.json({ total: 0, payments: [] });
+    try { const payments = await dataStore.getFinancialFeeIncome(user.schoolId, session.id, financialRange(req.query)); return res.json({ total: payments.reduce((sum, payment) => sum + payment.amount, 0), payments: payments.map(payment => ({ id: payment.id, amount: payment.amount, paymentDate: payment.paymentDate, month: payment.month, year: payment.year, receiptNo: payment.receiptNo })) }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid financial filter" }); }
+  });
+  app.get(api.financial.expenses.path, financialReaders, async (req, res) => {
+    const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.json([]);
+    try { return res.json(await dataStore.getExpenses(user.schoolId, session.id, { ...financialRange(req.query), categoryId: typeof req.query.categoryId === "string" ? idSchema.parse(req.query.categoryId) : undefined })); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid expense filter" }); }
+  });
+  app.get(api.financial.categories.path, financialReaders, async (req, res) => res.json(await dataStore.getExpenseCategories(currentUser(req).schoolId)));
+  app.post(api.financial.createCategory.path, financialManagers, async (req, res) => { const category = await dataStore.createExpenseCategory({ ...api.financial.createCategory.input.parse(req.body), schoolId: currentUser(req).schoolId }); return res.status(201).json(category); });
+  app.patch(api.financial.updateCategory.path, financialManagers, async (req, res) => { const category = await dataStore.updateExpenseCategory(routeId(req.params.id), currentUser(req).schoolId, api.financial.updateCategory.input.parse(req.body)); return category ? res.json(category) : res.status(404).json({ message: "Expense category not found" }); });
+  app.post(api.financial.createExpense.path, financialManagers, async (req, res) => { const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.status(409).json({ message: "No active academic session" }); try { return res.status(201).json(await dataStore.createExpense({ ...api.financial.createExpense.input.parse(req.body), schoolId: user.schoolId, sessionId: session.id, createdByUserId: user.id })); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to create expense" }); } });
+  app.patch(api.financial.updateExpense.path, financialManagers, async (req, res) => { const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.status(409).json({ message: "No active academic session" }); try { const updated = await dataStore.updateExpense(routeId(req.params.id), user.schoolId, session.id, api.financial.updateExpense.input.parse(req.body)); return updated ? res.json(updated) : res.status(404).json({ message: "Expense not found" }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to update expense" }); } });
+  app.delete(api.financial.deleteExpense.path, financialManagers, async (req, res) => { const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.status(409).json({ message: "No active academic session" }); try { return (await dataStore.deleteExpense(routeId(req.params.id), user.schoolId, session.id)) ? res.status(204).send() : res.status(404).json({ message: "Expense not found" }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to delete expense" }); } });
+  app.post(api.financial.expenseStatus.path, financialManagers, async (req, res) => { const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.status(409).json({ message: "No active academic session" }); try { const updated = await dataStore.setExpenseStatus(routeId(req.params.id), user.schoolId, session.id, api.financial.expenseStatus.input.parse(req.body).status); return updated ? res.json(updated) : res.status(404).json({ message: "Expense not found" }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid expense status" }); } });
+  app.get(api.financial.summary.path, financialReaders, async (req, res) => {
+    const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.json({ totalFeeIncome: 0, totalIncome: 0, totalPayrollExpense: 0, totalOtherExpenses: 0, totalExpenses: 0, netBalance: 0, expenseByCategory: [], payrollCount: 0, feePaymentCount: 0 });
+    try { const range = financialRange(req.query); const fees = await dataStore.getFinancialFeeIncome(user.schoolId, session.id, range); const payroll = await dataStore.getPaidPayroll(user.schoolId, session.id, range); const expenses = (await dataStore.getExpenses(user.schoolId, session.id, range)).filter(expense => expense.status === "finalized"); const categories = await dataStore.getExpenseCategories(user.schoolId); const categoryNames = new Map(categories.map(category => [category.id, category.name])); const totalFeeIncome = fees.reduce((sum, item) => sum + item.amount, 0); const totalPayrollExpense = payroll.reduce((sum, item) => sum + item.netSalary, 0); const totalOtherExpenses = expenses.reduce((sum, item) => sum + item.amount, 0); const expenseByCategory = Array.from(expenses.reduce((map, expense) => map.set(expense.categoryId, (map.get(expense.categoryId) ?? 0) + expense.amount), new Map<number, number>())).map(([categoryId, amount]) => ({ categoryId, categoryName: categoryNames.get(categoryId) ?? "Unknown", amount })); const totalExpenses = totalPayrollExpense + totalOtherExpenses; return res.json({ totalFeeIncome, totalIncome: totalFeeIncome, totalPayrollExpense, totalOtherExpenses, totalExpenses, netBalance: totalFeeIncome - totalExpenses, expenseByCategory, payrollCount: payroll.length, feePaymentCount: fees.length }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid financial filter" }); }
+  });
+
   // === Students ===
   app.get(api.students.list.path, requireAuth, async (req, res) => {
     const user = currentUser(req);

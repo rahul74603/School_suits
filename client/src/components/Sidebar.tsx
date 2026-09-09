@@ -22,6 +22,7 @@ const navigation = [
   { name: "Report Cards", href: "/report-cards", icon: FileText, roles: ["admin", "principal", "teacher", "student"] },
   { name: "Student ID Cards", href: "/student-id-cards", icon: FileText, roles: ["admin", "principal", "teacher", "student"] },
   { name: "Staff Payroll", href: "/payroll", icon: CreditCard, roles: ["admin", "principal", "accountant", "staff", "teacher"] },
+  { name: "Financial Dashboard", href: "/financial", icon: CreditCard, roles: ["admin", "principal", "accountant"] },
   { name: "Admissions", href: "/admissions", icon: UserPlus, roles: ["admin", "principal", "staff", "teacher"] },
   { name: "Fees & Payments", href: "/fees", icon: CreditCard, roles: ["admin", "principal", "accountant", "staff"] },
   { name: "Staff", href: "/staff", icon: School, roles: ["admin", "principal"] },
