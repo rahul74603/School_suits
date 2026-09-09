@@ -1,6 +1,43 @@
-node_modules
-dist
+# Dependencies
+node_modules/
+
+# Build / generated output
+dist/
+build/
+out/
+release/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# Logs
+*.log
+
+# Local development
+.local/
+.kilo/
+
+# OS files
 .DS_Store
-server/public
+Thumbs.db
+
+# Server-generated files
+server/public/
+
+# Vite generated/config artifacts
 vite.config.ts.*
+
+# Archives
 *.tar.gz
+
+# Test / coverage output
+coverage/

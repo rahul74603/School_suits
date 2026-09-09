@@ -1,271 +1,326 @@
-import { useState } from "react";
-import { useFeeStructures, usePayments, useCollectFee, useDefaulters } from "@/hooks/use-fees";
-import { Sidebar } from "@/components/Sidebar";
+import { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Label } from "@/components/ui/label";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Search, IndianRupee, FileWarning, CheckCircle2 } from "lucide-react";
-import { format } from "date-fns";
-import { z } from "zod";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { insertFeePaymentSchema } from "@shared/schema";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { useQueryClient } from "@tanstack/react-query";
+import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, CheckCircle2 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { useReactToPrint } from "react-to-print";
 
 export default function Fees() {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState("collect");
-  const { data: structures } = useFeeStructures();
-  const { data: payments } = usePayments();
-  const { data: defaulters } = useDefaulters({ month: format(new Date(), 'MMMM') });
+  const [search, setSearch] = useState("");
+  const [selectedStudent, setSelectedStudent] = useState<any>(null);
+  const [schoolInfo, setSchoolInfo] = useState<any>({}); 
+  const [year, setYear] = useState(new Date().getFullYear().toString());
   
-  const collectFee = useCollectFee();
+  // Status & History
+  const [status, setStatus] = useState<any>({ admissionBalance: 0, monthStatus: [], pendingDues: [] });
+  const [paymentHistory, setPaymentHistory] = useState<any[]>([]);
+  
+  // Bill State
+  const [extraCharges, setExtraCharges] = useState<{name: string, amount: number, type: string, month?: string, dueId?: number}[]>([]); 
+  const [totalPayable, setTotalPayable] = useState(0);
+  
+  // Modals & Receipt
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isAddDueOpen, setIsAddDueOpen] = useState(false);
+  const [newDue, setNewDue] = useState({ name: "", amount: "" });
+  
+  // Receipt State
+  const [showReceipt, setShowReceipt] = useState(false);
+  const [currentReceipt, setCurrentReceipt] = useState<any>(null);
+  const receiptRef = useRef<HTMLDivElement>(null);
 
-  const form = useForm({
-    resolver: zodResolver(insertFeePaymentSchema),
-    defaultValues: {
-      studentId: 0,
-      amount: 0,
-      month: format(new Date(), 'MMMM'),
-      year: new Date().getFullYear(),
-      receiptNo: `REC-${Date.now()}`,
-      remarks: "",
-      schoolId: 1
-    }
+  useEffect(() => {
+    (async () => {
+        const info = await (window as any).electronAPI.invoke('get-school-info');
+        setSchoolInfo(info || {});
+    })();
+  }, []);
+
+  const { data: students } = useQuery({
+    queryKey: ["students-search", search],
+    queryFn: async () => { if (search.length < 2) return []; return await (window as any).electronAPI.invoke('get-students', { search }); },
+    enabled: search.length >= 2
   });
 
-  const onSubmit = (data: z.infer<typeof insertFeePaymentSchema>) => {
-    collectFee.mutate(data, {
-      onSuccess: () => {
-        toast({
-          title: "Payment Recorded",
-          description: `Receipt ${data.receiptNo} generated successfully.`,
-        });
-        form.reset({
-          studentId: 0,
-          amount: 0,
-          month: format(new Date(), 'MMMM'),
-          year: new Date().getFullYear(),
-          receiptNo: `REC-${Date.now()}`,
-          remarks: "",
-          schoolId: 1
-        });
-      },
-      onError: () => {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to record payment. Please try again.",
-        });
-      }
-    });
+  useEffect(() => { if (selectedStudent) loadStudentData(); }, [selectedStudent, year]);
+  useEffect(() => { let total = 0; extraCharges.forEach(c => total += (c.amount || 0)); setTotalPayable(total); }, [extraCharges]);
+
+  const loadStudentData = async () => {
+    try {
+      setExtraCharges([]); 
+      const history = await (window as any).electronAPI.invoke('get-fee-payments', { studentId: selectedStudent.id });
+      setPaymentHistory(history || []);
+      const statusData = await (window as any).electronAPI.invoke('get-student-status', { studentId: selectedStudent.id, classStr: selectedStudent.class, year: parseInt(year) });
+      if (statusData) setStatus(statusData);
+    } catch (error) { console.error(error); }
   };
 
+  // --- ACTIONS ---
+  const handleAddDue = async () => {
+      if(!newDue.name || !newDue.amount) return;
+      await (window as any).electronAPI.invoke('add-student-due', { studentId: selectedStudent.id, feeName: newDue.name, amount: parseInt(newDue.amount) });
+      setIsAddDueOpen(false); setNewDue({ name: "", amount: "" });
+      loadStudentData();
+  };
+  const deleteDue = async (id: number) => { await (window as any).electronAPI.invoke('delete-student-due', { id }); loadStudentData(); };
+
+  const addToBill = (name: string, amount: number, type: string, month?: string, dueId?: number) => {
+    if (extraCharges.find(c => c.name === name)) return;
+    setExtraCharges(prev => [...prev, { name, amount, type, month, dueId }]);
+  };
+  const removeCharge = (i: number) => { const u = [...extraCharges]; u.splice(i, 1); setExtraCharges(u); };
+  const updateBillAmount = (i: number, v: string) => { const val = parseInt(v) || 0; const u = [...extraCharges]; u[i].amount = val; setExtraCharges(u); };
+
+  // --- OPEN OLD RECEIPT ---
+  const openOldReceipt = (p: any) => {
+      let items = [];
+      try {
+          const bd = JSON.parse(p.breakdown);
+          if(bd && bd.extras) items = bd.extras;
+      } catch(e) {
+          items = [{ name: p.remarks, amount: p.amount }];
+      }
+
+      setCurrentReceipt({
+          receiptNo: p.receipt_no,
+          date: new Date(p.payment_date).toLocaleDateString(),
+          student: selectedStudent,
+          items: items,
+          total: p.amount
+      });
+      setShowReceipt(true);
+  };
+
+  // --- FINAL PAYMENT ---
+  const finalizePayment = async () => {
+    setIsConfirmOpen(false);
+    try {
+      const receiptNo = await (window as any).electronAPI.invoke('get-next-receipt-no');
+      const isAdmissionPayment = extraCharges.some(c => c.type === 'Admission Fee');
+      
+      const itemNames = extraCharges.map(c => `${c.name} (₹${c.amount})`).join(", ");
+      const remarks = itemNames; 
+
+      await (window as any).electronAPI.invoke('create-fee-payment', {
+        studentId: selectedStudent.id,
+        amount: totalPayable,
+        month: extraCharges.map(c => c.month).filter(Boolean).join(",") || "Misc",
+        year: parseInt(year),
+        receiptNo,
+        isAdmission: isAdmissionPayment, 
+        remarks: remarks,
+        breakdown: { extras: extraCharges }
+      });
+      
+      toast({ title: "Success", description: "Payment Saved!" });
+      loadStudentData();
+      
+      setCurrentReceipt({
+          receiptNo,
+          date: new Date().toLocaleDateString(),
+          student: selectedStudent,
+          items: extraCharges,
+          total: totalPayable
+      });
+      setShowReceipt(true);
+
+    } catch (e) { toast({ title: "Error", description: "Failed", variant: "destructive" }); }
+  };
+
+  const deleteReceipt = async (id: number) => {
+    if(!confirm("Delete this receipt? Amount will be due again.")) return;
+    await (window as any).electronAPI.invoke('delete-fee-payment', { id });
+    loadStudentData();
+  };
+
+  const handlePrint = useReactToPrint({ contentRef: receiptRef });
+
+  const sendWhatsApp = () => {
+      if(!selectedStudent.contact) {
+          toast({ title: "No Number", description: "Student contact number missing", variant: "destructive" });
+          return;
+      }
+      const phone = "91" + selectedStudent.contact; 
+      const text = `Dear Parent,%0A%0APayment Received for ${selectedStudent.name}.%0A%0AReceipt No: ${currentReceipt.receiptNo}%0ADate: ${currentReceipt.date}%0AAmount: ₹${currentReceipt.total}%0A%0ADetails:%0A${currentReceipt.items.map((i:any) => `- ${i.name}: ₹${i.amount}`).join('%0A')}%0A%0AThank you,%0A${schoolInfo.name || "School Admin"}`;
+      window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${text}`, '_blank');
+  };
+
+  const isAdmFullyPaid = status.admissionBalance <= 0;
+
   return (
-    <div className="flex min-h-screen bg-slate-50">
-      <Sidebar />
-      <main className="flex-1 ml-64 p-8">
-        <header className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900">Fees Management</h1>
-          <p className="text-slate-500 mt-1">Collect fees, manage structures, and track defaulters</p>
-        </header>
+    <div className="p-4 h-screen flex flex-col bg-slate-50 overflow-hidden">
+      {/* HEADER */}
+      <div className="flex justify-between items-center shrink-0 bg-white p-3 rounded-xl shadow-sm border mb-3">
+        <h1 className="text-2xl font-bold flex items-center gap-2 text-slate-800"><IndianRupee className="text-green-600" /> Fees Dashboard</h1>
+        {selectedStudent && <div className="font-bold text-lg">{selectedStudent.name} ({selectedStudent.class}) - {selectedStudent.admission_no}</div>}
+      </div>
 
-        <Tabs defaultValue="collect" className="space-y-6" onValueChange={setActiveTab}>
-          <TabsList className="bg-white p-1 rounded-xl border border-border shadow-sm">
-            <TabsTrigger value="collect" className="rounded-lg px-6 data-[state=active]:bg-primary data-[state=active]:text-white">Collect Fee</TabsTrigger>
-            <TabsTrigger value="history" className="rounded-lg px-6 data-[state=active]:bg-primary data-[state=active]:text-white">Payment History</TabsTrigger>
-            <TabsTrigger value="defaulters" className="rounded-lg px-6 data-[state=active]:bg-primary data-[state=active]:text-white">Defaulters</TabsTrigger>
-            <TabsTrigger value="structure" className="rounded-lg px-6 data-[state=active]:bg-primary data-[state=active]:text-white">Fee Structure</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="collect">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              <Card>
-                <CardHeader>
-                  <CardTitle>New Fee Collection</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Form {...form}>
-                    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                      <FormField
-                        control={form.control}
-                        name="studentId"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Student ID</FormLabel>
-                            <FormControl>
-                              <Input 
-                                placeholder="Enter Student ID" 
-                                type="number" 
-                                {...field}
-                                onChange={e => field.onChange(parseInt(e.target.value))}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <FormField
-                          control={form.control}
-                          name="month"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Month</FormLabel>
-                              <FormControl>
-                                <select 
-                                  className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-                                  {...field}
-                                >
-                                  {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map(m => (
-                                    <option key={m} value={m}>{m}</option>
-                                  ))}
-                                </select>
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="year"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Year</FormLabel>
-                              <FormControl>
-                                <Input type="number" {...field} onChange={e => field.onChange(parseInt(e.target.value))} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-
-                      <FormField
-                        control={form.control}
-                        name="amount"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Amount (₹)</FormLabel>
-                            <FormControl>
-                              <div className="relative">
-                                <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                                <Input 
-                                  className="pl-9 text-lg font-bold" 
-                                  type="number" 
-                                  {...field}
-                                  onChange={e => field.onChange(parseInt(e.target.value))}
-                                />
-                              </div>
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <FormField
-                        control={form.control}
-                        name="remarks"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Remarks (Optional)</FormLabel>
-                            <FormControl>
-                              <Input placeholder="Cheque No / UPI ID" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <Button 
-                        type="submit" 
-                        className="w-full py-6 text-lg font-semibold bg-green-600 hover:bg-green-700 shadow-lg shadow-green-600/20"
-                        disabled={collectFee.isPending}
-                      >
-                        {collectFee.isPending ? "Processing..." : "Collect Payment"}
-                      </Button>
-                    </form>
-                  </Form>
-                </CardContent>
-              </Card>
-
-              {/* Recent Transaction Preview or Student Details could go here */}
-              <Card className="bg-blue-50 border-blue-100">
-                <CardHeader>
-                  <CardTitle className="text-blue-800">Student Info</CardTitle>
-                </CardHeader>
-                <CardContent className="text-blue-900">
-                  <p className="text-sm opacity-70 mb-4">Enter a Student ID to see details and pending dues here.</p>
-                  <div className="p-4 bg-white/50 rounded-lg border border-blue-200">
-                    <div className="flex items-center text-sm font-medium mb-2">
-                      <CheckCircle2 className="w-4 h-4 mr-2 text-green-600" />
-                      No pending dues found
+      <div className="grid grid-cols-12 gap-4 flex-1 overflow-hidden">
+        
+        {/* LEFT: STUDENT LIST */}
+        <div className="col-span-3 h-full flex flex-col bg-white rounded-xl shadow-sm border overflow-hidden">
+            <div className="p-3 border-b bg-slate-50"><Input placeholder="Search Student..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-white" /></div>
+            <div className="flex-1 overflow-y-auto">
+                {students?.map((s: any) => (
+                    <div key={s.id} onClick={() => { setSelectedStudent(s); setSearch(""); }} className={`p-3 border-b cursor-pointer hover:bg-blue-50 ${selectedStudent?.id === s.id ? 'bg-blue-100 border-l-4 border-l-blue-600' : ''}`}>
+                        <div className="font-bold text-slate-800">{s.name}</div><div className="text-xs text-gray-500">{s.admission_no}</div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
+                ))}
             </div>
-          </TabsContent>
+        </div>
 
-          <TabsContent value="defaulters">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="flex items-center text-red-600">
-                  <FileWarning className="w-5 h-5 mr-2" />
-                  Fee Defaulters - {format(new Date(), 'MMMM')}
-                </CardTitle>
-                <Button variant="outline" size="sm">Download Report</Button>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Student Name</TableHead>
-                      <TableHead>Class</TableHead>
-                      <TableHead>Pending Amount</TableHead>
-                      <TableHead>Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {defaulters?.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                          Great! No defaulters for this month.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      defaulters?.map((defaulter: any) => (
-                        <TableRow key={defaulter.studentId}>
-                          <TableCell className="font-medium">{defaulter.name}</TableCell>
-                          <TableCell>Class {defaulter.class}</TableCell>
-                          <TableCell className="text-red-600 font-bold">₹{defaulter.amountPending}</TableCell>
-                          <TableCell>
-                            <Button size="sm" variant="ghost" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50">
-                              Send Reminder
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
+        {/* CENTER: DASHBOARD */}
+        <div className="col-span-6 h-full flex flex-col gap-4 overflow-y-auto pr-1 pb-20">
+            {selectedStudent ? (
+                <>
+                    {/* ADMISSION & TRANSPORT */}
+                    <div className="grid grid-cols-2 gap-4">
+                        <Card className={`border-l-4 cursor-pointer ${isAdmFullyPaid ? 'border-l-green-500 bg-green-50' : 'border-l-orange-500 bg-orange-50'}`} onClick={() => status.admissionBalance > 0 && addToBill("Admission Fee Balance", status.admissionBalance, "Admission Fee")}>
+                            <div className="p-4 flex justify-between items-center">
+                                <div><div className="text-xs font-bold opacity-70">ADMISSION FEE</div><div className="font-bold text-xl">{isAdmFullyPaid ? "Fully Paid" : `Due: ₹${status.admissionBalance}`}</div></div>
+                                {!isAdmFullyPaid && <Plus className="bg-orange-200 p-1 h-6 w-6 rounded-full text-orange-700"/>}
+                            </div>
+                        </Card>
+                        <Card className="border-l-4 border-l-blue-500 bg-blue-50">
+                            <div className="p-4">
+                                <div className="text-xs font-bold opacity-60 uppercase flex items-center gap-1"><Bus className="h-3 w-3"/> Transport Route</div>
+                                <div className="font-bold text-lg mt-1">{selectedStudent.route_name || "No Transport"}</div>
+                                {selectedStudent.bus_fee && <div className="text-sm">₹{selectedStudent.bus_fee}/month</div>}
+                            </div>
+                        </Card>
+                    </div>
+
+                    {/* PENDING DUES */}
+                    <Card className="border-l-4 border-l-purple-500 shadow-sm">
+                        <CardHeader className="py-2 bg-purple-50 flex flex-row justify-between items-center">
+                            <CardTitle className="text-sm text-purple-900 flex items-center gap-2"><Clock className="h-4 w-4"/> Pending Dues</CardTitle>
+                            <Button size="sm" variant="outline" className="h-7 bg-white text-purple-700" onClick={() => setIsAddDueOpen(true)}><Plus className="h-3 w-3 mr-1"/> Add</Button>
+                        </CardHeader>
+                        <CardContent className="p-0">
+                            {status.pendingDues?.length > 0 ? (
+                                <div className="divide-y">
+                                    {status.pendingDues.map((d: any) => (
+                                        <div key={d.id} className="p-3 flex justify-between items-center hover:bg-gray-50">
+                                            <div><div className="font-bold text-sm text-gray-800">{d.fee_name}</div><div className="text-[10px] text-gray-500">{new Date(d.due_date).toLocaleDateString()}</div></div>
+                                            <div className="flex items-center gap-3"><span className="font-bold text-red-600">₹{d.amount}</span><Button size="sm" className="h-7 px-2 bg-green-600 text-xs" onClick={() => addToBill(d.fee_name, d.amount, "Due", undefined, d.id)}>Pay</Button><Trash2 className="h-4 w-4 text-gray-300 hover:text-red-500 cursor-pointer" onClick={() => deleteDue(d.id)}/></div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : <div className="p-4 text-center text-xs text-gray-400">No pending dues.</div>}
+                        </CardContent>
+                    </Card>
+
+                    {/* MONTHLY TRACKER */}
+                    <Card><CardContent className="p-4 grid grid-cols-3 gap-3">
+                        {status.monthStatus.map((m: any) => (
+                            <div key={m.name} className="border rounded bg-white overflow-hidden shadow-sm">
+                                <div className="bg-slate-100 px-2 py-1 text-xs font-bold text-center uppercase text-slate-600">{m.name}</div>
+                                <div onClick={() => m.tuitionStatus !== 'paid' && addToBill(`Tuition: ${m.name}`, status.monthlyFee, "Tuition", m.name)} className={`px-2 py-2 text-xs border-b cursor-pointer flex justify-between items-center ${m.tuitionStatus === 'paid' ? 'bg-green-50 text-green-700' : 'hover:bg-red-50 text-red-600'}`}><span>Tuition</span>{m.tuitionStatus === 'paid' ? <CheckCircle2 className="h-3 w-3"/> : <Plus className="h-3 w-3"/>}</div>
+                                {selectedStudent.transport_id && (
+                                    <div onClick={() => m.transportStatus !== 'paid' && addToBill(`Bus: ${m.name}`, selectedStudent.bus_fee, "Transport Fee", m.name)} className={`px-2 py-2 text-xs cursor-pointer flex justify-between items-center ${m.transportStatus === 'paid' ? 'bg-green-50 text-green-700' : 'hover:bg-red-50 text-red-600'}`}><span>Bus</span>{m.transportStatus === 'paid' ? <CheckCircle2 className="h-3 w-3"/> : <Plus className="h-3 w-3"/>}</div>
+                                )}
+                            </div>
+                        ))}
+                    </CardContent></Card>
+
+                    {/* 🟢 RECENT TRANSACTIONS (FIXED: REMOVED TITLE PROPS) */}
+                    <Card className="flex-1 overflow-hidden flex flex-col border-t-4 border-t-slate-600">
+                        <CardHeader className="py-2 bg-slate-100 border-b">
+                            <CardTitle className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                                <Clock className="h-4 w-4"/> Recent Transactions
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-0 flex-1 overflow-y-auto">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow className="bg-slate-50">
+                                        <TableHead className="w-[100px]">Date</TableHead>
+                                        <TableHead>Receipt No</TableHead>
+                                        <TableHead>Details (Particulars)</TableHead>
+                                        <TableHead className="text-right">Amount</TableHead>
+                                        <TableHead className="w-[80px] text-center">Action</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {paymentHistory.map((p) => (
+                                        <TableRow key={p.id}>
+                                            <TableCell className="text-xs text-gray-500">{new Date(p.payment_date).toLocaleDateString()}</TableCell>
+                                            <TableCell className="font-mono text-xs font-bold">{p.receipt_no}</TableCell>
+                                            <TableCell className="text-xs font-medium text-slate-800">{p.remarks}</TableCell> 
+                                            <TableCell className="font-bold text-green-600 text-right">₹{p.amount}</TableCell>
+                                            {/* 🟢 FIXED: Icons without title prop */}
+                                            <TableCell className="flex justify-center gap-2">
+                                                <Printer className="h-4 w-4 text-blue-500 hover:text-blue-700 cursor-pointer" onClick={() => openOldReceipt(p)} />
+                                                <Trash2 className="h-4 w-4 text-red-300 hover:text-red-600 cursor-pointer" onClick={() => deleteReceipt(p.id)} />
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                    {paymentHistory.length === 0 && (
+                                        <TableRow><TableCell colSpan={5} className="text-center py-6 text-gray-400">No transactions found.</TableCell></TableRow>
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </CardContent>
+                    </Card>
+                </>
+            ) : <div className="text-center mt-20 text-gray-400">Select a student</div>}
+        </div>
+
+        {/* RIGHT: BILL */}
+        <div className="col-span-3 h-full pb-4">
+            <Card className="h-full flex flex-col border-l-4 border-l-green-500 shadow-lg">
+                <CardHeader className="bg-green-50 py-3 border-b"><CardTitle className="text-green-800 text-lg">Current Bill</CardTitle></CardHeader>
+                <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
+                    <div className="flex-1 space-y-0 overflow-y-auto p-3 bg-slate-50/50">
+                        {extraCharges.map((c, i) => (
+                            <div key={i} className="flex flex-col p-2 bg-white border rounded mb-2 shadow-sm">
+                                <div className="flex justify-between items-start mb-1"><div className="text-xs font-bold text-slate-700">{c.name}</div><Trash2 className="h-4 w-4 text-red-300 hover:text-red-500 cursor-pointer" onClick={() => removeCharge(i)} /></div>
+                                <div className="flex items-center gap-2 mt-1"><span className="text-xs font-bold text-gray-400">₹</span><Input type="number" className="h-8 text-right font-bold text-green-700" value={c.amount} onChange={(e) => updateBillAmount(i, e.target.value)}/></div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="p-4 bg-white border-t">
+                        <div className="flex justify-between mb-4 items-end"><span className="text-gray-500 font-medium">Total</span><span className="text-3xl font-bold text-green-700">₹{totalPayable}</span></div>
+                        <Button className="w-full bg-green-600 hover:bg-green-700 h-12 text-lg shadow-md" onClick={() => setIsConfirmOpen(true)} disabled={totalPayable === 0}>Collect Payment</Button>
+                    </div>
+                </CardContent>
             </Card>
-          </TabsContent>
-        </Tabs>
-      </main>
+        </div>
+      </div>
+
+      {/* --- MODALS --- */}
+      <Dialog open={isAddDueOpen} onOpenChange={setIsAddDueOpen}>
+        <DialogContent><DialogHeader><DialogTitle>Add Pending Fee</DialogTitle></DialogHeader><div className="space-y-4 py-2"><div className="space-y-2"><Label>Fee Name</Label><Input placeholder="e.g. Exam Fee" value={newDue.name} onChange={e => setNewDue({...newDue, name: e.target.value})}/></div><div className="space-y-2"><Label>Amount (₹)</Label><Input type="number" placeholder="500" value={newDue.amount} onChange={e => setNewDue({...newDue, amount: e.target.value})}/></div></div><DialogFooter><Button onClick={handleAddDue}>Save Due</Button></DialogFooter></DialogContent>
+      </Dialog>
+
+      <Dialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
+        <DialogContent><DialogHeader><DialogTitle>Confirm Payment</DialogTitle></DialogHeader><div className="py-4 text-center"><p className="text-4xl font-bold text-green-600">₹{totalPayable}</p></div><DialogFooter><Button onClick={finalizePayment} className="bg-green-600">Confirm & Generate Receipt</Button></DialogFooter></DialogContent>
+      </Dialog>
+
+      <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
+        <DialogContent className="max-w-2xl">
+            <DialogHeader><DialogTitle className="flex justify-between items-center"><span>Payment Receipt</span><div className="flex gap-2"><Button size="sm" variant="outline" onClick={handlePrint}><Printer className="h-4 w-4 mr-2"/> Print / PDF</Button><Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={sendWhatsApp}><MessageCircle className="h-4 w-4 mr-2"/> WhatsApp</Button></div></DialogTitle></DialogHeader>
+            <div className="border p-6 bg-white shadow-sm" ref={receiptRef}>
+                <div className="text-center border-b pb-4 mb-4">
+                    <h2 className="text-2xl font-bold text-slate-800">{schoolInfo.name || "SCHOOL NAME"}</h2>
+                    <p className="text-sm text-slate-500">{schoolInfo.address || "Address"}</p>
+                    <div className="mt-2 inline-block bg-gray-100 px-3 py-1 rounded text-xs font-bold uppercase tracking-widest">Fee Receipt</div>
+                </div>
+                {currentReceipt && (
+                    <>
+                        <div className="flex justify-between text-sm mb-6"><div><p><span className="font-bold">Receipt No:</span> {currentReceipt.receiptNo}</p><p><span className="font-bold">Date:</span> {currentReceipt.date}</p></div><div className="text-right"><p><span className="font-bold">Student:</span> {currentReceipt.student.name}</p><p><span className="font-bold">ID:</span> {currentReceipt.student.admission_no}</p><p><span className="font-bold">Class:</span> {currentReceipt.student.class}</p></div></div>
+                        <table className="w-full text-sm border-collapse mb-6"><thead><tr className="border-b-2 border-slate-200"><th className="text-left py-2">Description</th><th className="text-right py-2">Amount</th></tr></thead><tbody>{currentReceipt.items.map((item: any, idx: number) => (<tr key={idx} className="border-b border-slate-100"><td className="py-2">{item.name} {item.month ? `(${item.month})` : ""}</td><td className="text-right py-2 font-mono">₹{item.amount}</td></tr>))}</tbody><tfoot><tr className="border-t-2 border-slate-800 font-bold text-lg"><td className="py-3">Total Paid</td><td className="text-right py-3">₹{currentReceipt.total}</td></tr></tfoot></table>
+                    </>
+                )}
+            </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
