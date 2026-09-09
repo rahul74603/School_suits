@@ -1,10 +1,10 @@
 
 import { 
-  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, feeStructures, feePayments, staff,
+  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, feeStructures, feePayments, staff,
   type User, type InsertUser, type School, type InsertSchool,
   type AcademicSession, type InsertAcademicSession, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
-  type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord,
-  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance,
+  type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
+  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule,
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
 } from "@shared/schema";
 import { db } from "./db";
@@ -36,6 +36,18 @@ export interface IStorage {
   deleteTeacherClassAssignment(id: number, schoolId: number, sessionId: number): Promise<boolean>;
   createStudentUserLink(link: InsertStudentUserLink & { schoolId: number; sessionId: number }): Promise<StudentUserLink | undefined>;
   getStudentForUser(userId: number, schoolId: number, sessionId: number): Promise<Student | undefined>;
+
+  // Exams
+  getExams(schoolId: number, sessionId: number): Promise<Exam[]>;
+  getExam(id: number, schoolId: number, sessionId: number): Promise<Exam | undefined>;
+  getExamScopes(examId: number, schoolId: number, sessionId: number): Promise<ExamClassScope[]>;
+  getExamSchedules(examId: number, schoolId: number, sessionId: number): Promise<ExamSchedule[]>;
+  createExam(exam: InsertExam & { schoolId: number; sessionId: number }, scopes: InsertExamClassScope[]): Promise<{ exam: Exam; scopes: ExamClassScope[] }>;
+  updateExam(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExam>): Promise<Exam | undefined>;
+  setExamStatus(id: number, schoolId: number, sessionId: number, status: Exam["status"]): Promise<Exam | undefined>;
+  createExamSchedule(schedule: InsertExamSchedule & { examId: number; schoolId: number; sessionId: number }): Promise<ExamSchedule>;
+  updateExamSchedule(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExamSchedule>): Promise<ExamSchedule | undefined>;
+  deleteExamSchedule(id: number, schoolId: number, sessionId: number): Promise<boolean>;
 
   // Attendance
   getAttendance(schoolId: number, sessionId: number, filters?: { from?: string; to?: string; date?: string; className?: string; section?: string; subjectId?: number; studentId?: number }): Promise<AttendanceRecord[]>;
@@ -205,6 +217,84 @@ export class DatabaseStorage implements IStorage {
       eq(students.schoolId, schoolId), eq(students.sessionId, sessionId), eq(students.isActive, true),
     ));
     return row?.student;
+  }
+
+  // === Exams ===
+  async getExams(schoolId: number, sessionId: number): Promise<Exam[]> {
+    return db.select().from(exams).where(and(eq(exams.schoolId, schoolId), eq(exams.sessionId, sessionId))).orderBy(exams.startDate);
+  }
+
+  async getExam(id: number, schoolId: number, sessionId: number): Promise<Exam | undefined> {
+    const [exam] = await db.select().from(exams).where(and(eq(exams.id, id), eq(exams.schoolId, schoolId), eq(exams.sessionId, sessionId)));
+    return exam;
+  }
+
+  async getExamScopes(examId: number, schoolId: number, sessionId: number): Promise<ExamClassScope[]> {
+    return db.select().from(examClassScopes).where(and(eq(examClassScopes.examId, examId), eq(examClassScopes.schoolId, schoolId), eq(examClassScopes.sessionId, sessionId)));
+  }
+
+  async getExamSchedules(examId: number, schoolId: number, sessionId: number): Promise<ExamSchedule[]> {
+    return db.select().from(examSchedules).where(and(eq(examSchedules.examId, examId), eq(examSchedules.schoolId, schoolId), eq(examSchedules.sessionId, sessionId)));
+  }
+
+  async createExam(insertExam: InsertExam & { schoolId: number; sessionId: number }, scopes: InsertExamClassScope[]): Promise<{ exam: Exam; scopes: ExamClassScope[] }> {
+    if (insertExam.endDate < insertExam.startDate) throw new Error("Exam end date must not precede start date");
+    return db.transaction(async (transaction) => {
+      const [exam] = await transaction.insert(exams).values(insertExam).returning();
+      const createdScopes = await transaction.insert(examClassScopes).values(scopes.map((scope) => ({ ...scope, examId: exam.id, schoolId: insertExam.schoolId, sessionId: insertExam.sessionId }))).returning();
+      return { exam, scopes: createdScopes };
+    });
+  }
+
+  async updateExam(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExam>): Promise<Exam | undefined> {
+    const existing = await this.getExam(id, schoolId, sessionId);
+    if (!existing) return undefined;
+    if (existing.status !== "draft") throw new Error("Only draft exams can be edited");
+    const startDate = updates.startDate ?? existing.startDate;
+    const endDate = updates.endDate ?? existing.endDate;
+    if (endDate < startDate) throw new Error("Exam end date must not precede start date");
+    const [updated] = await db.update(exams).set({ ...updates, updatedAt: new Date() }).where(and(eq(exams.id, id), eq(exams.schoolId, schoolId), eq(exams.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  async setExamStatus(id: number, schoolId: number, sessionId: number, status: Exam["status"]): Promise<Exam | undefined> {
+    const existing = await this.getExam(id, schoolId, sessionId);
+    if (!existing) return undefined;
+    const allowed: Record<string, string[]> = { draft: ["published", "archived"], published: ["draft", "completed", "archived"], completed: ["archived"], archived: [] };
+    if (!allowed[existing.status]?.includes(status)) throw new Error(`Invalid exam status transition from ${existing.status} to ${status}`);
+    const [updated] = await db.update(exams).set({ status, isActive: status !== "archived", updatedAt: new Date() }).where(and(eq(exams.id, id), eq(exams.schoolId, schoolId), eq(exams.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  async createExamSchedule(insertSchedule: InsertExamSchedule & { examId: number; schoolId: number; sessionId: number }): Promise<ExamSchedule> {
+    const exam = await this.getExam(insertSchedule.examId, insertSchedule.schoolId, insertSchedule.sessionId);
+    if (!exam) throw new Error("Exam not found");
+    if (exam.status !== "draft") throw new Error("Only draft exams can be scheduled");
+    if (insertSchedule.examDate < exam.startDate || insertSchedule.examDate > exam.endDate) throw new Error("Exam date must be inside exam date range");
+    const scope = await db.select({ id: examClassScopes.id }).from(examClassScopes).where(and(eq(examClassScopes.examId, insertSchedule.examId), eq(examClassScopes.schoolId, insertSchedule.schoolId), eq(examClassScopes.sessionId, insertSchedule.sessionId), eq(examClassScopes.className, insertSchedule.className), eq(examClassScopes.section, insertSchedule.section)));
+    if (!scope.length) throw new Error("Class/section is not assigned to this exam");
+    const [schedule] = await db.insert(examSchedules).values(insertSchedule).returning();
+    return schedule;
+  }
+
+  async updateExamSchedule(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExamSchedule>): Promise<ExamSchedule | undefined> {
+    const [existing] = await db.select().from(examSchedules).where(and(eq(examSchedules.id, id), eq(examSchedules.schoolId, schoolId), eq(examSchedules.sessionId, sessionId)));
+    if (!existing) return undefined;
+    const exam = await this.getExam(existing.examId, schoolId, sessionId);
+    if (!exam || exam.status !== "draft") throw new Error("Only draft exam schedules can be edited");
+    const examDate = updates.examDate ?? existing.examDate;
+    if (examDate < exam.startDate || examDate > exam.endDate) throw new Error("Exam date must be inside exam date range");
+    const [updated] = await db.update(examSchedules).set(updates).where(and(eq(examSchedules.id, id), eq(examSchedules.schoolId, schoolId), eq(examSchedules.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  async deleteExamSchedule(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const [existing] = await db.select().from(examSchedules).where(and(eq(examSchedules.id, id), eq(examSchedules.schoolId, schoolId), eq(examSchedules.sessionId, sessionId)));
+    if (!existing) return false;
+    const exam = await this.getExam(existing.examId, schoolId, sessionId);
+    if (!exam || exam.status !== "draft") throw new Error("Only draft exam schedules can be removed");
+    const deleted = await db.delete(examSchedules).where(and(eq(examSchedules.id, id), eq(examSchedules.schoolId, schoolId), eq(examSchedules.sessionId, sessionId))).returning({ id: examSchedules.id });
+    return deleted.length > 0;
   }
 
   // === Attendance ===

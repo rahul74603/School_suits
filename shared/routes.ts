@@ -4,7 +4,8 @@ import {
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
   insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema,
   insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema, insertAttendanceSchema,
-  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords
+  insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema,
+  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules
 } from './schema';
 
 export const errorSchemas = {
@@ -242,6 +243,18 @@ export const api = {
       input: insertStudentUserLinkSchema,
       responses: { 201: z.custom<typeof studentUserLinks.$inferSelect>() },
     },
+  },
+
+  // === Exams ===
+  exams: {
+    list: { method: 'GET' as const, path: '/api/exams', input: z.object({ status: z.string().optional(), class: z.string().optional(), section: z.string().optional() }).optional(), responses: { 200: z.array(z.custom<typeof exams.$inferSelect>()) } },
+    get: { method: 'GET' as const, path: '/api/exams/:id', responses: { 200: z.object({ exam: z.custom<typeof exams.$inferSelect>(), scopes: z.array(z.custom<typeof examClassScopes.$inferSelect>()), schedules: z.array(z.custom<typeof examSchedules.$inferSelect>()) }) } },
+    create: { method: 'POST' as const, path: '/api/exams', input: z.object({ ...insertExamSchema.shape, scopes: z.array(insertExamClassScopeSchema).min(1).max(100) }), responses: { 201: z.object({ exam: z.custom<typeof exams.$inferSelect>(), scopes: z.array(z.custom<typeof examClassScopes.$inferSelect>()) }) } },
+    update: { method: 'PATCH' as const, path: '/api/exams/:id', input: insertExamSchema.partial(), responses: { 200: z.custom<typeof exams.$inferSelect>() } },
+    status: { method: 'POST' as const, path: '/api/exams/:id/status', input: z.object({ status: z.enum(["draft", "published", "completed", "archived"]) }), responses: { 200: z.custom<typeof exams.$inferSelect>() } },
+    addSchedule: { method: 'POST' as const, path: '/api/exams/:id/schedules', input: insertExamScheduleSchema, responses: { 201: z.custom<typeof examSchedules.$inferSelect>() } },
+    updateSchedule: { method: 'PATCH' as const, path: '/api/exam-schedules/:id', input: insertExamScheduleSchema.partial(), responses: { 200: z.custom<typeof examSchedules.$inferSelect>() } },
+    removeSchedule: { method: 'DELETE' as const, path: '/api/exam-schedules/:id', responses: { 204: z.null() } },
   },
 
   // === Attendance ===

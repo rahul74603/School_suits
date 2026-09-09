@@ -180,6 +180,95 @@ export async function registerRoutes(
     return link ? res.status(201).json(link) : res.status(400).json({ message: "Student or student user is invalid" });
   });
 
+  // === Exams ===
+  const examManagers = requireRole("admin", "principal");
+  const examReaders = requireRole("admin", "principal", "teacher", "student");
+  async function currentExamContext(user: ReturnType<typeof currentUser>) {
+    return dataStore.getActiveSession(user.schoolId);
+  }
+  async function authorizedExam(examId: number, user: ReturnType<typeof currentUser>) {
+    const session = await currentExamContext(user);
+    if (!session) return undefined;
+    const exam = await dataStore.getExam(examId, user.schoolId, session.id);
+    if (!exam) return undefined;
+    if (user.role === "admin" || user.role === "principal") return { session, exam, scopes: await dataStore.getExamScopes(exam.id, user.schoolId, session.id), schedules: await dataStore.getExamSchedules(exam.id, user.schoolId, session.id) };
+    const scopes = await dataStore.getExamScopes(exam.id, user.schoolId, session.id);
+    const schedules = await dataStore.getExamSchedules(exam.id, user.schoolId, session.id);
+    if (user.role === "teacher") {
+      const classes = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id);
+      const subjects = await dataStore.getTeacherSubjectAssignments(user.schoolId, session.id, user.id);
+      const classKeys = new Set(classes.map((item) => `${item.className}\\0${item.section}`));
+      const subjectIds = new Set(subjects.map((item) => item.subjectId));
+      const allowedScopes = scopes.filter((scope) => classKeys.has(`${scope.className}\\0${scope.section}`));
+      const allowedKeys = new Set(allowedScopes.map((scope) => `${scope.className}\\0${scope.section}`));
+      const allowedSchedules = schedules.filter((schedule) => allowedKeys.has(`${schedule.className}\\0${schedule.section}`) && subjectIds.has(schedule.subjectId));
+      return allowedSchedules.length || allowedScopes.length ? { session, exam, scopes: allowedScopes, schedules: allowedSchedules } : undefined;
+    }
+    const student = await dataStore.getStudentForUser(user.id, user.schoolId, session.id);
+    if (!student || exam.status !== "published") return undefined;
+    const ownScopes = scopes.filter((scope) => scope.className === student.class && scope.section === student.section);
+    return ownScopes.length ? { session, exam, scopes: ownScopes, schedules: schedules.filter((schedule) => schedule.className === student.class && schedule.section === student.section) } : undefined;
+  }
+
+  app.get(api.exams.list.path, examReaders, async (req, res) => {
+    const user = currentUser(req);
+    const session = await currentExamContext(user);
+    if (!session) return res.json([]);
+    const requestedStatus = typeof req.query.status === "string" ? req.query.status : undefined;
+    const requestedClass = typeof req.query.class === "string" ? req.query.class : undefined;
+    const requestedSection = typeof req.query.section === "string" ? req.query.section : undefined;
+    const exams = await dataStore.getExams(user.schoolId, session.id);
+    const visible = [];
+    for (const exam of exams) {
+      if (requestedStatus && exam.status !== requestedStatus) continue;
+      const detail = await authorizedExam(exam.id, user);
+      if (!detail) continue;
+      if (requestedClass && !detail.scopes.some((scope) => scope.className === requestedClass && (!requestedSection || scope.section === requestedSection))) continue;
+      visible.push(exam);
+    }
+    return res.json(visible);
+  });
+  app.get(api.exams.get.path, examReaders, async (req, res) => {
+    const detail = await authorizedExam(routeId(req.params.id), currentUser(req));
+    return detail ? res.json({ exam: detail.exam, scopes: detail.scopes, schedules: detail.schedules }) : res.status(404).json({ message: "Exam not found" });
+  });
+  app.post(api.exams.create.path, examManagers, async (req, res) => {
+    const input = api.exams.create.input.parse(req.body);
+    const user = currentUser(req); const session = await currentExamContext(user);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const seen = new Set<string>();
+    for (const scope of input.scopes) { const key = `${scope.className}\\0${scope.section}`; if (seen.has(key)) return res.status(400).json({ message: "Duplicate class/section scope" }); seen.add(key); }
+    try {
+      const result = await dataStore.createExam({ name: input.name, examType: input.examType, startDate: input.startDate, endDate: input.endDate, status: input.status ?? "draft", isActive: input.isActive ?? true, schoolId: user.schoolId, sessionId: session.id }, input.scopes);
+      return res.status(201).json(result);
+    } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to create exam" }); }
+  });
+  app.patch(api.exams.update.path, examManagers, async (req, res) => {
+    const user = currentUser(req); const session = await currentExamContext(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { const updated = await dataStore.updateExam(routeId(req.params.id), user.schoolId, session.id, api.exams.update.input.parse(req.body)); return updated ? res.json(updated) : res.status(404).json({ message: "Exam not found" }); }
+    catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to update exam" }); }
+  });
+  app.post(api.exams.status.path, examManagers, async (req, res) => {
+    const user = currentUser(req); const session = await currentExamContext(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { const updated = await dataStore.setExamStatus(routeId(req.params.id), user.schoolId, session.id, api.exams.status.input.parse(req.body).status); return updated ? res.json(updated) : res.status(404).json({ message: "Exam not found" }); }
+    catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Invalid exam status transition" }); }
+  });
+  app.post(api.exams.addSchedule.path, examManagers, async (req, res) => {
+    const input = api.exams.addSchedule.input.parse(req.body); const user = currentUser(req); const session = await currentExamContext(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { return res.status(201).json(await dataStore.createExamSchedule({ ...input, examId: routeId(req.params.id), schoolId: user.schoolId, sessionId: session.id })); }
+    catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to add exam schedule" }); }
+  });
+  app.patch(api.exams.updateSchedule.path, examManagers, async (req, res) => {
+    const user = currentUser(req); const session = await currentExamContext(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { const updated = await dataStore.updateExamSchedule(routeId(req.params.id), user.schoolId, session.id, api.exams.updateSchedule.input.parse(req.body)); return updated ? res.json(updated) : res.status(404).json({ message: "Schedule not found" }); }
+    catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to update schedule" }); }
+  });
+  app.delete(api.exams.removeSchedule.path, examManagers, async (req, res) => {
+    const user = currentUser(req); const session = await currentExamContext(user); if (!session) return res.status(409).json({ message: "No active academic session" });
+    try { return (await dataStore.deleteExamSchedule(routeId(req.params.id), user.schoolId, session.id)) ? res.status(204).send() : res.status(404).json({ message: "Schedule not found" }); }
+    catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to remove schedule" }); }
+  });
+
   // === Attendance ===
   const attendanceReaders = requireRole("admin", "principal", "teacher", "student");
   const attendanceManagers = requireRole("admin", "principal", "teacher");

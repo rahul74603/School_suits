@@ -216,6 +216,63 @@ export const attendanceRecords = pgTable("attendance_records", {
   }),
 }));
 
+// === Exams ===
+export const exams = pgTable("exams", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
+  name: text("name").notNull(),
+  examType: text("exam_type").notNull().default("general"),
+  startDate: date("start_date").notNull(),
+  endDate: date("end_date").notNull(),
+  status: text("status").notNull().default("draft"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolSessionNameUnique: uniqueIndex("exams_school_session_name_unique").on(table.schoolId, table.sessionId, table.name),
+  idScopeUnique: uniqueIndex("exams_id_scope_unique").on(table.id, table.schoolId, table.sessionId),
+  schoolSessionIndex: index("exams_school_session_idx").on(table.schoolId, table.sessionId, table.status, table.startDate),
+  dateOrderCheck: check("exams_date_order_valid", sql`${table.endDate} >= ${table.startDate}`),
+  statusCheck: check("exams_status_valid", sql`${table.status} IN ('draft', 'published', 'completed', 'archived')`),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "exams_session_school_fk" }),
+}));
+
+export const examClassScopes = pgTable("exam_class_scopes", {
+  id: serial("id").primaryKey(),
+  examId: integer("exam_id").notNull(),
+  schoolId: integer("school_id").notNull(),
+  sessionId: integer("session_id").notNull(),
+  className: text("class_name").notNull(),
+  section: text("section").notNull(),
+}, (table) => ({
+  scopeUnique: uniqueIndex("exam_class_scopes_unique").on(table.examId, table.schoolId, table.sessionId, table.className, table.section),
+  examScopeForeignKey: foreignKey({ columns: [table.examId, table.schoolId, table.sessionId], foreignColumns: [exams.id, exams.schoolId, exams.sessionId], name: "exam_class_scopes_exam_scope_fk" }),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "exam_class_scopes_session_school_fk" }),
+}));
+
+export const examSchedules = pgTable("exam_schedules", {
+  id: serial("id").primaryKey(),
+  examId: integer("exam_id").notNull(),
+  subjectId: integer("subject_id").notNull(),
+  schoolId: integer("school_id").notNull(),
+  sessionId: integer("session_id").notNull(),
+  className: text("class_name").notNull(),
+  section: text("section").notNull(),
+  examDate: date("exam_date").notNull(),
+  maxMarks: integer("max_marks").notNull(),
+  passingMarks: integer("passing_marks").notNull(),
+  startTime: text("start_time"),
+  endTime: text("end_time"),
+}, (table) => ({
+  scheduleUnique: uniqueIndex("exam_schedules_unique").on(table.examId, table.subjectId, table.schoolId, table.sessionId, table.className, table.section),
+  marksCheck: check("exam_schedules_marks_valid", sql`${table.maxMarks} > 0 AND ${table.passingMarks} >= 0 AND ${table.passingMarks} <= ${table.maxMarks}`),
+  examClassScopeForeignKey: foreignKey({ columns: [table.examId, table.schoolId, table.sessionId, table.className, table.section], foreignColumns: [examClassScopes.examId, examClassScopes.schoolId, examClassScopes.sessionId, examClassScopes.className, examClassScopes.section], name: "exam_schedules_class_scope_fk" }),
+  examScopeForeignKey: foreignKey({ columns: [table.examId, table.schoolId, table.sessionId], foreignColumns: [exams.id, exams.schoolId, exams.sessionId], name: "exam_schedules_exam_scope_fk" }),
+  subjectScopeForeignKey: foreignKey({ columns: [table.subjectId, table.schoolId, table.sessionId], foreignColumns: [subjects.id, subjects.schoolId, subjects.sessionId], name: "exam_schedules_subject_scope_fk" }),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "exam_schedules_session_school_fk" }),
+}));
+
 // === Fee Structure ===
 export const feeStructures = pgTable("fee_structures", {
   id: serial("id").primaryKey(),
@@ -346,6 +403,23 @@ export const insertStaffSchema = createInsertSchema(staff).omit({ id: true, scho
   name: z.string().trim().min(1),
 });
 export const attendanceStatusSchema = z.enum(["present", "absent", "late", "leave"]);
+export const examStatusSchema = z.enum(["draft", "published", "completed", "archived"]);
+export const examDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
+export const insertExamSchema = createInsertSchema(exams).omit({ id: true, schoolId: true, sessionId: true, createdAt: true, updatedAt: true }).extend({
+  name: z.string().trim().min(1).max(150),
+  examType: z.string().trim().min(1).max(80),
+  startDate: examDateSchema,
+  endDate: examDateSchema,
+  status: examStatusSchema.optional(),
+});
+export const insertExamClassScopeSchema = createInsertSchema(examClassScopes).omit({ id: true, examId: true, schoolId: true, sessionId: true }).extend({ className: z.string().trim().min(1).max(100), section: z.string().trim().min(1).max(50) });
+export const insertExamScheduleSchema = createInsertSchema(examSchedules).omit({ id: true, examId: true, schoolId: true, sessionId: true }).extend({
+  examDate: examDateSchema,
+  maxMarks: z.number().int().positive(),
+  passingMarks: z.number().int().nonnegative(),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+});
 export const attendanceDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
 export const insertAttendanceSchema = createInsertSchema(attendanceRecords).omit({ id: true, schoolId: true, sessionId: true, markedByUserId: true, createdAt: true, updatedAt: true }).extend({
   attendanceDate: attendanceDateSchema,
@@ -377,6 +451,9 @@ export type TeacherSubjectAssignment = typeof teacherSubjectAssignments.$inferSe
 export type TeacherClassAssignment = typeof teacherClassAssignments.$inferSelect;
 export type StudentUserLink = typeof studentUserLinks.$inferSelect;
 export type AttendanceRecord = typeof attendanceRecords.$inferSelect;
+export type Exam = typeof exams.$inferSelect;
+export type ExamClassScope = typeof examClassScopes.$inferSelect;
+export type ExamSchedule = typeof examSchedules.$inferSelect;
 
 export type InsertSchool = z.infer<typeof insertSchoolSchema>;
 export type InsertAcademicSession = z.infer<typeof insertAcademicSessionSchema>;
@@ -390,6 +467,9 @@ export type InsertTeacherSubjectAssignment = z.infer<typeof insertTeacherSubject
 export type InsertTeacherClassAssignment = z.infer<typeof insertTeacherClassAssignmentSchema>;
 export type InsertStudentUserLink = z.infer<typeof insertStudentUserLinkSchema>;
 export type InsertAttendance = z.infer<typeof insertAttendanceSchema>;
+export type InsertExam = z.infer<typeof insertExamSchema>;
+export type InsertExamClassScope = z.infer<typeof insertExamClassScopeSchema>;
+export type InsertExamSchedule = z.infer<typeof insertExamScheduleSchema>;
 
 // Server-side insert types retain tenant columns; client input schemas intentionally omit them.
 export type StoredStudentInsert = typeof students.$inferInsert;

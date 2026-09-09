@@ -17,6 +17,7 @@ const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
   { name: "Students", href: "/students", icon: Users, roles: ["admin", "principal", "staff", "teacher", "student"] },
   { name: "Attendance", href: "/attendance", icon: ClipboardCheck, roles: ["admin", "principal", "teacher", "student"] },
+  { name: "Exams", href: "/exams", icon: FileText, roles: ["admin", "principal", "teacher", "student"] },
   { name: "Admissions", href: "/admissions", icon: UserPlus, roles: ["admin", "principal", "staff", "teacher"] },
   { name: "Fees & Payments", href: "/fees", icon: CreditCard, roles: ["admin", "principal", "accountant", "staff"] },
   { name: "Staff", href: "/staff", icon: School, roles: ["admin", "principal"] },

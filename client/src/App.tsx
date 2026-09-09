@@ -17,6 +17,7 @@ import StudentProfile from "@/pages/StudentProfile";
 import StudentEdit from "@/pages/StudentEdit";
 import { ModulePlaceholder } from "@/pages/ModulePlaceholder";
 import Attendance from "@/pages/Attendance";
+import Exams from "@/pages/Exams";
 
 function Router() {
   return (
@@ -26,6 +27,7 @@ function Router() {
       <Route path="/students/:id/edit" component={StudentEdit} />
       <Route path="/students/:id" component={StudentProfile} />
       <Route path="/attendance" component={Attendance} />
+      <Route path="/exams" component={Exams} />
       <Route path="/fees" component={Fees} />
       <Route path="/staff" component={Staff} />
       <Route path="/admissions" component={Admissions} />
