@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { 
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
   insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema,
-  insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema,
-  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks
+  insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema, insertAttendanceSchema,
+  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords
 } from './schema';
 
 export const errorSchemas = {
@@ -241,6 +241,40 @@ export const api = {
       path: '/api/student-user-links',
       input: insertStudentUserLinkSchema,
       responses: { 201: z.custom<typeof studentUserLinks.$inferSelect>() },
+    },
+  },
+
+  // === Attendance ===
+  attendance: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/attendance',
+      input: z.object({
+        from: z.string().optional(), to: z.string().optional(), date: z.string().optional(),
+        class: z.string().optional(), section: z.string().optional(), subjectId: z.string().optional(), studentId: z.string().optional(),
+      }).optional(),
+      responses: { 200: z.array(z.custom<typeof attendanceRecords.$inferSelect>()) },
+    },
+    mark: {
+      method: 'POST' as const,
+      path: '/api/attendance/bulk',
+      input: z.object({
+        className: z.string().trim().min(1), section: z.string().trim().min(1), attendanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), subjectId: z.number().int().positive().nullable().optional(),
+        records: z.array(z.object({ studentId: z.number().int().positive(), status: z.enum(["present", "absent", "late", "leave"]) }).strict()).min(1).max(500),
+      }).strict(),
+      responses: { 201: z.array(z.custom<typeof attendanceRecords.$inferSelect>()) },
+    },
+    update: {
+      method: 'PATCH' as const,
+      path: '/api/attendance/:id',
+      input: z.object({ status: z.enum(["present", "absent", "late", "leave"]) }).strict(),
+      responses: { 200: z.custom<typeof attendanceRecords.$inferSelect>() },
+    },
+    summary: {
+      method: 'GET' as const,
+      path: '/api/attendance/summary',
+      input: z.object({ from: z.string().optional(), to: z.string().optional(), studentId: z.string().optional(), class: z.string().optional(), section: z.string().optional(), subjectId: z.string().optional() }).optional(),
+      responses: { 200: z.object({ total: z.number(), present: z.number(), absent: z.number(), late: z.number(), leave: z.number(), percentage: z.number() }) },
     },
   },
 

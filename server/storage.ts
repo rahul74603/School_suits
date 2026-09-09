@@ -1,10 +1,10 @@
 
 import { 
-  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, feeStructures, feePayments, staff,
+  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, feeStructures, feePayments, staff,
   type User, type InsertUser, type School, type InsertSchool,
   type AcademicSession, type InsertAcademicSession, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
-  type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink,
-  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink,
+  type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord,
+  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance,
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
 } from "@shared/schema";
 import { db } from "./db";
@@ -36,6 +36,11 @@ export interface IStorage {
   deleteTeacherClassAssignment(id: number, schoolId: number, sessionId: number): Promise<boolean>;
   createStudentUserLink(link: InsertStudentUserLink & { schoolId: number; sessionId: number }): Promise<StudentUserLink | undefined>;
   getStudentForUser(userId: number, schoolId: number, sessionId: number): Promise<Student | undefined>;
+
+  // Attendance
+  getAttendance(schoolId: number, sessionId: number, filters?: { from?: string; to?: string; date?: string; className?: string; section?: string; subjectId?: number; studentId?: number }): Promise<AttendanceRecord[]>;
+  createAttendanceBulk(records: Array<InsertAttendance & { schoolId: number; sessionId: number; markedByUserId: number }>): Promise<AttendanceRecord[]>;
+  updateAttendance(id: number, schoolId: number, sessionId: number, status: InsertAttendance["status"]): Promise<AttendanceRecord | undefined>;
 
   // Students
   getStudent(id: number, schoolId: number): Promise<Student | undefined>;
@@ -200,6 +205,47 @@ export class DatabaseStorage implements IStorage {
       eq(students.schoolId, schoolId), eq(students.sessionId, sessionId), eq(students.isActive, true),
     ));
     return row?.student;
+  }
+
+  // === Attendance ===
+  async getAttendance(schoolId: number, sessionId: number, filters: { from?: string; to?: string; date?: string; className?: string; section?: string; subjectId?: number; studentId?: number } = {}): Promise<AttendanceRecord[]> {
+    const conditions = [eq(attendanceRecords.schoolId, schoolId), eq(attendanceRecords.sessionId, sessionId)];
+    if (filters.from) conditions.push(sql`${attendanceRecords.attendanceDate} >= ${filters.from}`);
+    if (filters.to) conditions.push(sql`${attendanceRecords.attendanceDate} <= ${filters.to}`);
+    if (filters.date) conditions.push(eq(attendanceRecords.attendanceDate, filters.date));
+    if (filters.className && filters.className !== "all") conditions.push(eq(attendanceRecords.className, filters.className));
+    if (filters.section && filters.section !== "all") conditions.push(eq(attendanceRecords.section, filters.section));
+    if (filters.subjectId !== undefined) conditions.push(eq(attendanceRecords.subjectId, filters.subjectId));
+    if (filters.studentId !== undefined) conditions.push(eq(attendanceRecords.studentId, filters.studentId));
+    return db.select().from(attendanceRecords).where(and(...conditions)).orderBy(attendanceRecords.attendanceDate, attendanceRecords.studentId);
+  }
+
+  async createAttendanceBulk(records: Array<InsertAttendance & { schoolId: number; sessionId: number; markedByUserId: number }>): Promise<AttendanceRecord[]> {
+    const keys = new Set<string>();
+    for (const record of records) {
+      const key = `${record.schoolId}|${record.sessionId}|${record.attendanceDate}|${record.studentId}|${record.subjectId ?? "daily"}`;
+      if (keys.has(key)) throw new Error("Duplicate attendance student in request");
+      keys.add(key);
+      const student = await this.getStudent(record.studentId, record.schoolId);
+      if (!student || student.sessionId !== record.sessionId || student.class !== record.className || student.section !== record.section || !student.isActive) {
+        throw new Error("Student is outside the attendance scope");
+      }
+    }
+    return db.transaction(async (transaction) => {
+      const created: AttendanceRecord[] = [];
+      for (const record of records) {
+        const [attendance] = await transaction.insert(attendanceRecords).values(record).returning();
+        created.push(attendance);
+      }
+      return created;
+    });
+  }
+
+  async updateAttendance(id: number, schoolId: number, sessionId: number, status: InsertAttendance["status"]): Promise<AttendanceRecord | undefined> {
+    const [updated] = await db.update(attendanceRecords).set({ status, updatedAt: new Date() }).where(and(
+      eq(attendanceRecords.id, id), eq(attendanceRecords.schoolId, schoolId), eq(attendanceRecords.sessionId, sessionId),
+    )).returning();
+    return updated;
   }
 
   // === Students ===

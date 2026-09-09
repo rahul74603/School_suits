@@ -180,6 +180,94 @@ export async function registerRoutes(
     return link ? res.status(201).json(link) : res.status(400).json({ message: "Student or student user is invalid" });
   });
 
+  // === Attendance ===
+  const attendanceReaders = requireRole("admin", "principal", "teacher", "student");
+  const attendanceManagers = requireRole("admin", "principal", "teacher");
+  const attendanceQuery = (req: any) => ({
+    from: typeof req.query.from === "string" ? req.query.from : undefined,
+    to: typeof req.query.to === "string" ? req.query.to : undefined,
+    date: typeof req.query.date === "string" ? req.query.date : undefined,
+    className: typeof req.query.class === "string" ? req.query.class : undefined,
+    section: typeof req.query.section === "string" ? req.query.section : undefined,
+    subjectId: typeof req.query.subjectId === "string" ? idSchema.parse(req.query.subjectId) : undefined,
+    studentId: typeof req.query.studentId === "string" ? idSchema.parse(req.query.studentId) : undefined,
+  });
+  const hasTeacherScope = async (user: ReturnType<typeof currentUser>, className: string, section: string, subjectId?: number) => {
+    if (user.role !== "teacher") return true;
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return false;
+    const classes = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id);
+    if (!classes.some((assignment) => assignment.className === className && assignment.section === section)) return false;
+    if (subjectId !== undefined) {
+      const subjects = await dataStore.getTeacherSubjectAssignments(user.schoolId, session.id, user.id);
+      if (!subjects.some((assignment) => assignment.subjectId === subjectId)) return false;
+    }
+    return true;
+  };
+  const scopedAttendance = async (req: any, user: ReturnType<typeof currentUser>) => {
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return { session: undefined, records: [] as Awaited<ReturnType<IStorage["getAttendance"]>> };
+    if (user.role === "student") {
+      const own = await dataStore.getStudentForUser(user.id, user.schoolId, session.id);
+      return { session, records: own ? await dataStore.getAttendance(user.schoolId, session.id, { ...attendanceQuery(req), studentId: own.id }) : [] };
+    }
+    let records = await dataStore.getAttendance(user.schoolId, session.id, attendanceQuery(req));
+    if (user.role === "teacher") {
+      const classes = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id);
+      const subjects = await dataStore.getTeacherSubjectAssignments(user.schoolId, session.id, user.id);
+      const classKeys = new Set(classes.map((item) => `${item.className}\\0${item.section}`));
+      const subjectIds = new Set(subjects.map((item) => item.subjectId));
+      records = records.filter((record) => classKeys.has(`${record.className}\\0${record.section}`) && (record.subjectId === null || subjectIds.has(record.subjectId)));
+    }
+    return { session, records };
+  };
+
+  app.get(api.attendance.list.path, attendanceReaders, async (req, res) => {
+    const { records } = await scopedAttendance(req, currentUser(req));
+    return res.json(records);
+  });
+
+  app.post(api.attendance.mark.path, attendanceManagers, async (req, res) => {
+    const input = api.attendance.mark.input.parse(req.body);
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    if (!(await hasTeacherScope(user, input.className, input.section, input.subjectId ?? undefined))) {
+      return res.status(403).json({ message: "Teacher is not assigned to this class or subject" });
+    }
+    try {
+      const created = await dataStore.createAttendanceBulk(input.records.map((record) => ({
+        ...record, className: input.className, section: input.section, attendanceDate: input.attendanceDate,
+        subjectId: input.subjectId ?? null, schoolId: user.schoolId, sessionId: session.id, markedByUserId: user.id,
+      })));
+      return res.status(201).json(created);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to save attendance";
+      return res.status(message.includes("Duplicate") ? 409 : 400).json({ message });
+    }
+  });
+
+  app.patch(api.attendance.update.path, attendanceManagers, async (req, res) => {
+    const input = api.attendance.update.input.parse(req.body);
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const records = await dataStore.getAttendance(user.schoolId, session.id);
+    const target = records.find((record) => record.id === routeId(req.params.id));
+    if (!target) return res.status(404).json({ message: "Attendance record not found" });
+    if (!(await hasTeacherScope(user, target.className, target.section, target.subjectId ?? undefined))) return res.status(403).json({ message: "Attendance is outside your assignment" });
+    const updated = await dataStore.updateAttendance(target.id, user.schoolId, session.id, input.status);
+    return updated ? res.json(updated) : res.status(404).json({ message: "Attendance record not found" });
+  });
+
+  app.get(api.attendance.summary.path, attendanceReaders, async (req, res) => {
+    const { records } = await scopedAttendance(req, currentUser(req));
+    const counts = { present: 0, absent: 0, late: 0, leave: 0 };
+    for (const record of records) counts[record.status as keyof typeof counts]++;
+    const total = records.length;
+    return res.json({ ...counts, total, percentage: total === 0 ? 0 : Math.round(((counts.present + counts.late) / total) * 10000) / 100 });
+  });
+
   // === Students ===
   app.get(api.students.list.path, requireAuth, async (req, res) => {
     const user = currentUser(req);

@@ -173,6 +173,49 @@ export const studentUserLinks = pgTable("student_user_links", {
   }),
 }));
 
+// === Attendance ===
+export const attendanceRecords = pgTable("attendance_records", {
+  id: serial("id").primaryKey(),
+  studentId: integer("student_id").notNull(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
+  className: text("class_name").notNull(),
+  section: text("section").notNull(),
+  attendanceDate: date("attendance_date").notNull(),
+  subjectId: integer("subject_id"),
+  status: text("status").notNull(),
+  markedByUserId: integer("marked_by_user_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolDateClassIndex: index("attendance_school_date_class_idx").on(table.schoolId, table.sessionId, table.attendanceDate, table.className, table.section),
+  studentHistoryIndex: index("attendance_student_history_idx").on(table.schoolId, table.sessionId, table.studentId, table.attendanceDate),
+  subjectHistoryIndex: index("attendance_subject_history_idx").on(table.schoolId, table.sessionId, table.subjectId, table.attendanceDate),
+  subjectUnique: uniqueIndex("attendance_student_subject_unique").on(table.schoolId, table.sessionId, table.attendanceDate, table.studentId, table.subjectId).where(sql`${table.subjectId} IS NOT NULL`),
+  dailyUnique: uniqueIndex("attendance_student_daily_unique").on(table.schoolId, table.sessionId, table.attendanceDate, table.studentId).where(sql`${table.subjectId} IS NULL`),
+  statusCheck: check("attendance_status_valid", sql`${table.status} IN ('present', 'absent', 'late', 'leave')`),
+  studentScopeForeignKey: foreignKey({
+    columns: [table.studentId, table.schoolId],
+    foreignColumns: [students.id, students.schoolId],
+    name: "attendance_student_school_fk",
+  }),
+  sessionSchoolForeignKey: foreignKey({
+    columns: [table.sessionId, table.schoolId],
+    foreignColumns: [academicSessions.id, academicSessions.schoolId],
+    name: "attendance_session_school_fk",
+  }),
+  subjectScopeForeignKey: foreignKey({
+    columns: [table.subjectId, table.schoolId, table.sessionId],
+    foreignColumns: [subjects.id, subjects.schoolId, subjects.sessionId],
+    name: "attendance_subject_scope_fk",
+  }),
+  markerSchoolForeignKey: foreignKey({
+    columns: [table.markedByUserId, table.schoolId],
+    foreignColumns: [users.id, users.schoolId],
+    name: "attendance_marker_school_fk",
+  }),
+}));
+
 // === Fee Structure ===
 export const feeStructures = pgTable("fee_structures", {
   id: serial("id").primaryKey(),
@@ -302,6 +345,14 @@ export const insertStaffSchema = createInsertSchema(staff).omit({ id: true, scho
   basicSalary: z.number().int().nonnegative(),
   name: z.string().trim().min(1),
 });
+export const attendanceStatusSchema = z.enum(["present", "absent", "late", "leave"]);
+export const attendanceDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
+export const insertAttendanceSchema = createInsertSchema(attendanceRecords).omit({ id: true, schoolId: true, sessionId: true, markedByUserId: true, createdAt: true, updatedAt: true }).extend({
+  attendanceDate: attendanceDateSchema,
+  status: attendanceStatusSchema,
+  className: z.string().trim().min(1).max(100),
+  section: z.string().trim().min(1).max(50),
+});
 export const insertSubjectSchema = createInsertSchema(subjects).omit({ id: true, schoolId: true, sessionId: true, createdAt: true, updatedAt: true }).extend({
   name: z.string().trim().min(1).max(100),
   code: z.string().trim().max(50).optional(),
@@ -325,6 +376,7 @@ export type Subject = typeof subjects.$inferSelect;
 export type TeacherSubjectAssignment = typeof teacherSubjectAssignments.$inferSelect;
 export type TeacherClassAssignment = typeof teacherClassAssignments.$inferSelect;
 export type StudentUserLink = typeof studentUserLinks.$inferSelect;
+export type AttendanceRecord = typeof attendanceRecords.$inferSelect;
 
 export type InsertSchool = z.infer<typeof insertSchoolSchema>;
 export type InsertAcademicSession = z.infer<typeof insertAcademicSessionSchema>;
@@ -337,6 +389,7 @@ export type InsertSubject = z.infer<typeof insertSubjectSchema>;
 export type InsertTeacherSubjectAssignment = z.infer<typeof insertTeacherSubjectAssignmentSchema>;
 export type InsertTeacherClassAssignment = z.infer<typeof insertTeacherClassAssignmentSchema>;
 export type InsertStudentUserLink = z.infer<typeof insertStudentUserLinkSchema>;
+export type InsertAttendance = z.infer<typeof insertAttendanceSchema>;
 
 // Server-side insert types retain tenant columns; client input schemas intentionally omit them.
 export type StoredStudentInsert = typeof students.$inferInsert;

@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 const migration = await readFile("migrations/0002_database_foundation.sql", "utf8");
 const runner = await readFile("script/migrate.ts", "utf8");
 const stepTwoMigration = await readFile("migrations/0003_multi_role_assignment_foundation.sql", "utf8");
+const attendanceMigration = await readFile("migrations/0004_attendance_foundation.sql", "utf8");
 
 assert.match(migration, /CREATE TABLE IF NOT EXISTS academic_sessions/);
 assert.match(migration, /academic_sessions_one_active_per_school/);
@@ -23,5 +24,10 @@ assert.match(stepTwoMigration, /CREATE TABLE IF NOT EXISTS "subjects"/);
 assert.match(stepTwoMigration, /teacher_subject_assignments_subject_scope_fk/);
 assert.match(stepTwoMigration, /teacher_class_assignments/);
 assert.match(stepTwoMigration, /student_user_links_user_school_fk/);
+assert.match(attendanceMigration, /CREATE TABLE IF NOT EXISTS "attendance_records"/);
+assert.match(attendanceMigration, /attendance_student_subject_unique/);
+assert.match(attendanceMigration, /attendance_student_daily_unique/);
+assert.match(attendanceMigration, /attendance_status_valid/);
+assert.match(attendanceMigration, /attendance_session_school_fk/);
 
 console.log("Database foundation migration tests passed.");
