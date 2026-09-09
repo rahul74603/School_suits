@@ -3,6 +3,7 @@ import type { Server } from "http";
 import { z } from "zod";
 import { storage, type IStorage } from "./storage";
 import { api } from "@shared/routes";
+import { calculateReportTotals } from "./report-card";
 import {
   currentUser,
   requireAuth,
@@ -267,6 +268,50 @@ export async function registerRoutes(
     const user = currentUser(req); const session = await currentExamContext(user); if (!session) return res.status(409).json({ message: "No active academic session" });
     try { return (await dataStore.deleteExamSchedule(routeId(req.params.id), user.schoolId, session.id)) ? res.status(204).send() : res.status(404).json({ message: "Schedule not found" }); }
     catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to remove schedule" }); }
+  });
+
+  // === Marksheet / report cards ===
+  app.get(api.reportCards.get.path, requireRole("admin", "principal", "teacher", "student"), async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const requestedStudentId = routeId(req.params.studentId);
+    const examId = routeId(req.params.examId);
+    const student = user.role === "student"
+      ? await dataStore.getStudentForUser(user.id, user.schoolId, session.id)
+      : await dataStore.getStudent(requestedStudentId, user.schoolId);
+    if (!student || (user.role === "student" && student.id !== requestedStudentId && requestedStudentId !== student.id)) {
+      return res.status(404).json({ message: "Report card not found" });
+    }
+    const exam = await dataStore.getExam(examId, user.schoolId, session.id);
+    if (!exam) return res.status(404).json({ message: "Exam not found" });
+    if (user.role === "student" && exam.status !== "published") return res.status(404).json({ message: "Report card not published" });
+    const scopes = await dataStore.getExamScopes(exam.id, user.schoolId, session.id);
+    const schedules = (await dataStore.getExamSchedules(exam.id, user.schoolId, session.id)).filter(schedule => schedule.className === student.class && schedule.section === student.section);
+    const scopeMatches = scopes.some(scope => scope.className === student.class && scope.section === student.section);
+    if (!scopeMatches || schedules.length === 0) return res.status(404).json({ message: "Student is not applicable to this exam" });
+    if (user.role === "teacher") {
+      const classes = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id);
+      const subjects = await dataStore.getTeacherSubjectAssignments(user.schoolId, session.id, user.id);
+      if (!classes.some(item => item.className === student.class && item.section === student.section)) return res.status(404).json({ message: "Report card outside teacher assignment" });
+      const subjectIds = new Set(subjects.map(item => item.subjectId));
+      if (!schedules.every(schedule => subjectIds.has(schedule.subjectId))) return res.status(404).json({ message: "Report card contains unassigned subjects" });
+    }
+    const results = await dataStore.getExamResults(user.schoolId, session.id, { examId: exam.id, studentId: student.id });
+    const resultBySchedule = new Map(results.map(result => [result.scheduleId, result]));
+    if (user.role === "student" && schedules.some(schedule => resultBySchedule.get(schedule.id)?.status !== "published")) return res.status(404).json({ message: "Report card results are not published" });
+    const subjects = await dataStore.getSubjects(user.schoolId, session.id);
+    const subjectNames = new Map(subjects.map(subject => [subject.id, subject.name]));
+    const rows = schedules.map(schedule => {
+      const result = resultBySchedule.get(schedule.id);
+      const absent = result?.isAbsent ?? false;
+      const obtained = absent ? null : (result?.obtainedMarks ?? null);
+      const subjectPercentage = obtained === null ? null : Math.round((obtained / schedule.maxMarks) * 10000) / 100;
+      return { scheduleId: schedule.id, subjectId: schedule.subjectId, subjectName: subjectNames.get(schedule.subjectId) ?? `Subject ${schedule.subjectId}`, examDate: schedule.examDate, maxMarks: schedule.maxMarks, passingMarks: schedule.passingMarks, obtainedMarks: obtained, absent, subjectResult: absent ? "Absent" : obtained === null ? "Not entered" : obtained >= schedule.passingMarks ? "Pass" : "Fail", subjectPercentage, remarks: result?.remarks ?? null, resultStatus: result?.status ?? "missing" };
+    });
+    const totals = calculateReportTotals(rows);
+    const school = await dataStore.getSchool(user.schoolId);
+    return res.json({ report: { school, student: { id: student.id, name: student.name, admissionNo: student.admissionNo, class: student.class, section: student.section, rollNo: student.rollNo }, session, exam: { id: exam.id, name: exam.name, examType: exam.examType, status: exam.status }, rows, ...totals, calculationNote: "Absent subjects are excluded from the percentage denominator and never receive invented marks; an absent subject still makes the overall result Fail." } });
   });
 
   // === Exam results / marks ===

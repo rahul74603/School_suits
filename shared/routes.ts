@@ -257,6 +257,15 @@ export const api = {
     removeSchedule: { method: 'DELETE' as const, path: '/api/exam-schedules/:id', responses: { 204: z.null() } },
   },
 
+  // === Marksheet / report cards ===
+  reportCards: {
+    get: {
+      method: 'GET' as const,
+      path: '/api/report-cards/:studentId/:examId',
+      responses: { 200: z.object({ report: z.custom() }) },
+    },
+  },
+
   // === Exam Results / Marks ===
   examResults: {
     list: { method: 'GET' as const, path: '/api/exam-results', input: z.object({ examId: z.string().optional(), scheduleId: z.string().optional(), studentId: z.string().optional(), class: z.string().optional(), section: z.string().optional(), status: z.string().optional() }).optional(), responses: { 200: z.array(z.custom<typeof examResults.$inferSelect>()) } },
