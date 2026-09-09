@@ -269,6 +269,84 @@ export async function registerRoutes(
     catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to remove schedule" }); }
   });
 
+  // === Exam results / marks ===
+  const resultManagers = requireRole("admin", "principal", "teacher");
+  const resultReaders = requireRole("admin", "principal", "teacher", "student");
+  async function resultContext(user: ReturnType<typeof currentUser>) {
+    const session = await dataStore.getActiveSession(user.schoolId);
+    return session ? { session, results: await dataStore.getExamResults(user.schoolId, session.id) } : undefined;
+  }
+  async function teacherAllowsSchedule(user: ReturnType<typeof currentUser>, schedule: { className: string; section: string; subjectId: number; sessionId: number }) {
+    if (user.role !== "teacher") return true;
+    const classes = await dataStore.getTeacherClassAssignments(user.schoolId, schedule.sessionId, user.id);
+    const subjects = await dataStore.getTeacherSubjectAssignments(user.schoolId, schedule.sessionId, user.id);
+    return classes.some(item => item.className === schedule.className && item.section === schedule.section) && subjects.some(item => item.subjectId === schedule.subjectId);
+  }
+  async function visibleResult(user: ReturnType<typeof currentUser>, result: Awaited<ReturnType<IStorage["getExamResult"]>>) {
+    if (!result) return false;
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session || result.sessionId !== session.id) return false;
+    const exam = await dataStore.getExam(result.examId, user.schoolId, session.id);
+    const schedules = exam ? await dataStore.getExamSchedules(exam.id, user.schoolId, session.id) : [];
+    const schedule = schedules.find(item => item.id === result.scheduleId);
+    if (!exam || !schedule) return false;
+    if (user.role === "student") {
+      const student = await dataStore.getStudentForUser(user.id, user.schoolId, session.id);
+      return !!student && student.id === result.studentId && exam.status === "published" && result.status === "published";
+    }
+    return teacherAllowsSchedule(user, schedule);
+  }
+
+  app.get(api.examResults.list.path, resultReaders, async (req, res) => {
+    const user = currentUser(req); const context = await resultContext(user); if (!context) return res.json([]);
+    const requested = { examId: typeof req.query.examId === "string" ? idSchema.parse(req.query.examId) : undefined, scheduleId: typeof req.query.scheduleId === "string" ? idSchema.parse(req.query.scheduleId) : undefined, studentId: typeof req.query.studentId === "string" ? idSchema.parse(req.query.studentId) : undefined, status: typeof req.query.status === "string" ? req.query.status : undefined };
+    if (user.role === "student") { const student = await dataStore.getStudentForUser(user.id, user.schoolId, context.session.id); requested.studentId = student?.id; requested.status = "published"; }
+    let results = requested.studentId ? await dataStore.getExamResults(user.schoolId, context.session.id, requested) : await dataStore.getExamResults(user.schoolId, context.session.id, requested);
+    const output = [];
+    for (const result of results) {
+      if (!(await visibleResult(user, result))) continue;
+      const schedule = (await dataStore.getExamSchedules(result.examId, user.schoolId, context.session.id)).find(item => item.id === result.scheduleId);
+      if (schedule && typeof req.query.class === "string" && schedule.className !== req.query.class) continue;
+      if (schedule && typeof req.query.section === "string" && schedule.section !== req.query.section) continue;
+      output.push(result);
+    }
+    return res.json(output);
+  });
+  app.get(api.examResults.student.path, resultReaders, async (req, res) => {
+    const user = currentUser(req); const context = await resultContext(user); if (!context) return res.json([]);
+    const own = user.role === "student" ? await dataStore.getStudentForUser(user.id, user.schoolId, context.session.id) : undefined;
+    const studentId = own?.id ?? (user.role === "student" ? -1 : routeId(req.params.studentId));
+    const results = await dataStore.getExamResults(user.schoolId, context.session.id, { studentId });
+    const output = []; for (const result of results) if (await visibleResult(user, result)) output.push(result);
+    return res.json(output);
+  });
+  app.post(api.examResults.bulk.path, resultManagers, async (req, res) => {
+    const input = api.examResults.bulk.input.parse(req.body); const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.status(409).json({ message: "No active academic session" });
+    const exam = await dataStore.getExam(input.examId, user.schoolId, session.id); const schedule = (await dataStore.getExamSchedules(input.examId, user.schoolId, session.id)).find(item => item.id === input.scheduleId);
+    if (!exam || !schedule || schedule.className !== input.className || schedule.section !== input.section || !(await teacherAllowsSchedule(user, schedule))) return res.status(403).json({ message: "Marks entry is outside your assignment" });
+    try { const created = await dataStore.createExamResultsBulk(input.records.map(record => ({ ...record, examId: input.examId, scheduleId: input.scheduleId, className: input.className, section: input.section, schoolId: user.schoolId, sessionId: session.id, status: "draft" as const }))); return res.status(201).json(created); }
+    catch (error) { return res.status(error instanceof Error && error.message.includes("Duplicate") ? 409 : 400).json({ message: error instanceof Error ? error.message : "Unable to save marks" }); }
+  });
+  app.patch(api.examResults.update.path, resultManagers, async (req, res) => {
+    const user = currentUser(req); const input = api.examResults.update.input.parse(req.body); const target = await dataStore.getExamResult(routeId(req.params.id), currentUser(req).schoolId, (await dataStore.getActiveSession(user.schoolId))?.id ?? -1);
+    if (!target || !(await visibleResult(user, target))) return res.status(404).json({ message: "Result not found" });
+    try { const updated = await dataStore.updateExamResult(target.id, user.schoolId, target.sessionId, input); return updated ? res.json(updated) : res.status(404).json({ message: "Result not found" }); } catch (error) { return res.status(400).json({ message: error instanceof Error ? error.message : "Unable to update marks" }); }
+  });
+  app.post(api.examResults.status.path, requireRole("admin", "principal"), async (req, res) => {
+    const input = api.examResults.status.input.parse(req.body); const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId); if (!session) return res.status(409).json({ message: "No active academic session" });
+    if (!(await dataStore.getExam(input.examId, user.schoolId, session.id))) return res.status(404).json({ message: "Exam not found" });
+    return res.json({ updated: await dataStore.setExamResultsStatus(input.examId, user.schoolId, session.id, input.status) });
+  });
+  app.get(api.examResults.summary.path, resultReaders, async (req, res) => {
+    const user = currentUser(req); const context = await resultContext(user); if (!context) return res.json({ totalObtained: 0, totalMaximum: 0, percentage: 0, passed: 0, failed: 0, absent: 0 });
+    const student = user.role === "student" ? await dataStore.getStudentForUser(user.id, user.schoolId, context.session.id) : undefined;
+    const examId = typeof req.query.examId === "string" ? idSchema.parse(req.query.examId) : undefined;
+    const results = await dataStore.getExamResults(user.schoolId, context.session.id, { examId, studentId: student?.id });
+    let totalObtained = 0, totalMaximum = 0, passed = 0, failed = 0, absent = 0;
+    for (const result of results) { if (!(await visibleResult(user, result))) continue; const schedule = (await dataStore.getExamSchedules(result.examId, user.schoolId, context.session.id)).find(item => item.id === result.scheduleId); if (!schedule) continue; totalMaximum += schedule.maxMarks; if (result.isAbsent) { absent++; failed++; continue; } totalObtained += result.obtainedMarks ?? 0; if ((result.obtainedMarks ?? 0) >= schedule.passingMarks) passed++; else failed++; }
+    return res.json({ totalObtained, totalMaximum, percentage: totalMaximum ? Math.round(totalObtained / totalMaximum * 10000) / 100 : 0, passed, failed, absent });
+  });
+
   // === Attendance ===
   const attendanceReaders = requireRole("admin", "principal", "teacher", "student");
   const attendanceManagers = requireRole("admin", "principal", "teacher");

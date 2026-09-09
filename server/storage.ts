@@ -1,10 +1,10 @@
 
 import { 
-  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, feeStructures, feePayments, staff,
+  users, schools, academicSessions, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, feeStructures, feePayments, staff,
   type User, type InsertUser, type School, type InsertSchool,
   type AcademicSession, type InsertAcademicSession, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
-  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule,
+  type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult,
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
 } from "@shared/schema";
 import { db } from "./db";
@@ -48,6 +48,13 @@ export interface IStorage {
   createExamSchedule(schedule: InsertExamSchedule & { examId: number; schoolId: number; sessionId: number }): Promise<ExamSchedule>;
   updateExamSchedule(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExamSchedule>): Promise<ExamSchedule | undefined>;
   deleteExamSchedule(id: number, schoolId: number, sessionId: number): Promise<boolean>;
+
+  // Exam results
+  getExamResults(schoolId: number, sessionId: number, filters?: { examId?: number; scheduleId?: number; studentId?: number; status?: string }): Promise<ExamResult[]>;
+  getExamResult(id: number, schoolId: number, sessionId: number): Promise<ExamResult | undefined>;
+  createExamResultsBulk(records: Array<InsertExamResult & { examId: number; scheduleId: number; schoolId: number; sessionId: number; className: string; section: string }>): Promise<ExamResult[]>;
+  updateExamResult(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExamResult>): Promise<ExamResult | undefined>;
+  setExamResultsStatus(examId: number, schoolId: number, sessionId: number, status: ExamResult["status"]): Promise<number>;
 
   // Attendance
   getAttendance(schoolId: number, sessionId: number, filters?: { from?: string; to?: string; date?: string; className?: string; section?: string; subjectId?: number; studentId?: number }): Promise<AttendanceRecord[]>;
@@ -295,6 +302,64 @@ export class DatabaseStorage implements IStorage {
     if (!exam || exam.status !== "draft") throw new Error("Only draft exam schedules can be removed");
     const deleted = await db.delete(examSchedules).where(and(eq(examSchedules.id, id), eq(examSchedules.schoolId, schoolId), eq(examSchedules.sessionId, sessionId))).returning({ id: examSchedules.id });
     return deleted.length > 0;
+  }
+
+  // === Exam results ===
+  async getExamResults(schoolId: number, sessionId: number, filters: { examId?: number; scheduleId?: number; studentId?: number; status?: string } = {}): Promise<ExamResult[]> {
+    const conditions = [eq(examResults.schoolId, schoolId), eq(examResults.sessionId, sessionId)];
+    if (filters.examId !== undefined) conditions.push(eq(examResults.examId, filters.examId));
+    if (filters.scheduleId !== undefined) conditions.push(eq(examResults.scheduleId, filters.scheduleId));
+    if (filters.studentId !== undefined) conditions.push(eq(examResults.studentId, filters.studentId));
+    if (filters.status) conditions.push(eq(examResults.status, filters.status));
+    return db.select().from(examResults).where(and(...conditions)).orderBy(examResults.studentId);
+  }
+
+  async getExamResult(id: number, schoolId: number, sessionId: number): Promise<ExamResult | undefined> {
+    const [result] = await db.select().from(examResults).where(and(eq(examResults.id, id), eq(examResults.schoolId, schoolId), eq(examResults.sessionId, sessionId)));
+    return result;
+  }
+
+  async createExamResultsBulk(records: Array<InsertExamResult & { examId: number; scheduleId: number; schoolId: number; sessionId: number; className: string; section: string }>): Promise<ExamResult[]> {
+    const keys = new Set<string>();
+    for (const record of records) {
+      const key = `${record.scheduleId}|${record.studentId}|${record.schoolId}|${record.sessionId}`;
+      if (keys.has(key)) throw new Error("Duplicate result in request");
+      keys.add(key);
+      const [schedule] = await db.select().from(examSchedules).where(and(eq(examSchedules.id, record.scheduleId), eq(examSchedules.examId, record.examId), eq(examSchedules.schoolId, record.schoolId), eq(examSchedules.sessionId, record.sessionId), eq(examSchedules.className, record.className ?? ""), eq(examSchedules.section, record.section ?? "")));
+      if (!schedule) throw new Error("Exam schedule is outside the requested scope");
+      const exam = await this.getExam(record.examId, record.schoolId, record.sessionId);
+      if (!exam || exam.status === "completed" || exam.status === "archived") throw new Error("Exam is not editable");
+      const student = await this.getStudent(record.studentId, record.schoolId);
+      if (!student || student.sessionId !== record.sessionId || !student.isActive || student.class !== record.className || student.section !== record.section) throw new Error("Student is outside the result scope");
+      if (record.isAbsent) { record.obtainedMarks = null; }
+      else if (record.obtainedMarks === null || record.obtainedMarks === undefined) throw new Error("Obtained marks are required unless the student is absent");
+      else if (record.obtainedMarks > schedule.maxMarks) throw new Error("Obtained marks exceed maximum marks");
+    }
+    return db.transaction(async (transaction) => {
+      const created: ExamResult[] = [];
+      for (const record of records) { const { className: _className, section: _section, ...values } = record; const [result] = await transaction.insert(examResults).values(values).returning(); created.push(result); }
+      return created;
+    });
+  }
+
+  async updateExamResult(id: number, schoolId: number, sessionId: number, updates: Partial<InsertExamResult>): Promise<ExamResult | undefined> {
+    const existing = await this.getExamResult(id, schoolId, sessionId);
+    if (!existing) return undefined;
+    if (existing.status !== "draft") throw new Error("Unpublish the result before editing");
+    const schedule = await db.select().from(examSchedules).where(and(eq(examSchedules.id, existing.scheduleId), eq(examSchedules.schoolId, schoolId), eq(examSchedules.sessionId, sessionId))).then(rows => rows[0]);
+    const exam = await this.getExam(existing.examId, schoolId, sessionId);
+    if (!schedule || !exam || exam.status === "completed" || exam.status === "archived") throw new Error("Exam is not editable");
+    const absent = updates.isAbsent ?? existing.isAbsent;
+    const marks = absent ? null : (updates.obtainedMarks ?? existing.obtainedMarks);
+    if (!absent && (marks === null || marks === undefined)) throw new Error("Obtained marks are required unless the student is absent");
+    if (marks !== null && marks !== undefined && marks > schedule.maxMarks) throw new Error("Obtained marks exceed maximum marks");
+    const [updated] = await db.update(examResults).set({ ...updates, obtainedMarks: marks, isAbsent: absent, updatedAt: new Date() }).where(and(eq(examResults.id, id), eq(examResults.schoolId, schoolId), eq(examResults.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  async setExamResultsStatus(examId: number, schoolId: number, sessionId: number, status: ExamResult["status"]): Promise<number> {
+    const updated = await db.update(examResults).set({ status, updatedAt: new Date() }).where(and(eq(examResults.examId, examId), eq(examResults.schoolId, schoolId), eq(examResults.sessionId, sessionId))).returning({ id: examResults.id });
+    return updated.length;
   }
 
   // === Attendance ===

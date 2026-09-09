@@ -4,8 +4,8 @@ import {
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
   insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema,
   insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema, insertAttendanceSchema,
-  insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema,
-  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules
+  insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema, insertExamResultSchema,
+  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults
 } from './schema';
 
 export const errorSchemas = {
@@ -255,6 +255,16 @@ export const api = {
     addSchedule: { method: 'POST' as const, path: '/api/exams/:id/schedules', input: insertExamScheduleSchema, responses: { 201: z.custom<typeof examSchedules.$inferSelect>() } },
     updateSchedule: { method: 'PATCH' as const, path: '/api/exam-schedules/:id', input: insertExamScheduleSchema.partial(), responses: { 200: z.custom<typeof examSchedules.$inferSelect>() } },
     removeSchedule: { method: 'DELETE' as const, path: '/api/exam-schedules/:id', responses: { 204: z.null() } },
+  },
+
+  // === Exam Results / Marks ===
+  examResults: {
+    list: { method: 'GET' as const, path: '/api/exam-results', input: z.object({ examId: z.string().optional(), scheduleId: z.string().optional(), studentId: z.string().optional(), class: z.string().optional(), section: z.string().optional(), status: z.string().optional() }).optional(), responses: { 200: z.array(z.custom<typeof examResults.$inferSelect>()) } },
+    student: { method: 'GET' as const, path: '/api/exam-results/student/:studentId', responses: { 200: z.array(z.custom<typeof examResults.$inferSelect>()) } },
+    bulk: { method: 'POST' as const, path: '/api/exam-results/bulk', input: z.object({ examId: z.number().int().positive(), scheduleId: z.number().int().positive(), className: z.string().trim().min(1), section: z.string().trim().min(1), records: z.array(z.object({ studentId: z.number().int().positive(), obtainedMarks: z.number().int().nonnegative().nullable().optional(), isAbsent: z.boolean().optional(), remarks: z.string().max(500).nullable().optional() }).strict()).min(1).max(500) }).strict(), responses: { 201: z.array(z.custom<typeof examResults.$inferSelect>()) } },
+    update: { method: 'PATCH' as const, path: '/api/exam-results/:id', input: z.object({ obtainedMarks: z.number().int().nonnegative().nullable().optional(), isAbsent: z.boolean().optional(), remarks: z.string().max(500).nullable().optional() }).strict(), responses: { 200: z.custom<typeof examResults.$inferSelect>() } },
+    status: { method: 'POST' as const, path: '/api/exam-results/status', input: z.object({ examId: z.number().int().positive(), status: z.enum(["draft", "published"]) }), responses: { 200: z.object({ updated: z.number() }) } },
+    summary: { method: 'GET' as const, path: '/api/exam-results/summary', input: z.object({ examId: z.string().optional(), studentId: z.string().optional() }).optional(), responses: { 200: z.object({ totalObtained: z.number(), totalMaximum: z.number(), percentage: z.number(), passed: z.number(), failed: z.number(), absent: z.number() }) } },
   },
 
   // === Attendance ===
