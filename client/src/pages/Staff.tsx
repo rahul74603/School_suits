@@ -1,4 +1,5 @@
-import { useStaff, useCreateStaff } from "@/hooks/use-staff";
+import { useStaff, useCreateStaff, useUpdateStaff } from "@/hooks/use-staff";
+import { QueryError } from "@/components/QueryState";
 import { Sidebar } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,11 +28,13 @@ import { useState } from "react";
 import { z } from "zod";
 
 export default function Staff() {
-  const { data: staff, isLoading } = useStaff();
+  const { data: staff, isLoading, isError, error, refetch } = useStaff();
   const createStaff = useCreateStaff();
+  const updateStaff = useUpdateStaff();
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [editingStaff, setEditingStaff] = useState<number | null>(null);
 
   const form = useForm({
     resolver: zodResolver(insertStaffSchema),
@@ -39,19 +42,17 @@ export default function Staff() {
       name: "",
       designation: "Teacher",
       basicSalary: 0,
-      contact: "",
-      schoolId: 1
+      contact: ""
     }
   });
 
   const onSubmit = (data: z.infer<typeof insertStaffSchema>) => {
-    createStaff.mutate(data, {
-      onSuccess: () => {
-        setOpen(false);
-        form.reset();
-        toast({ title: "Staff member added successfully" });
-      }
-    });
+    const options = {
+      onSuccess: () => { setOpen(false); setEditingStaff(null); form.reset(); toast({ title: editingStaff ? "Staff member updated" : "Staff member added successfully" }); },
+      onError: (error: Error) => toast({ variant: "destructive", title: "Staff operation failed", description: error.message }),
+    };
+    if (editingStaff) updateStaff.mutate({ id: editingStaff, ...data }, options);
+    else createStaff.mutate(data, options);
   };
 
   const filteredStaff = staff?.filter(s => 
@@ -71,14 +72,14 @@ export default function Staff() {
           
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-              <Button className="bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
+              <Button onClick={() => { setEditingStaff(null); form.reset({ name: "", designation: "Teacher", basicSalary: 0, contact: "" }); }} className="bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20">
                 <UserPlus className="w-4 h-4 mr-2" />
                 Add Staff
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Add New Staff Member</DialogTitle>
+                <DialogTitle>{editingStaff ? "Edit Staff Member" : "Add New Staff Member"}</DialogTitle>
               </DialogHeader>
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -182,16 +183,19 @@ export default function Staff() {
                 <TableHead>Contact</TableHead>
                 <TableHead>Salary</TableHead>
                 <TableHead className="text-right">Join Date</TableHead>
+                <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
+              {isError ? (
+                <TableRow><TableCell colSpan={6}><QueryError message={error instanceof Error ? error.message : "Unable to load staff."} onRetry={() => refetch()} /></TableCell></TableRow>
+              ) : isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Loading staff...</TableCell>
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Loading staff...</TableCell>
                 </TableRow>
               ) : filteredStaff?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No staff found.</TableCell>
+                  <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No staff found.</TableCell>
                 </TableRow>
               ) : (
                 filteredStaff?.map((s) => (
@@ -211,6 +215,7 @@ export default function Staff() {
                     <TableCell className="text-right text-slate-500">
                       {s.joinDate ? new Date(s.joinDate).toLocaleDateString() : '-'}
                     </TableCell>
+                    <TableCell><Button variant="outline" size="sm" onClick={() => { setEditingStaff(s.id); form.reset({ name: s.name, designation: s.designation, basicSalary: s.basicSalary, contact: s.contact }); setOpen(true); }}>Edit</Button></TableCell>
                   </TableRow>
                 ))
               )}

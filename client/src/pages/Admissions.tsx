@@ -19,7 +19,7 @@ export default function Admissions() {
   const form = useForm({
     resolver: zodResolver(insertStudentSchema),
     defaultValues: {
-      admissionNo: `ADM-${new Date().getFullYear()}-${Math.floor(Math.random() * 1000)}`,
+      admissionNo: "",
       name: "",
       fatherName: "",
       motherName: "",
@@ -30,7 +30,6 @@ export default function Admissions() {
       category: "General",
       contact: "",
       address: "",
-      schoolId: 1,
       dob: undefined
     }
   });
@@ -80,9 +79,9 @@ export default function Admissions() {
                       name="admissionNo"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Admission Number</FormLabel>
+                          <FormLabel>Admission Number (optional)</FormLabel>
                           <FormControl>
-                            <Input {...field} readOnly className="bg-slate-50" />
+                            <Input {...field} placeholder="Leave blank to generate safely" />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -222,6 +221,18 @@ export default function Admissions() {
                         <FormControl>
                           <Input {...field} value={field.value || ""} />
                         </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="dob"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Date of birth</FormLabel>
+                        <FormControl><Input type="date" {...field} value={field.value || ""} /></FormControl>
                         <FormMessage />
                       </FormItem>
                     )}

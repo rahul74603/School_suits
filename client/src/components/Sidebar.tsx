@@ -6,8 +6,10 @@ import {
   UserPlus, 
   Settings, 
   FileText,
-  School
+  School,
+  LogOut
 } from "lucide-react";
+import { useLogout } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -21,7 +23,13 @@ const navigation = [
 ];
 
 export function Sidebar() {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
+  const logout = useLogout();
+
+  async function handleLogout() {
+    await logout.mutateAsync();
+    setLocation("/login");
+  }
 
   return (
     <div className="flex h-screen flex-col bg-slate-900 w-64 text-white no-print fixed left-0 top-0">
@@ -59,11 +67,20 @@ export function Sidebar() {
       </div>
 
       <div className="p-4 border-t border-slate-800">
-        <div className="flex items-center">
+        <div className="flex items-center justify-between">
           <div className="ml-3">
-            <p className="text-sm font-medium text-white">Admin User</p>
-            <p className="text-xs text-slate-400">School Administrator</p>
+            <p className="text-sm font-medium text-white">School User</p>
+            <p className="text-xs text-slate-400">Authenticated account</p>
           </div>
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={logout.isPending}
+            className="p-2 text-slate-400 hover:text-white disabled:opacity-50"
+            aria-label="Log out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>

@@ -1,0 +1,2 @@
+import { Sidebar } from "@/components/Sidebar";
+export function ModulePlaceholder({ title, description }: { title: string; description: string }) { return <div className="flex min-h-screen bg-slate-50"><Sidebar /><main className="flex-1 ml-64 p-8"><h1 className="text-3xl font-bold">{title}</h1><p className="mt-2 text-slate-600">{description}</p><div className="mt-8 rounded-xl border border-amber-200 bg-amber-50 p-6 text-amber-900">This module is not implemented in the current phase. No placeholder data is displayed.</div></main></div>; }

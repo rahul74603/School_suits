@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { 
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
   insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema,
-  students, feePayments, schools, staff, feeStructures
+  students, feePayments, schools, staff, feeStructures, academicSessions
 } from './schema';
 
 export const errorSchemas = {
@@ -40,6 +40,15 @@ export const api = {
     },
   },
 
+  // === Academic sessions ===
+  sessions: {
+    active: {
+      method: 'GET' as const,
+      path: '/api/academic-sessions/active',
+      responses: { 200: z.custom<import('./schema').AcademicSession | null>() },
+    },
+  },
+
   // === Students ===
   students: {
     list: {
@@ -49,6 +58,7 @@ export const api = {
         class: z.string().optional(),
         section: z.string().optional(),
         search: z.string().optional(),
+        sessionId: z.string().optional(),
       }).optional(),
       responses: {
         200: z.array(z.custom<typeof students.$inferSelect>()),
@@ -77,6 +87,11 @@ export const api = {
       responses: {
         200: z.custom<typeof students.$inferSelect>(),
       },
+    },
+    deactivate: {
+      method: 'POST' as const,
+      path: '/api/students/:id/deactivate',
+      responses: { 200: z.custom<typeof students.$inferSelect>() },
     },
     promote: {
       method: 'POST' as const,
@@ -109,6 +124,17 @@ export const api = {
           201: z.custom<typeof feeStructures.$inferSelect>(),
         },
       },
+      update: {
+        method: 'PUT' as const,
+        path: '/api/fee-structures/:id',
+        input: insertFeeStructureSchema.partial(),
+        responses: { 200: z.custom<typeof feeStructures.$inferSelect>() },
+      },
+      delete: {
+        method: 'DELETE' as const,
+        path: '/api/fee-structures/:id',
+        responses: { 204: z.null() },
+      },
     },
     payments: {
       create: {
@@ -124,6 +150,7 @@ export const api = {
         path: '/api/payments',
         input: z.object({
           studentId: z.string().optional(),
+          sessionId: z.string().optional(),
         }).optional(),
         responses: {
           200: z.array(z.custom<typeof feePayments.$inferSelect>()),
@@ -135,12 +162,18 @@ export const api = {
         input: z.object({
           class: z.string().optional(),
           month: z.string(),
+          year: z.string().optional(),
         }),
         responses: {
           200: z.array(z.object({
             studentId: z.number(),
             name: z.string(),
+            class: z.string(),
+            section: z.string(),
+            amountPaid: z.number(),
             amountPending: z.number(),
+            month: z.string(),
+            year: z.number(),
           })),
         },
       },
@@ -163,6 +196,12 @@ export const api = {
       responses: {
         201: z.custom<typeof staff.$inferSelect>(),
       },
+    },
+    update: {
+      method: 'PUT' as const,
+      path: '/api/staff/:id',
+      input: insertStaffSchema.partial(),
+      responses: { 200: z.custom<typeof staff.$inferSelect>() },
     },
   },
 };

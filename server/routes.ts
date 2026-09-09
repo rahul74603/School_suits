@@ -1,174 +1,247 @@
-
 import type { Express } from "express";
 import type { Server } from "http";
-import { storage } from "./storage";
-import { api } from "@shared/routes";
 import { z } from "zod";
+import { storage, type IStorage } from "./storage";
+import { api } from "@shared/routes";
+import {
+  currentUser,
+  requireAuth,
+  requireRole,
+  toAuthenticatedUser,
+  toPublicUser,
+  verifyPassword,
+} from "./auth";
+
+const idSchema = z.coerce.number().int().positive();
+const credentialsSchema = z.object({
+  username: z.string().trim().min(1).max(100),
+  password: z.string().min(1).max(200),
+});
+
+function safeStudent(student: Awaited<ReturnType<typeof storage.getStudent>>) {
+  if (!student) return student;
+  const { aadhaar: _aadhaar, ...safe } = student;
+  return safe;
+}
+
+function routeId(value: string | string[]): number {
+  return idSchema.parse(Array.isArray(value) ? value[0] : value);
+}
 
 export async function registerRoutes(
   httpServer: Server,
-  app: Express
+  app: Express,
+  dataStore: IStorage = storage,
 ): Promise<Server> {
+  app.post("/api/auth/login", async (req, res) => {
+    const { username, password } = credentialsSchema.parse(req.body);
+    const user = await dataStore.getUserByUsername(username);
+
+    // Keep invalid username and invalid password responses identical.
+    if (!user || !user.schoolId || !(await verifyPassword(password, user.passwordHash))) {
+      return res.status(401).json({ message: "Invalid username or password" });
+    }
+
+    const authenticatedUser = toAuthenticatedUser(user);
+    await new Promise<void>((resolve, reject) => {
+      req.session.regenerate((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    req.session.user = authenticatedUser;
+    await new Promise<void>((resolve, reject) => {
+      req.session.save((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+
+    return res.json({ user: toPublicUser(authenticatedUser) });
+  });
+
+  app.post("/api/auth/logout", requireAuth, async (req, res) => {
+    await new Promise<void>((resolve, reject) => {
+      req.session.destroy((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    res.clearCookie("school_suite.sid");
+    return res.status(204).send();
+  });
+
+  app.get("/api/auth/me", requireAuth, (req, res) => {
+    return res.json({ user: toPublicUser(currentUser(req)) });
+  });
+
+  // === Academic sessions ===
+  app.get(api.sessions.active.path, requireAuth, async (req, res) => {
+    res.json(await dataStore.getActiveSession(currentUser(req).schoolId) ?? null);
+  });
 
   // === Schools ===
-  app.get(api.schools.get.path, async (req, res) => {
-    const id = parseInt(req.params.id);
-    const school = await storage.getSchool(id);
+  app.get(api.schools.get.path, requireAuth, async (req, res) => {
+    const id = routeId(req.params.id);
+    const user = currentUser(req);
+    if (id !== user.schoolId) return res.status(404).json({ message: "School not found" });
+    const school = await dataStore.getSchool(user.schoolId);
     if (!school) return res.status(404).json({ message: "School not found" });
     res.json(school);
   });
 
-  app.put(api.schools.update.path, async (req, res) => {
-    const id = parseInt(req.params.id);
+  app.put(api.schools.update.path, requireRole("admin"), async (req, res) => {
+    const id = routeId(req.params.id);
+    const user = currentUser(req);
+    if (id !== user.schoolId) return res.status(404).json({ message: "School not found" });
     const input = api.schools.update.input.parse(req.body);
-    const updated = await storage.updateSchool(id, input);
+    const updated = await dataStore.updateSchool(user.schoolId, input);
     res.json(updated);
   });
 
   // === Students ===
-  app.get(api.students.list.path, async (req, res) => {
-    // Hardcoded schoolId for MVP (assuming single tenant per deployment or session based)
-    // In a real app, this comes from req.user.schoolId
-    const schoolId = 1; 
+  app.get(api.students.list.path, requireAuth, async (req, res) => {
+    const user = currentUser(req);
     const filters = {
-      class: req.query.class as string,
-      section: req.query.section as string,
-      search: req.query.search as string,
+      class: typeof req.query.class === "string" ? req.query.class : undefined,
+      section: typeof req.query.section === "string" ? req.query.section : undefined,
+      search: typeof req.query.search === "string" ? req.query.search : undefined,
     };
-    const students = await storage.getStudents(schoolId, filters);
-    res.json(students);
+    const activeSession = await dataStore.getActiveSession(user.schoolId);
+    const students = activeSession
+      ? await dataStore.getStudents(user.schoolId, filters, activeSession.id)
+      : [];
+    res.json(students.map(safeStudent));
   });
 
-  app.post(api.students.create.path, async (req, res) => {
+  app.post(api.students.create.path, requireRole("admin", "staff", "teacher"), async (req, res) => {
     const input = api.students.create.input.parse(req.body);
-    const student = await storage.createStudent(input);
-    res.status(201).json(student);
+    const user = currentUser(req);
+    const activeSession = await dataStore.getActiveSession(user.schoolId);
+    if (!activeSession) return res.status(409).json({ message: "No active academic session" });
+    const admissionNo = input.admissionNo?.trim() || `ADM-${new Date().getFullYear()}-${Date.now()}`;
+    const student = await dataStore.createStudent({ ...input, admissionNo, schoolId: user.schoolId, sessionId: activeSession.id });
+    res.status(201).json(safeStudent(student));
   });
 
-  app.get(api.students.get.path, async (req, res) => {
-    const id = parseInt(req.params.id);
-    const student = await storage.getStudent(id);
+  app.get(api.students.get.path, requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const student = await dataStore.getStudent(routeId(req.params.id), user.schoolId);
     if (!student) return res.status(404).json({ message: "Student not found" });
-    res.json(student);
+    res.json(safeStudent(student));
   });
 
-  app.put(api.students.update.path, async (req, res) => {
-    const id = parseInt(req.params.id);
+  app.put(api.students.update.path, requireRole("admin", "staff", "teacher"), async (req, res) => {
     const input = api.students.update.input.parse(req.body);
-    const updated = await storage.updateStudent(id, input);
-    res.json(updated);
+    const user = currentUser(req);
+    const updated = await dataStore.updateStudent(routeId(req.params.id), user.schoolId, input);
+    if (!updated) return res.status(404).json({ message: "Student not found" });
+    res.json(safeStudent(updated));
   });
 
-  app.post(api.students.promote.path, async (req, res) => {
-    const { studentIds, targetClass } = req.body;
-    await storage.promoteStudents(studentIds, targetClass);
+  app.post(api.students.deactivate.path, requireRole("admin", "staff"), async (req, res) => {
+    const updated = await dataStore.deactivateStudent(routeId(req.params.id), currentUser(req).schoolId);
+    if (!updated) return res.status(404).json({ message: "Student not found" });
+    res.json(safeStudent(updated));
+  });
+
+  app.post(api.students.promote.path, requireRole("admin"), async (req, res) => {
+    const input = api.students.promote.input.parse(req.body);
+    const user = currentUser(req);
+    await dataStore.promoteStudents(input.studentIds, user.schoolId, input.targetClass);
     res.json({ message: "Students promoted successfully" });
   });
 
   // === Fees ===
-  app.get(api.fees.structures.list.path, async (req, res) => {
-    const schoolId = 1;
-    const structures = await storage.getFeeStructures(schoolId);
+  app.get(api.fees.structures.list.path, requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const activeSession = await dataStore.getActiveSession(user.schoolId);
+    const structures = activeSession
+      ? await dataStore.getFeeStructures(user.schoolId, activeSession.id)
+      : [];
     res.json(structures);
   });
 
-  app.post(api.fees.structures.create.path, async (req, res) => {
+  app.post(api.fees.structures.create.path, requireRole("admin", "accountant"), async (req, res) => {
     const input = api.fees.structures.create.input.parse(req.body);
-    const structure = await storage.createFeeStructure(input);
+    const user = currentUser(req);
+    const activeSession = await dataStore.getActiveSession(user.schoolId);
+    if (!activeSession) return res.status(409).json({ message: "No active academic session" });
+    const structure = await dataStore.createFeeStructure({
+      ...input,
+      schoolId: user.schoolId,
+      sessionId: activeSession.id,
+    });
     res.status(201).json(structure);
   });
 
-  app.get(api.fees.payments.list.path, async (req, res) => {
-    const schoolId = 1;
-    const studentId = req.query.studentId ? parseInt(req.query.studentId as string) : undefined;
-    const payments = await storage.getFeePayments(schoolId, studentId);
+  app.put(api.fees.structures.update.path, requireRole("admin", "accountant"), async (req, res) => {
+    const input = api.fees.structures.update.input.parse(req.body);
+    const updated = await dataStore.updateFeeStructure(routeId(req.params.id), currentUser(req).schoolId, input);
+    if (!updated) return res.status(404).json({ message: "Fee structure not found" });
+    res.json(updated);
+  });
+
+  app.delete(api.fees.structures.delete.path, requireRole("admin", "accountant"), async (req, res) => {
+    const deleted = await dataStore.deleteFeeStructure(routeId(req.params.id), currentUser(req).schoolId);
+    if (!deleted) return res.status(409).json({ message: "Fee structure not found or already used by fee records" });
+    res.status(204).send();
+  });
+
+  app.get(api.fees.payments.list.path, requireRole("admin", "accountant", "staff"), async (req, res) => {
+    const user = currentUser(req);
+    const studentId = req.query.studentId === undefined
+      ? undefined
+      : idSchema.parse(req.query.studentId);
+    const activeSession = await dataStore.getActiveSession(user.schoolId);
+    const requestedSession = req.query.sessionId === undefined ? activeSession?.id : idSchema.parse(req.query.sessionId);
+    const payments = requestedSession === undefined ? [] : await dataStore.getFeePayments(user.schoolId, studentId, requestedSession);
     res.json(payments);
   });
 
-  app.post(api.fees.payments.create.path, async (req, res) => {
+  app.post(api.fees.payments.create.path, requireRole("admin", "accountant"), async (req, res) => {
     const input = api.fees.payments.create.input.parse(req.body);
-    const payment = await storage.createFeePayment(input);
+    const user = currentUser(req);
+    const activeSession = await dataStore.getActiveSession(user.schoolId);
+    if (!activeSession) return res.status(409).json({ message: "No active academic session" });
+    const payment = await dataStore.createFeePaymentForSchool({
+      ...input,
+      schoolId: user.schoolId,
+      sessionId: activeSession.id,
+    }, user.schoolId);
+    if (!payment) return res.status(404).json({ message: "Student not found" });
     res.status(201).json(payment);
   });
 
-  app.get(api.fees.payments.defaulters.path, async (req, res) => {
-    const schoolId = 1;
-    const classStr = req.query.class as string;
-    const month = req.query.month as string;
-    const defaulters = await storage.getDefaulters(schoolId, classStr, month);
+  app.get(api.fees.payments.defaulters.path, requireRole("admin", "accountant", "staff"), async (req, res) => {
+    const classStr = typeof req.query.class === "string" ? req.query.class : undefined;
+    const month = z.string().min(1).parse(req.query.month);
+    const year = req.query.year === undefined ? undefined : z.coerce.number().int().min(1900).max(2200).parse(req.query.year);
+    const defaulters = await dataStore.getDefaulters(currentUser(req).schoolId, classStr, month, year);
     res.json(defaulters);
   });
 
   // === Staff ===
-  app.get(api.staff.list.path, async (req, res) => {
-    const schoolId = 1;
-    const staffMembers = await storage.getStaff(schoolId);
+  app.get(api.staff.list.path, requireRole("admin"), async (req, res) => {
+    const staffMembers = await dataStore.getStaff(currentUser(req).schoolId);
     res.json(staffMembers);
   });
 
-  app.post(api.staff.create.path, async (req, res) => {
+  app.post(api.staff.create.path, requireRole("admin"), async (req, res) => {
     const input = api.staff.create.input.parse(req.body);
-    const staffMember = await storage.createStaff(input);
+    const staffMember = await dataStore.createStaff({
+      ...input,
+      schoolId: currentUser(req).schoolId,
+    });
     res.status(201).json(staffMember);
   });
 
-  // Seed Data function
-  await seedDatabase();
+  app.put(api.staff.update.path, requireRole("admin"), async (req, res) => {
+    const input = api.staff.update.input.parse(req.body);
+    const updated = await dataStore.updateStaff(routeId(req.params.id), currentUser(req).schoolId, input);
+    if (!updated) return res.status(404).json({ message: "Staff member not found" });
+    res.json(updated);
+  });
 
   return httpServer;
-}
-
-async function seedDatabase() {
-  const school = await storage.getSchool(1);
-  if (!school) {
-    console.log("Seeding database...");
-    await storage.createSchool({
-      name: "St. Xavier's Public School",
-      address: "123, MG Road, New Delhi",
-      contact: "9876543210",
-      logo: "https://placehold.co/100x100?text=Logo",
-    });
-
-    await storage.createUser({
-      username: "admin",
-      password: "password123", // In real app, hash this!
-      role: "admin",
-      name: "Principal",
-      schoolId: 1,
-    });
-
-    // Fee Structure
-    await storage.createFeeStructure({
-      class: "10",
-      monthlyFee: 1500,
-      admissionFee: 5000,
-      schoolId: 1,
-    });
-
-    // Students
-    const student = await storage.createStudent({
-      admissionNo: "A001",
-      name: "Rohan Kumar",
-      fatherName: "Suresh Kumar",
-      class: "10",
-      section: "A",
-      rollNo: "1",
-      contact: "9988776655",
-      address: "Sector 4, Delhi",
-      schoolId: 1,
-    });
-
-    // Payments
-    await storage.createFeePayment({
-      studentId: student.id,
-      amount: 1500,
-      month: "January",
-      year: 2024,
-      receiptNo: "REC001",
-      remarks: "Cash",
-      schoolId: 1,
-    });
-
-    console.log("Seeding complete.");
-  }
 }

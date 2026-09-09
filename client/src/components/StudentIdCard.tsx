@@ -4,9 +4,10 @@ import { format } from "date-fns";
 interface StudentIdCardProps {
   student: Student;
   school: School;
+  sessionName?: string;
 }
 
-export function StudentIdCard({ student, school }: StudentIdCardProps) {
+export function StudentIdCard({ student, school, sessionName }: StudentIdCardProps) {
   return (
     <div className="w-[350px] h-[520px] bg-white border border-gray-200 rounded-xl overflow-hidden shadow-lg relative print:shadow-none print:border-black print:w-[3.375in] print:h-[2.125in] print:rotate-90">
       {/* Header Pattern */}
@@ -62,7 +63,7 @@ export function StudentIdCard({ student, school }: StudentIdCardProps) {
 
         {/* Footer Bar */}
         <div className="absolute bottom-0 w-full bg-slate-900 h-12 flex items-center justify-center">
-          <p className="text-white/80 text-xs font-mono tracking-widest uppercase">Valid for 2024-25</p>
+          <p className="text-white/80 text-xs font-mono tracking-widest uppercase">{sessionName || "Current academic session"}</p>
         </div>
       </div>
     </div>

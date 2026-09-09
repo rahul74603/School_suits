@@ -1,271 +1,36 @@
 import { useState } from "react";
-import { useFeeStructures, usePayments, useCollectFee, useDefaulters } from "@/hooks/use-fees";
 import { Sidebar } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Search, IndianRupee, FileWarning, CheckCircle2 } from "lucide-react";
+import { useFeeStructures, usePayments, useCollectFee, useDefaulters, useCreateFeeStructure } from "@/hooks/use-fees";
+import { useActiveSession } from "@/hooks/use-core";
+import { useUpdateFeeStructure, useDeleteFeeStructure } from "@/hooks/use-fees-admin";
+import { QueryError } from "@/components/QueryState";
 import { format } from "date-fns";
-import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { insertFeePaymentSchema } from "@shared/schema";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { useQueryClient } from "@tanstack/react-query";
+import { insertFeePaymentSchema, insertFeeStructureSchema } from "@shared/schema";
+import { z } from "zod";
 
 export default function Fees() {
-  const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState("collect");
-  const { data: structures } = useFeeStructures();
-  const { data: payments } = usePayments();
-  const { data: defaulters } = useDefaulters({ month: format(new Date(), 'MMMM') });
-  
-  const collectFee = useCollectFee();
-
-  const form = useForm({
-    resolver: zodResolver(insertFeePaymentSchema),
-    defaultValues: {
-      studentId: 0,
-      amount: 0,
-      month: format(new Date(), 'MMMM'),
-      year: new Date().getFullYear(),
-      receiptNo: `REC-${Date.now()}`,
-      remarks: "",
-      schoolId: 1
-    }
-  });
-
-  const onSubmit = (data: z.infer<typeof insertFeePaymentSchema>) => {
-    collectFee.mutate(data, {
-      onSuccess: () => {
-        toast({
-          title: "Payment Recorded",
-          description: `Receipt ${data.receiptNo} generated successfully.`,
-        });
-        form.reset({
-          studentId: 0,
-          amount: 0,
-          month: format(new Date(), 'MMMM'),
-          year: new Date().getFullYear(),
-          receiptNo: `REC-${Date.now()}`,
-          remarks: "",
-          schoolId: 1
-        });
-      },
-      onError: () => {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to record payment. Please try again.",
-        });
-      }
-    });
+  const { toast } = useToast(); const session = useActiveSession(); const structures = useFeeStructures(); const payments = usePayments({ sessionId: session.data?.id ? String(session.data.id) : undefined }); const month = format(new Date(), "MMMM"); const defaulters = useDefaulters({ month, year: new Date().getFullYear() }); const collect = useCollectFee(); const createStructure = useCreateFeeStructure();
+  const paymentForm = useForm({ resolver: zodResolver(insertFeePaymentSchema), defaultValues: { studentId: 0, amount: 0, month, year: new Date().getFullYear(), receiptNo: `REC-${Date.now()}`, remarks: "" } });
+  const structureForm = useForm({ resolver: zodResolver(insertFeeStructureSchema), defaultValues: { class: "1", monthlyFee: 0, admissionFee: 0, examFee: 0, otherFee: 0 } });
+  const [tab, setTab] = useState("collect"); const [editingStructure, setEditingStructure] = useState<number | null>(null); const updateStructure = useUpdateFeeStructure(); const deleteStructure = useDeleteFeeStructure();
+  const submitPayment = (data: z.infer<typeof insertFeePaymentSchema>) => collect.mutate(data, { onSuccess: () => { toast({ title: "Payment recorded" }); paymentForm.reset({ ...paymentForm.getValues(), studentId: 0, amount: 0, receiptNo: `REC-${Date.now()}` }); }, onError: (error) => toast({ variant: "destructive", title: "Payment failed", description: error.message }) });
+  const submitStructure = (data: z.infer<typeof insertFeeStructureSchema>) => {
+    const options = { onSuccess: () => { toast({ title: editingStructure ? "Fee structure updated" : "Fee structure created" }); structureForm.reset(); setEditingStructure(null); }, onError: (error: Error) => toast({ variant: "destructive", title: "Fee structure failed", description: error.message }) };
+    if (editingStructure) updateStructure.mutate({ id: editingStructure, ...data }, options); else createStructure.mutate(data, options);
   };
-
-  return (
-    <div className="flex min-h-screen bg-slate-50">
-      <Sidebar />
-      <main className="flex-1 ml-64 p-8">
-        <header className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900">Fees Management</h1>
-          <p className="text-slate-500 mt-1">Collect fees, manage structures, and track defaulters</p>
-        </header>
-
-        <Tabs defaultValue="collect" className="space-y-6" onValueChange={setActiveTab}>
-          <TabsList className="bg-white p-1 rounded-xl border border-border shadow-sm">
-            <TabsTrigger value="collect" className="rounded-lg px-6 data-[state=active]:bg-primary data-[state=active]:text-white">Collect Fee</TabsTrigger>
-            <TabsTrigger value="history" className="rounded-lg px-6 data-[state=active]:bg-primary data-[state=active]:text-white">Payment History</TabsTrigger>
-            <TabsTrigger value="defaulters" className="rounded-lg px-6 data-[state=active]:bg-primary data-[state=active]:text-white">Defaulters</TabsTrigger>
-            <TabsTrigger value="structure" className="rounded-lg px-6 data-[state=active]:bg-primary data-[state=active]:text-white">Fee Structure</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="collect">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              <Card>
-                <CardHeader>
-                  <CardTitle>New Fee Collection</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Form {...form}>
-                    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                      <FormField
-                        control={form.control}
-                        name="studentId"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Student ID</FormLabel>
-                            <FormControl>
-                              <Input 
-                                placeholder="Enter Student ID" 
-                                type="number" 
-                                {...field}
-                                onChange={e => field.onChange(parseInt(e.target.value))}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <FormField
-                          control={form.control}
-                          name="month"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Month</FormLabel>
-                              <FormControl>
-                                <select 
-                                  className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-                                  {...field}
-                                >
-                                  {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'].map(m => (
-                                    <option key={m} value={m}>{m}</option>
-                                  ))}
-                                </select>
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="year"
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormLabel>Year</FormLabel>
-                              <FormControl>
-                                <Input type="number" {...field} onChange={e => field.onChange(parseInt(e.target.value))} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      </div>
-
-                      <FormField
-                        control={form.control}
-                        name="amount"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Amount (₹)</FormLabel>
-                            <FormControl>
-                              <div className="relative">
-                                <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                                <Input 
-                                  className="pl-9 text-lg font-bold" 
-                                  type="number" 
-                                  {...field}
-                                  onChange={e => field.onChange(parseInt(e.target.value))}
-                                />
-                              </div>
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <FormField
-                        control={form.control}
-                        name="remarks"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Remarks (Optional)</FormLabel>
-                            <FormControl>
-                              <Input placeholder="Cheque No / UPI ID" {...field} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <Button 
-                        type="submit" 
-                        className="w-full py-6 text-lg font-semibold bg-green-600 hover:bg-green-700 shadow-lg shadow-green-600/20"
-                        disabled={collectFee.isPending}
-                      >
-                        {collectFee.isPending ? "Processing..." : "Collect Payment"}
-                      </Button>
-                    </form>
-                  </Form>
-                </CardContent>
-              </Card>
-
-              {/* Recent Transaction Preview or Student Details could go here */}
-              <Card className="bg-blue-50 border-blue-100">
-                <CardHeader>
-                  <CardTitle className="text-blue-800">Student Info</CardTitle>
-                </CardHeader>
-                <CardContent className="text-blue-900">
-                  <p className="text-sm opacity-70 mb-4">Enter a Student ID to see details and pending dues here.</p>
-                  <div className="p-4 bg-white/50 rounded-lg border border-blue-200">
-                    <div className="flex items-center text-sm font-medium mb-2">
-                      <CheckCircle2 className="w-4 h-4 mr-2 text-green-600" />
-                      No pending dues found
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="defaulters">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle className="flex items-center text-red-600">
-                  <FileWarning className="w-5 h-5 mr-2" />
-                  Fee Defaulters - {format(new Date(), 'MMMM')}
-                </CardTitle>
-                <Button variant="outline" size="sm">Download Report</Button>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Student Name</TableHead>
-                      <TableHead>Class</TableHead>
-                      <TableHead>Pending Amount</TableHead>
-                      <TableHead>Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {defaulters?.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                          Great! No defaulters for this month.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      defaulters?.map((defaulter: any) => (
-                        <TableRow key={defaulter.studentId}>
-                          <TableCell className="font-medium">{defaulter.name}</TableCell>
-                          <TableCell>Class {defaulter.class}</TableCell>
-                          <TableCell className="text-red-600 font-bold">₹{defaulter.amountPending}</TableCell>
-                          <TableCell>
-                            <Button size="sm" variant="ghost" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50">
-                              Send Reminder
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
-      </main>
-    </div>
-  );
+  const error = [structures, payments, defaulters, session].find((q) => q.isError);
+  return <div className="flex min-h-screen bg-slate-50"><Sidebar /><main className="flex-1 ml-64 p-8"><h1 className="text-3xl font-bold">Fees Management</h1><p className="text-slate-500 mt-1 mb-8">Active session: {session.data?.name || "not available"}</p>{error && <QueryError message={error.error instanceof Error ? error.error.message : "Unable to load fee data."} onRetry={() => error.refetch()} />}<Tabs value={tab} onValueChange={setTab} className="mt-6 space-y-6"><TabsList><TabsTrigger value="collect">Collect Fee</TabsTrigger><TabsTrigger value="history">Payment History</TabsTrigger><TabsTrigger value="defaulters">Defaulters</TabsTrigger><TabsTrigger value="structure">Fee Structure</TabsTrigger></TabsList>
+    <TabsContent value="collect"><Card><CardHeader><CardTitle>New fee collection</CardTitle></CardHeader><CardContent><form className="max-w-xl space-y-4" onSubmit={paymentForm.handleSubmit(submitPayment)}>{(["studentId","amount","year","receiptNo","remarks"] as const).map((field) => <label key={field} className="block text-sm font-medium">{field}<Input className="mt-1" type={field === "studentId" || field === "amount" || field === "year" ? "number" : "text"} {...paymentForm.register(field, { valueAsNumber: ["studentId","amount","year"].includes(field) })} /></label>)}<label className="block text-sm font-medium">Month<select className="mt-1 w-full border rounded-md p-2" {...paymentForm.register("month")}>{["January","February","March","April","May","June","July","August","September","October","November","December"].map((value) => <option key={value}>{value}</option>)}</select></label><Button disabled={collect.isPending}>{collect.isPending ? "Processing..." : "Collect Payment"}</Button></form></CardContent></Card></TabsContent>
+    <TabsContent value="history"><Card><CardHeader><CardTitle>Payment history</CardTitle></CardHeader><CardContent>{payments.isLoading ? <p>Loading payments...</p> : payments.data?.length ? <Table><TableHeader><TableRow><TableHead>Receipt</TableHead><TableHead>Student ID</TableHead><TableHead>Amount</TableHead><TableHead>Month/year</TableHead><TableHead>Date</TableHead><TableHead>Remarks</TableHead></TableRow></TableHeader><TableBody>{payments.data.map((p) => <TableRow key={p.id}><TableCell>{p.receiptNo}</TableCell><TableCell>{p.studentId}</TableCell><TableCell>₹{p.amount.toLocaleString()}</TableCell><TableCell>{p.month || "—"}/{p.year}</TableCell><TableCell>{new Date(p.paymentDate).toLocaleDateString()}</TableCell><TableCell>{p.remarks || "—"}</TableCell></TableRow>)}</TableBody></Table> : <p>No payments in the active session.</p>}</CardContent></Card></TabsContent>
+    <TabsContent value="defaulters"><Card><CardHeader><CardTitle>Defaulters for {month}</CardTitle></CardHeader><CardContent>{defaulters.isLoading ? <p>Loading defaulters...</p> : defaulters.data?.length ? <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Paid</TableHead><TableHead>Outstanding</TableHead></TableRow></TableHeader><TableBody>{defaulters.data.map((d) => <TableRow key={d.studentId}><TableCell>{d.name}</TableCell><TableCell>{d.class}-{d.section}</TableCell><TableCell>₹{d.amountPaid}</TableCell><TableCell className="text-red-600 font-bold">₹{d.amountPending}</TableCell></TableRow>)}</TableBody></Table> : <p>No students with outstanding monthly fees.</p>}</CardContent></Card></TabsContent>
+    <TabsContent value="structure"><Card><CardHeader><CardTitle>Fee structures</CardTitle></CardHeader><CardContent><form className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6" onSubmit={structureForm.handleSubmit(submitStructure)}>{(["class","monthlyFee","admissionFee","examFee","otherFee"] as const).map((field) => <label key={field} className="text-sm">{field}<Input type={field === "class" ? "text" : "number"} {...structureForm.register(field, { valueAsNumber: field !== "class" })} /></label>)}<div className="col-span-2 md:col-span-1 flex gap-2"><Button type="submit">{editingStructure ? "Save" : "Add"}</Button>{editingStructure && <Button type="button" variant="outline" onClick={() => { setEditingStructure(null); structureForm.reset(); }}>Cancel</Button>}</div></form>{structures.isLoading ? <p>Loading structures...</p> : structures.data?.length ? <Table><TableHeader><TableRow><TableHead>Class</TableHead><TableHead>Monthly</TableHead><TableHead>Admission</TableHead><TableHead>Exam</TableHead><TableHead>Other</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader><TableBody>{structures.data.map((s) => <TableRow key={s.id}><TableCell>{s.class}</TableCell><TableCell>₹{s.monthlyFee}</TableCell><TableCell>₹{s.admissionFee}</TableCell><TableCell>₹{s.examFee}</TableCell><TableCell>₹{s.otherFee}</TableCell><TableCell className="flex gap-2"><Button size="sm" variant="outline" onClick={() => { setEditingStructure(s.id); structureForm.reset({ class: s.class, monthlyFee: s.monthlyFee, admissionFee: s.admissionFee, examFee: s.examFee, otherFee: s.otherFee }); }}>Edit</Button><Button size="sm" variant="destructive" disabled={deleteStructure.isPending} onClick={() => { if (window.confirm("Delete this unused fee structure?")) deleteStructure.mutate(s.id, { onError: (error) => toast({ variant: "destructive", title: "Cannot delete structure", description: error.message }) }); }}>Delete</Button></TableCell></TableRow>)}</TableBody></Table> : <p>No fee structures in the active session.</p>}</CardContent></Card></TabsContent>
+  </Tabs></main></div>;
 }

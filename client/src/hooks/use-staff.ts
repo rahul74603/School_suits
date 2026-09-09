@@ -13,6 +13,18 @@ export function useStaff() {
   });
 }
 
+export function useUpdateStaff() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...data }: { id: number } & Partial<InsertStaff>) => {
+      const response = await fetch(`/api/staff/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(data) });
+      if (!response.ok) throw new Error(response.status === 403 ? "You are not allowed to edit staff" : "Failed to update staff");
+      return api.staff.update.responses[200].parse(await response.json());
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.staff.list.path] }),
+  });
+}
+
 export function useCreateStaff() {
   const queryClient = useQueryClient();
   return useMutation({

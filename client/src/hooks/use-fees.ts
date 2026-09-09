@@ -32,15 +32,15 @@ export function useCreateFeeStructure() {
   });
 }
 
-export function usePayments(params?: { studentId?: string }) {
+export function usePayments(params?: { studentId?: string; sessionId?: string }) {
   return useQuery({
     queryKey: [api.fees.payments.list.path, params],
     queryFn: async () => {
       const url = buildUrl(api.fees.payments.list.path);
       const searchParams = new URLSearchParams();
       if (params?.studentId) searchParams.append("studentId", params.studentId);
-      
-      const fullUrl = params?.studentId ? `${url}?${searchParams.toString()}` : url;
+      if (params?.sessionId) searchParams.append("sessionId", params.sessionId);
+      const fullUrl = searchParams.toString() ? `${url}?${searchParams.toString()}` : url;
       const res = await fetch(fullUrl, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch payments");
       return api.fees.payments.list.responses[200].parse(await res.json());
@@ -68,7 +68,7 @@ export function useCollectFee() {
   });
 }
 
-export function useDefaulters(params?: { class?: string; month: string }) {
+export function useDefaulters(params?: { class?: string; month: string; year?: number }) {
   return useQuery({
     queryKey: [api.fees.payments.defaulters.path, params],
     queryFn: async () => {
@@ -77,7 +77,7 @@ export function useDefaulters(params?: { class?: string; month: string }) {
       const searchParams = new URLSearchParams();
       if (params.class) searchParams.append("class", params.class);
       searchParams.append("month", params.month);
-      
+      if (params.year) searchParams.append("year", String(params.year));
       const fullUrl = `${url}?${searchParams.toString()}`;
       const res = await fetch(fullUrl, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch defaulters");

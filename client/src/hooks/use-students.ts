@@ -3,7 +3,7 @@ import { api, buildUrl } from "@shared/routes";
 import { type InsertStudent, type Student } from "@shared/schema";
 import { z } from "zod";
 
-export function useStudents(params?: { class?: string; search?: string }) {
+export function useStudents(params?: { class?: string; section?: string; search?: string }) {
   const queryKey = params ? [api.students.list.path, params] : [api.students.list.path];
   
   return useQuery({
@@ -12,6 +12,7 @@ export function useStudents(params?: { class?: string; search?: string }) {
       const url = buildUrl(api.students.list.path);
       const searchParams = new URLSearchParams();
       if (params?.class && params.class !== "all") searchParams.append("class", params.class);
+      if (params?.section && params.section !== "all") searchParams.append("section", params.section);
       if (params?.search) searchParams.append("search", params.search);
       
       const fullUrl = `${url}?${searchParams.toString()}`;
@@ -73,6 +74,18 @@ export function useUpdateStudent() {
       queryClient.invalidateQueries({ queryKey: [api.students.list.path] });
       queryClient.invalidateQueries({ queryKey: [api.students.get.path, variables.id] });
     },
+  });
+}
+
+export function useDeactivateStudent() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(buildUrl(api.students.deactivate.path, { id }), { method: api.students.deactivate.method, credentials: "include" });
+      if (!res.ok) throw new Error(res.status === 403 ? "You are not allowed to deactivate students" : "Failed to deactivate student");
+      return api.students.deactivate.responses[200].parse(await res.json());
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [api.students.list.path] }),
   });
 }
 

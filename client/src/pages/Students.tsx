@@ -23,27 +23,27 @@ import { useReactToPrint } from "react-to-print";
 import { useRef } from "react";
 import { StudentIdCard } from "@/components/StudentIdCard";
 import { type Student } from "@shared/schema";
+import { Link } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
+import { useSchool, useActiveSession } from "@/hooks/use-core";
+import { QueryError } from "@/components/QueryState";
 
 export default function Students() {
   const [search, setSearch] = useState("");
   const [selectedClass, setSelectedClass] = useState("all");
-  const { data: students, isLoading } = useStudents({ search, class: selectedClass });
+  const [selectedSection, setSelectedSection] = useState("all");
+  const { data: students, isLoading, isError, error, refetch } = useStudents({ search, class: selectedClass, section: selectedSection });
+  const auth = useAuth();
+  const schoolQuery = useSchool(auth.data?.schoolId);
+  const sessionQuery = useActiveSession();
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  
-  const printRef = useRef(null);
+
+  const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({
-    content: () => printRef.current,
+    contentRef: printRef,
   });
 
-  // Mock school data for ID card
-  const mockSchool = {
-    id: 1,
-    name: "Springfield International School",
-    address: "123 Education Lane, Knowledge City",
-    contact: "9876543210",
-    logo: null,
-    createdAt: null
-  };
+
 
   return (
     <div className="flex min-h-screen bg-slate-50">
@@ -83,6 +83,9 @@ export default function Students() {
             <option value="4">Class 4</option>
             <option value="5">Class 5</option>
           </select>
+          <select className="px-4 py-2 rounded-lg border border-input bg-background" value={selectedSection} onChange={(e) => setSelectedSection(e.target.value)}>
+            <option value="all">All Sections</option><option value="A">Section A</option><option value="B">Section B</option><option value="C">Section C</option>
+          </select>
         </div>
 
         {/* Table */}
@@ -99,7 +102,9 @@ export default function Students() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
+              {isError ? (
+                <TableRow><TableCell colSpan={6}><QueryError message={error instanceof Error ? error.message : "Unable to load students."} onRetry={() => refetch()} /></TableCell></TableRow>
+              ) : isLoading ? (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                     Loading students...
@@ -128,9 +133,10 @@ export default function Students() {
                     <TableCell className="text-right">
                       <Dialog>
                         <DialogTrigger asChild>
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
+                            <Link href={`/students/${student.id}`}><Button variant="ghost" size="sm">View</Button></Link>
+                            <Button
+                            variant="outline"
+                            size="sm"
                             onClick={() => setSelectedStudent(student)}
                             className="text-slate-600"
                           >
@@ -144,8 +150,8 @@ export default function Students() {
                           </DialogHeader>
                           <div className="flex flex-col items-center">
                             <div ref={printRef} className="my-4">
-                              {selectedStudent && (
-                                <StudentIdCard student={selectedStudent} school={mockSchool} />
+                              {selectedStudent && schoolQuery.data && (
+                                <StudentIdCard student={selectedStudent} school={schoolQuery.data} sessionName={sessionQuery.data?.name} />
                               )}
                             </div>
                             <Button onClick={handlePrint} className="w-full mt-4">
