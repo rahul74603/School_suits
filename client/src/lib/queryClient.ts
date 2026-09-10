@@ -7,14 +7,22 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+function csrfHeader(): string | undefined {
+  const value = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith("school_suite.csrf="));
+  return value ? decodeURIComponent(value.slice("school_suite.csrf=".length)) : undefined;
+}
+
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
+  const token = csrfHeader();
+  const headers: Record<string, string> = data ? { "Content-Type": "application/json" } : {};
+  if (token) headers["X-CSRF-Token"] = token;
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers,
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });

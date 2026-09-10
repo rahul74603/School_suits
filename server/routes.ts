@@ -14,6 +14,8 @@ import {
   toAuthenticatedUser,
   toPublicUser,
   verifyPassword,
+  hashPassword,
+  csrfProtection,
 } from "./auth";
 
 const idSchema = z.coerce.number().int().positive();
@@ -37,16 +39,26 @@ export async function registerRoutes(
   app: Express,
   dataStore: IStorage = storage,
 ): Promise<Server> {
+  const audit = async (input: { schoolId?: number | null; sessionId?: number | null; actorUserId?: number | null; actorRole?: string | null; action: string; targetType?: string | null; targetId?: number | null; metadata?: Record<string, unknown> }) => { if (typeof (dataStore as any).createAuditEvent !== "function") return; try { await (dataStore as any).createAuditEvent({ schoolId: input.schoolId ?? null, sessionId: input.sessionId ?? null, actorUserId: input.actorUserId ?? null, actorRole: input.actorRole ?? null, action: input.action, targetType: input.targetType ?? null, targetId: input.targetId ?? null, metadata: input.metadata ? JSON.stringify(input.metadata) : null }); } catch { /* audit failure must not break the protected business operation */ } };
+  app.use(csrfProtection);
+  app.use(async (req, res, next) => { const sessionUser = req.session.user; const getState = (dataStore as any).getUserAuthState; if (!sessionUser || typeof getState !== "function") return next(); try { const current = await getState(sessionUser.id); if (!current || !current.isActive || current.schoolId !== sessionUser.schoolId || current.role !== sessionUser.role || (sessionUser.authVersion !== undefined && current.authVersion !== sessionUser.authVersion)) { req.session.destroy(() => undefined); return res.status(401).json({ message: "Authentication required" }); } next(); } catch { return res.status(503).json({ message: "Authentication service unavailable" }); } });
+  app.use((req, res, next) => { const actor = req.session.user; if (actor && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method) && req.path !== "/api/auth/login") { const targetMatch = req.path.match(/\/(\d+)(?:\/|$)/); res.on("finish", () => { void audit({ schoolId: actor.schoolId, actorUserId: actor.id, actorRole: actor.role, action: `${req.method} ${req.path}`, targetType: req.path.split("/")[2] || null, targetId: targetMatch ? Number(targetMatch[1]) : null, metadata: { status: res.statusCode } }); }); } next(); });
+
   app.post("/api/auth/login", async (req, res) => {
     const { username, password } = credentialsSchema.parse(req.body);
     const user = await dataStore.getUserByUsername(username);
-
-    // Keep invalid username and invalid password responses identical.
-    if (!user || !user.schoolId || !(await verifyPassword(password, user.passwordHash))) {
+    const security = user && typeof (dataStore as any).getUserAuthState === "function" ? await (dataStore as any).getUserAuthState(user.id).catch(() => undefined) : undefined;
+    const locked = security?.lockedUntil && new Date(security.lockedUntil).getTime() > Date.now();
+    const validPassword = !!user && !!user.schoolId && await verifyPassword(password, user.passwordHash);
+    if (!user || !user.schoolId || security?.isActive === false || locked || !validPassword) {
+      if (user && !validPassword && typeof (dataStore as any).recordLoginFailure === "function") { const state = await (dataStore as any).recordLoginFailure(user.id).catch(() => undefined); if (state?.lockedUntil) void audit({ schoolId: user.schoolId, actorUserId: user.id, actorRole: user.role, action: "account.locked", targetType: "user", targetId: user.id }); }
+      if (user?.schoolId) void audit({ schoolId: user.schoolId, actorUserId: user.id, actorRole: user.role, action: "auth.login.failure", targetType: "user", targetId: user.id });
       return res.status(401).json({ message: "Invalid username or password" });
     }
+    if (typeof (dataStore as any).resetLoginFailures === "function") await (dataStore as any).resetLoginFailures(user.id).catch(() => undefined);
 
     const authenticatedUser = toAuthenticatedUser(user);
+    if (security?.authVersion !== undefined) authenticatedUser.authVersion = security.authVersion;
     await new Promise<void>((resolve, reject) => {
       req.session.regenerate((error) => {
         if (error) reject(error);
@@ -61,10 +73,12 @@ export async function registerRoutes(
       });
     });
 
+    void audit({ schoolId: user.schoolId, actorUserId: user.id, actorRole: user.role, action: "auth.login.success", targetType: "user", targetId: user.id });
     return res.json({ user: toPublicUser(authenticatedUser) });
   });
 
   app.post("/api/auth/logout", requireAuth, async (req, res) => {
+    const actor = currentUser(req); void audit({ schoolId: actor.schoolId, actorUserId: actor.id, actorRole: actor.role, action: "auth.logout", targetType: "user", targetId: actor.id });
     await new Promise<void>((resolve, reject) => {
       req.session.destroy((error) => {
         if (error) reject(error);
@@ -76,8 +90,25 @@ export async function registerRoutes(
   });
 
   app.get("/api/auth/me", requireAuth, (req, res) => {
-    return res.json({ user: toPublicUser(currentUser(req)) });
+    return res.json({ user: toPublicUser(currentUser(req)), csrfToken: req.session.csrfToken ?? null });
   });
+
+  app.post("/api/auth/change-password", requireAuth, async (req, res) => {
+    const input = z.object({ currentPassword: z.string().min(1).max(200), newPassword: z.string().min(12).max(200).regex(/[A-Z]/, "New password needs an uppercase letter").regex(/[a-z]/, "New password needs a lowercase letter").regex(/[0-9]/, "New password needs a number").regex(/[^A-Za-z0-9]/, "New password needs a symbol"), confirmPassword: z.string() }).refine((value) => value.newPassword === value.confirmPassword, { message: "Passwords do not match", path: ["confirmPassword"] }).parse(req.body);
+    const actor = currentUser(req); const user = await dataStore.getUser(actor.id); if (!user || !(await verifyPassword(input.currentPassword, user.passwordHash))) return res.status(400).json({ message: "Current password is incorrect" });
+    if (input.currentPassword === input.newPassword) return res.status(400).json({ message: "New password must be different" });
+    if (typeof (dataStore as any).updateUserPassword !== "function") return res.status(503).json({ message: "Password service unavailable" });
+    await (dataStore as any).updateUserPassword(actor.id, await hashPassword(input.newPassword));
+    void audit({ schoolId: actor.schoolId, actorUserId: actor.id, actorRole: actor.role, action: "auth.password.change", targetType: "user", targetId: actor.id });
+    const refreshed = typeof (dataStore as any).getUserAuthState === "function" ? await (dataStore as any).getUserAuthState(actor.id) : undefined;
+    await new Promise<void>((resolve, reject) => req.session.regenerate((error) => error ? reject(error) : resolve()));
+    req.session.user = { ...actor, authVersion: refreshed?.authVersion };
+    return res.json({ message: "Password changed successfully" });
+  });
+
+  // === Audit history and account security ===
+  app.get("/api/audit-events", requireRole("admin", "principal"), async (req,res) => { const user=currentUser(req); const limit=typeof req.query.limit === "string" ? Math.min(Number(req.query.limit),500) : 200; const events=typeof (dataStore as any).getAuditEvents === "function" ? await (dataStore as any).getAuditEvents(user.schoolId,limit) : []; res.json(events.map((event:any)=>({id:event.id,schoolId:event.schoolId,sessionId:event.sessionId,actorUserId:event.actorUserId,actorRole:event.actorRole,action:event.action,targetType:event.targetType,targetId:event.targetId,metadata:event.metadata,createdAt:event.createdAt}))); });
+  app.post("/api/school-users/:id/unlock", requireRole("admin"), async (req,res) => { const user=currentUser(req); const id=routeId(req.params.id); const unlocked=typeof (dataStore as any).unlockUser === "function" && await (dataStore as any).unlockUser(id,user.schoolId); if(!unlocked)return res.status(404).json({message:"User not found"}); void audit({schoolId:user.schoolId,actorUserId:user.id,actorRole:user.role,action:"account.unlock",targetType:"user",targetId:id}); res.json({message:"Account unlocked"}); });
 
   // === School management ===
   app.get("/api/school-users", requireRole("admin", "principal"), async (req, res) => {

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
 export interface AuthUser {
   id: number;
@@ -30,10 +31,7 @@ export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      const response = await fetch("/api/auth/logout", {
-        method: "POST",
-        credentials: "include",
-      });
+      const response = await apiRequest("POST", "/api/auth/logout");
       if (!response.ok && response.status !== 401) {
         throw new Error("Unable to log out");
       }

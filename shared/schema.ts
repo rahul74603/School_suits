@@ -570,6 +570,17 @@ export const backupRecords = pgTable("backup_records", {
   statusCheck: check("backup_records_status_check", sql`${table.status} IN ('pending', 'completed', 'failed', 'deleted')`),
 }));
 
+// === Security audit events ===
+export const auditEvents = pgTable("audit_events", {
+  id: serial("id").primaryKey(), schoolId: integer("school_id"), sessionId: integer("session_id"), actorUserId: integer("actor_user_id"), actorRole: text("actor_role"), action: text("action").notNull(), targetType: text("target_type"), targetId: integer("target_id"), metadata: text("metadata"), createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolCreatedIndex: index("audit_events_school_created_idx").on(table.schoolId, table.createdAt),
+  actorIndex: index("audit_events_actor_idx").on(table.actorUserId, table.createdAt),
+  actionIndex: index("audit_events_action_idx").on(table.schoolId, table.action, table.createdAt),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "audit_events_session_school_fk" }),
+  actorSchoolForeignKey: foreignKey({ columns: [table.actorUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "audit_events_actor_school_fk" }),
+}));
+
 // === Relations ===
 export const schoolsRelations = relations(schools, ({ many }) => ({
   users: many(users),
@@ -686,6 +697,7 @@ export const insertStudentUserLinkSchema = createInsertSchema(studentUserLinks).
 // === Types ===
 export type Document = typeof documents.$inferSelect;
 export type BackupRecord = typeof backupRecords.$inferSelect;
+export type AuditEvent = typeof auditEvents.$inferSelect;
 export type SchoolClass = typeof schoolClasses.$inferSelect;
 export type SchoolSection = typeof schoolSections.$inferSelect;
 export type School = typeof schools.$inferSelect;

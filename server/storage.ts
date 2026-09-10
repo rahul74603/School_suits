@@ -1,7 +1,7 @@
 
 import { 
-  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, studentDues, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
-  type User, type InsertUser, type School, type InsertSchool, type Document, type BackupRecord, type StudentDue,
+  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, studentDues, auditEvents, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
+  type User, type InsertUser, type School, type InsertSchool, type Document, type BackupRecord, type StudentDue, type AuditEvent,
   type AcademicSession, type InsertAcademicSession, type SchoolClass, type SchoolSection, type InsertClass, type InsertSection, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
   type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
@@ -15,6 +15,13 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUsersBySchool(schoolId: number): Promise<User[]>;
+  createAuditEvent(input: Omit<AuditEvent, "id" | "createdAt">): Promise<AuditEvent>;
+  getAuditEvents(schoolId: number, limit?: number): Promise<AuditEvent[]>;
+  getUserAuthState(userId: number): Promise<{ id: number; username: string; role: string; name: string; schoolId: number; isActive: boolean; failedLoginAttempts: number; lockedUntil: Date | null; authVersion: number } | undefined>;
+  recordLoginFailure(userId: number): Promise<{ failedLoginAttempts: number; lockedUntil: Date | null }>;
+  resetLoginFailures(userId: number): Promise<void>;
+  updateUserPassword(userId: number, passwordHash: string): Promise<void>;
+  unlockUser(userId: number, schoolId: number): Promise<boolean>;
   getDocuments(schoolId: number, sessionId?: number): Promise<Document[]>;
   getBackups(schoolId: number): Promise<BackupRecord[]>;
   getBackup(id: number, schoolId: number): Promise<BackupRecord | undefined>;
@@ -196,6 +203,14 @@ export class DatabaseStorage implements IStorage {
       if (errors.length) throw new Error(JSON.stringify({ importErrors: errors })); return { created, errors };
     });
   }
+
+  async createAuditEvent(input: Omit<AuditEvent, "id" | "createdAt">): Promise<AuditEvent> { const [value] = await db.insert(auditEvents).values(input).returning(); return value; }
+  async getAuditEvents(schoolId: number, limit = 200): Promise<AuditEvent[]> { return db.select().from(auditEvents).where(eq(auditEvents.schoolId, schoolId)).orderBy(sql`${auditEvents.createdAt} DESC`).limit(Math.min(Math.max(limit, 1), 500)); }
+  async getUserAuthState(userId: number) { const result = await db.execute(sql`SELECT id, username, role, name, school_id AS "schoolId", is_active AS "isActive", failed_login_attempts AS "failedLoginAttempts", locked_until AS "lockedUntil", auth_version AS "authVersion" FROM users WHERE id = ${userId}`); return result.rows[0] as { id:number; username:string; role:string; name:string; schoolId:number; isActive:boolean; failedLoginAttempts:number; lockedUntil:Date|null; authVersion:number } | undefined; }
+  async recordLoginFailure(userId: number) { const result = await db.execute(sql`UPDATE users SET failed_login_attempts = failed_login_attempts + 1, locked_until = CASE WHEN failed_login_attempts + 1 >= 5 THEN now() + interval '15 minutes' ELSE locked_until END WHERE id = ${userId} RETURNING failed_login_attempts AS "failedLoginAttempts", locked_until AS "lockedUntil"`); return result.rows[0] as { failedLoginAttempts:number; lockedUntil:Date|null }; }
+  async resetLoginFailures(userId: number) { await db.execute(sql`UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ${userId}`); }
+  async updateUserPassword(userId: number, passwordHash: string) { await db.execute(sql`UPDATE users SET password_hash = ${passwordHash}, auth_version = auth_version + 1, failed_login_attempts = 0, locked_until = NULL WHERE id = ${userId}`); await db.execute(sql`DELETE FROM user_sessions WHERE sess->'user'->>'id' = ${String(userId)}`); }
+  async unlockUser(userId: number, schoolId: number) { const result=await db.execute(sql`UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ${userId} AND school_id = ${schoolId} RETURNING id`); return result.rows.length > 0; }
 
   async createUser(insertUser: InsertUser): Promise<User> {
     const [user] = await db.insert(users).values(insertUser).returning();

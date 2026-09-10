@@ -6,6 +6,7 @@ const runner = await readFile("script/migrate.ts", "utf8");
 const stepTwoMigration = await readFile("migrations/0003_multi_role_assignment_foundation.sql", "utf8");
 const attendanceMigration = await readFile("migrations/0004_attendance_foundation.sql", "utf8");
 const auditMigration = await readFile("migrations/0012_legacy_audit_reconciliation.sql", "utf8");
+const securityMigration = await readFile("migrations/0013_security_hardening.sql", "utf8");
 
 assert.match(migration, /CREATE TABLE IF NOT EXISTS academic_sessions/);
 assert.match(migration, /academic_sessions_one_active_per_school/);
@@ -34,5 +35,9 @@ assert.match(auditMigration, /birth_certificate_no/);
 assert.match(auditMigration, /staff_school_employee_id_unique/);
 assert.match(auditMigration, /CREATE TABLE IF NOT EXISTS "student_dues"/);
 assert.match(auditMigration, /student_dues_student_school_fk/);
+assert.match(securityMigration, /CREATE TABLE IF NOT EXISTS "audit_events"/);
+assert.match(securityMigration, /audit_events_actor_school_fk/);
+assert.match(securityMigration, /failed_login_attempts/);
+assert.match(securityMigration, /auth_version/);
 
 console.log("Database foundation migration tests passed.");
