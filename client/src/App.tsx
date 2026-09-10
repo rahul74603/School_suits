@@ -24,6 +24,9 @@ import StudentIdCards from "@/pages/StudentIdCards";
 import Payroll from "@/pages/Payroll";
 import Financial from "@/pages/Financial";
 import Settings from "@/pages/Settings";
+import Reports from "@/pages/Reports";
+import ImportExport from "@/pages/ImportExport";
+import Documents from "@/pages/Documents";
 
 function Router() {
   return (
@@ -42,7 +45,9 @@ function Router() {
       <Route path="/fees" component={Fees} />
       <Route path="/staff" component={Staff} />
       <Route path="/admissions" component={Admissions} />
-      <Route path="/reports"><ModulePlaceholder title="Reports" description="Reporting is not available yet. No fabricated financial or operational data is shown." /></Route>
+      <Route path="/reports" component={Reports} />
+      <Route path="/import-export" component={ImportExport} />
+      <Route path="/documents" component={Documents} />
       <Route path="/settings" component={Settings} />
       <Route component={NotFound} />
     </Switch>

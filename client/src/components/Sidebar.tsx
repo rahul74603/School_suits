@@ -26,7 +26,9 @@ const navigation = [
   { name: "Admissions", href: "/admissions", icon: UserPlus, roles: ["admin", "principal", "staff", "teacher"] },
   { name: "Fees & Payments", href: "/fees", icon: CreditCard, roles: ["admin", "principal", "accountant", "staff"] },
   { name: "Staff", href: "/staff", icon: School, roles: ["admin", "principal"] },
-  { name: "Reports", href: "/reports", icon: FileText, roles: ["admin", "principal", "accountant", "staff", "teacher"] },
+  { name: "Reports", href: "/reports", icon: FileText, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
+  { name: "Documents", href: "/documents", icon: FileText, roles: ["admin", "principal", "teacher", "staff", "student"] },
+  { name: "Import / Export", href: "/import-export", icon: FileText, roles: ["admin", "principal", "accountant"] },
   { name: "Settings", href: "/settings", icon: Settings, roles: ["admin", "principal"] },
 ];
 

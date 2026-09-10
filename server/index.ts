@@ -30,6 +30,8 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(express.text({ type: ["text/csv", "text/plain"], limit: "2mb" }));
+
 app.use(
   express.json({
     limit: "100kb",

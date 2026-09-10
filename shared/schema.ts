@@ -499,6 +499,29 @@ export const expenses = pgTable("expenses", {
   creatorSchoolForeignKey: foreignKey({ columns: [table.createdByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "expenses_creator_school_fk" }),
 }));
 
+// === Documents metadata (binary storage is intentionally abstracted) ===
+export const documents = pgTable("documents", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }),
+  ownerType: text("owner_type").notNull(),
+  ownerId: integer("owner_id"),
+  documentType: text("document_type").notNull(),
+  filename: text("filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  storageKey: text("storage_key").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  uploadedByUserId: integer("uploaded_by_user_id").notNull(),
+  uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolOwnerIndex: index("documents_school_owner_idx").on(table.schoolId, table.ownerType, table.ownerId),
+  sessionIndex: index("documents_school_session_idx").on(table.schoolId, table.sessionId),
+  ownerTypeCheck: check("documents_owner_type_check", sql`${table.ownerType} IN ('student', 'staff', 'school')`),
+  sizeCheck: check("documents_size_positive", sql`${table.sizeBytes} > 0 AND ${table.sizeBytes} <= 10485760`),
+  uploaderSchoolForeignKey: foreignKey({ columns: [table.uploadedByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "documents_uploader_school_fk" }),
+}));
+
 // === Relations ===
 export const schoolsRelations = relations(schools, ({ many }) => ({
   users: many(users),
@@ -613,6 +636,7 @@ export const insertTeacherClassAssignmentSchema = createInsertSchema(teacherClas
 export const insertStudentUserLinkSchema = createInsertSchema(studentUserLinks).omit({ id: true, schoolId: true, sessionId: true, createdAt: true });
 
 // === Types ===
+export type Document = typeof documents.$inferSelect;
 export type SchoolClass = typeof schoolClasses.$inferSelect;
 export type SchoolSection = typeof schoolSections.$inferSelect;
 export type School = typeof schools.$inferSelect;

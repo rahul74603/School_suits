@@ -1,7 +1,7 @@
 
 import { 
-  users, schools, academicSessions, schoolClasses, schoolSections, students, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
-  type User, type InsertUser, type School, type InsertSchool,
+  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
+  type User, type InsertUser, type School, type InsertSchool, type Document,
   type AcademicSession, type InsertAcademicSession, type SchoolClass, type SchoolSection, type InsertClass, type InsertSection, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
   type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
@@ -15,6 +15,11 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUsersBySchool(schoolId: number): Promise<User[]>;
+  getDocuments(schoolId: number, sessionId?: number): Promise<Document[]>;
+  createDocument(input: Omit<Document, "id" | "uploadedAt">): Promise<Document>;
+  deactivateDocument(id: number, schoolId: number): Promise<Document | undefined>;
+  importStudents(schoolId: number, sessionId: number, rows: Array<Record<string, unknown>>): Promise<{ created: Student[]; errors: Array<{ row: number; message: string }> }>;
+  importStaff(schoolId: number, rows: Array<Record<string, unknown>>): Promise<{ created: Staff[]; errors: Array<{ row: number; message: string }> }>;
   createUser(user: InsertUser): Promise<User>;
   getSchool(id: number): Promise<School | undefined>;
   createSchool(school: InsertSchool): Promise<School>;
@@ -134,6 +139,48 @@ export class DatabaseStorage implements IStorage {
 
   async getUsersBySchool(schoolId: number): Promise<User[]> {
     return db.select().from(users).where(eq(users.schoolId, schoolId));
+  }
+
+  async getDocuments(schoolId: number, sessionId?: number): Promise<Document[]> {
+    const conditions = [eq(documents.schoolId, schoolId), eq(documents.isActive, true)];
+    if (sessionId !== undefined) conditions.push(eq(documents.sessionId, sessionId));
+    return db.select().from(documents).where(and(...conditions));
+  }
+
+  async createDocument(input: Omit<Document, "id" | "uploadedAt">): Promise<Document> {
+    const [document] = await db.insert(documents).values(input).returning();
+    return document;
+  }
+
+  async deactivateDocument(id: number, schoolId: number): Promise<Document | undefined> {
+    const [document] = await db.update(documents).set({ isActive: false }).where(and(eq(documents.id, id), eq(documents.schoolId, schoolId))).returning();
+    return document;
+  }
+
+  async importStudents(schoolId: number, sessionId: number, rows: Array<Record<string, unknown>>) {
+    return db.transaction(async (tx) => {
+      const created: Student[] = []; const errors: Array<{ row: number; message: string }> = []; const admissions = new Set<string>();
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i]; const admissionNo = String(r.admissionNo ?? "").trim();
+        const name = String(r.name ?? "").trim(); const fatherName = String(r.fatherName ?? "").trim(); const className = String(r.class ?? "").trim(); const section = String(r.section ?? "").trim(); const contact = String(r.contact ?? "").trim();
+        if (!admissionNo || !name || !fatherName || !className || !section || !contact) { errors.push({ row: i + 2, message: "admissionNo, name, fatherName, class, section and contact are required" }); continue; }
+        if (admissions.has(admissionNo)) { errors.push({ row: i + 2, message: "duplicate admissionNo in import" }); continue; }
+        const existing = await tx.select({ id: students.id }).from(students).where(and(eq(students.schoolId, schoolId), eq(students.sessionId, sessionId), eq(students.admissionNo, admissionNo))).limit(1);
+        if (existing.length) { errors.push({ row: i + 2, message: "admissionNo already exists" }); continue; }
+        admissions.add(admissionNo);
+        const [student] = await tx.insert(students).values({ admissionNo, name, fatherName, motherName: r.motherName ? String(r.motherName) : null, class: className, section, rollNo: r.rollNo ? String(r.rollNo) : null, category: r.category ? String(r.category) : null, dob: r.dob ? String(r.dob) : null, contact, address: r.address ? String(r.address) : null, schoolId, sessionId }).returning(); created.push(student);
+      }
+      if (errors.length) throw new Error(JSON.stringify({ importErrors: errors }));
+      return { created, errors };
+    });
+  }
+
+  async importStaff(schoolId: number, rows: Array<Record<string, unknown>>) {
+    return db.transaction(async (tx) => {
+      const created: Staff[] = []; const errors: Array<{ row: number; message: string }> = [];
+      for (let i = 0; i < rows.length; i++) { const r = rows[i]; const name=String(r.name ?? "").trim(); const designation=String(r.designation ?? "").trim(); const contact=String(r.contact ?? "").trim(); const basicSalary=Number(r.basicSalary); if (!name || !designation || !contact || !Number.isInteger(basicSalary) || basicSalary < 0) { errors.push({row:i+2,message:"name, designation, contact and non-negative integer basicSalary are required"}); continue; } const [value]=await tx.insert(staff).values({name,designation,contact,basicSalary,joinDate:r.joinDate ? String(r.joinDate) : null,schoolId}).returning(); created.push(value); }
+      if (errors.length) throw new Error(JSON.stringify({ importErrors: errors })); return { created, errors };
+    });
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
