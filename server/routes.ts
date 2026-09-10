@@ -24,7 +24,7 @@ const credentialsSchema = z.object({
 
 function safeStudent(student: Awaited<ReturnType<typeof storage.getStudent>>) {
   if (!student) return student;
-  const { aadhaar: _aadhaar, ...safe } = student;
+  const { aadhaar: _aadhaar, photo: _photo, ...safe } = student;
   return safe;
 }
 
@@ -756,6 +756,11 @@ export async function registerRoutes(
     await dataStore.promoteStudents(input.studentIds, user.schoolId, input.targetClass);
     res.json({ message: "Students promoted successfully" });
   });
+
+  // === Student dues ===
+  app.get("/api/student-dues", requireRole("admin", "principal", "accountant", "staff", "student"), async (req,res)=>{const user=currentUser(req);const session=await dataStore.getActiveSession(user.schoolId);if(!session)return res.json([]);let studentId=typeof req.query.studentId === "string" ? idSchema.parse(req.query.studentId) : undefined;if(user.role === "student"){const own=await dataStore.getStudentForUser(user.id,user.schoolId,session.id);if(!own)return res.json([]);studentId=own.id;}res.json(await dataStore.getStudentDues(user.schoolId,session.id,studentId));});
+  app.post("/api/student-dues", requireRole("admin", "principal", "accountant", "staff"), async (req,res)=>{const input=z.object({studentId:z.number().int().positive(),description:z.string().trim().min(1).max(200),amount:z.number().int().positive(),dueDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/).nullable().optional()}).parse(req.body);const user=currentUser(req);const session=await dataStore.getActiveSession(user.schoolId);if(!session)return res.status(409).json({message:"No active session"});const student=await dataStore.getStudent(input.studentId,user.schoolId);if(!student||student.sessionId!==session.id)return res.status(404).json({message:"Student not found"});res.status(201).json(await dataStore.createStudentDue({...input,schoolId:user.schoolId,sessionId:session.id,status:"open",dueDate:input.dueDate??null}));});
+  app.patch("/api/student-dues/:id", requireRole("admin", "principal", "accountant", "staff"), async(req,res)=>{const input=z.object({status:z.enum(["open","settled","void"])}).parse(req.body);const session=await dataStore.getActiveSession(currentUser(req).schoolId);if(!session)return res.status(409).json({message:"No active session"});const value=await dataStore.updateStudentDue(routeId(req.params.id),currentUser(req).schoolId,session.id,input.status);if(!value)return res.status(404).json({message:"Due not found"});res.json(value);});
 
   // === Fees ===
   app.get(api.fees.structures.list.path, requireAuth, async (req, res) => {

@@ -105,11 +105,20 @@ export const students = pgTable("students", {
   section: text("section").notNull(),
   rollNo: text("roll_no"),
   aadhaar: text("aadhaar"),
+  birthCertificateNo: text("birth_certificate_no"),
+  previousSchoolName: text("previous_school_name"),
+  previousClass: text("previous_class"),
+  tcNumber: text("tc_number"),
+  tcIssueDate: date("tc_issue_date"),
+  tcSubmitted: boolean("tc_submitted").default(false).notNull(),
+  reportCardSubmitted: boolean("report_card_submitted").default(false).notNull(),
   category: text("category"),
   dob: date("dob"),
   contact: text("contact").notNull(),
   address: text("address"),
+  photo: text("photo"),
   isActive: boolean("is_active").default(true).notNull(),
+  isPromoted: boolean("is_promoted").default(false).notNull(),
   schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
   sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -384,14 +393,32 @@ export const feePayments = pgTable("fee_payments", {
   }),
 }));
 
+// === Student dues (obligations, not payments) ===
+export const studentDues = pgTable("student_dues", {
+  id: serial("id").primaryKey(), studentId: integer("student_id").notNull(), schoolId: integer("school_id").notNull(), sessionId: integer("session_id").notNull(), description: text("description").notNull(), amount: integer("amount").notNull(), dueDate: date("due_date"), status: text("status").notNull().default("open"), createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  studentSchoolForeignKey: foreignKey({ columns: [table.studentId, table.schoolId], foreignColumns: [students.id, students.schoolId], name: "student_dues_student_school_fk" }),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "student_dues_session_school_fk" }),
+  scopeIndex: index("student_dues_school_session_student_idx").on(table.schoolId, table.sessionId, table.studentId),
+  amountCheck: check("student_dues_amount_positive", sql`${table.amount} > 0`),
+  statusCheck: check("student_dues_status_check", sql`${table.status} IN ('open', 'settled', 'void')`),
+}));
+
 // === Staff/Teachers ===
 export const staff = pgTable("staff", {
   id: serial("id").primaryKey(),
+  employeeId: text("employee_id"),
   name: text("name").notNull(),
   designation: text("designation").notNull(),
+  qualification: text("qualification"),
+  email: text("email"),
+  department: text("department"),
+  address: text("address"),
   basicSalary: integer("basic_salary").notNull(),
+  advance: integer("advance").notNull().default(0),
   contact: text("contact").notNull(),
   joinDate: date("join_date"),
+  isActive: boolean("is_active").notNull().default(true),
   schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -667,6 +694,7 @@ export type User = typeof users.$inferSelect;
 export type Student = typeof students.$inferSelect;
 export type FeeStructure = typeof feeStructures.$inferSelect;
 export type FeePayment = typeof feePayments.$inferSelect;
+export type StudentDue = typeof studentDues.$inferSelect;
 export type Staff = typeof staff.$inferSelect;
 export type StaffUserLink = typeof staffUserLinks.$inferSelect;
 export type SalaryStructure = typeof salaryStructures.$inferSelect;

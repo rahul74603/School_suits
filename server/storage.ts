@@ -1,7 +1,7 @@
 
 import { 
-  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
-  type User, type InsertUser, type School, type InsertSchool, type Document, type BackupRecord,
+  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, studentDues, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
+  type User, type InsertUser, type School, type InsertSchool, type Document, type BackupRecord, type StudentDue,
   type AcademicSession, type InsertAcademicSession, type SchoolClass, type SchoolSection, type InsertClass, type InsertSection, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
   type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
@@ -90,6 +90,9 @@ export interface IStorage {
   promoteStudents(studentIds: number[], schoolId: number, targetClass: string): Promise<void>;
 
   // Fees
+  getStudentDues(schoolId: number, sessionId: number, studentId?: number): Promise<StudentDue[]>;
+  createStudentDue(input: Omit<StudentDue, "id" | "createdAt">): Promise<StudentDue>;
+  updateStudentDue(id: number, schoolId: number, sessionId: number, status: StudentDue["status"]): Promise<StudentDue | undefined>;
   getFeeStructures(schoolId: number, sessionId?: number): Promise<FeeStructure[]>;
   createFeeStructure(structure: StoredFeeStructureInsert): Promise<FeeStructure>;
   updateFeeStructure(id: number, schoolId: number, updates: Partial<StoredFeeStructureInsert>): Promise<FeeStructure | undefined>;
@@ -580,11 +583,15 @@ export class DatabaseStorage implements IStorage {
   async promoteStudents(studentIds: number[], schoolId: number, targetClass: string): Promise<void> {
     if (studentIds.length === 0) return;
     await db.update(students)
-      .set({ class: targetClass })
+      .set({ class: targetClass, isPromoted: true, updatedAt: new Date() })
       .where(and(eq(students.schoolId, schoolId), sql`${students.id} IN ${studentIds}`));
   }
 
   // === Fees ===
+  async getStudentDues(schoolId: number, sessionId: number, studentId?: number): Promise<StudentDue[]> { const conditions=[eq(studentDues.schoolId,schoolId),eq(studentDues.sessionId,sessionId)]; if(studentId!==undefined)conditions.push(eq(studentDues.studentId,studentId)); return db.select().from(studentDues).where(and(...conditions)); }
+  async createStudentDue(input: Omit<StudentDue, "id" | "createdAt">): Promise<StudentDue> { const [value]=await db.insert(studentDues).values(input).returning(); return value; }
+  async updateStudentDue(id:number, schoolId:number, sessionId:number, status:StudentDue["status"]):Promise<StudentDue|undefined>{const [value]=await db.update(studentDues).set({status}).where(and(eq(studentDues.id,id),eq(studentDues.schoolId,schoolId),eq(studentDues.sessionId,sessionId))).returning();return value;}
+
   async getFeeStructures(schoolId: number, sessionId?: number): Promise<FeeStructure[]> {
     const conditions = [eq(feeStructures.schoolId, schoolId)];
     if (sessionId !== undefined) conditions.push(eq(feeStructures.sessionId, sessionId));
