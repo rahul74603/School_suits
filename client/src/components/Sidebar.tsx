@@ -30,6 +30,7 @@ const navigation = [
   { name: "Documents", href: "/documents", icon: FileText, roles: ["admin", "principal", "teacher", "staff", "student"] },
   { name: "Import / Export", href: "/import-export", icon: FileText, roles: ["admin", "principal", "accountant"] },
   { name: "Settings", href: "/settings", icon: Settings, roles: ["admin", "principal"] },
+  { name: "Backup & Restore", href: "/backup-restore", icon: Settings, roles: ["admin"] },
 ];
 
 export function Sidebar() {

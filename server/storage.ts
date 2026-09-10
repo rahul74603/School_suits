@@ -1,7 +1,7 @@
 
 import { 
-  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
-  type User, type InsertUser, type School, type InsertSchool, type Document,
+  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
+  type User, type InsertUser, type School, type InsertSchool, type Document, type BackupRecord,
   type AcademicSession, type InsertAcademicSession, type SchoolClass, type SchoolSection, type InsertClass, type InsertSection, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
   type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
@@ -16,6 +16,11 @@ export interface IStorage {
   getUserByUsername(username: string): Promise<User | undefined>;
   getUsersBySchool(schoolId: number): Promise<User[]>;
   getDocuments(schoolId: number, sessionId?: number): Promise<Document[]>;
+  getBackups(schoolId: number): Promise<BackupRecord[]>;
+  getBackup(id: number, schoolId: number): Promise<BackupRecord | undefined>;
+  createBackupRecord(input: Omit<BackupRecord, "id">): Promise<BackupRecord>;
+  updateBackupRecord(id: number, schoolId: number, updates: Partial<BackupRecord>): Promise<BackupRecord | undefined>;
+  deleteBackupRecord(id: number, schoolId: number): Promise<boolean>;
   createDocument(input: Omit<Document, "id" | "uploadedAt">): Promise<Document>;
   deactivateDocument(id: number, schoolId: number): Promise<Document | undefined>;
   importStudents(schoolId: number, sessionId: number, rows: Array<Record<string, unknown>>): Promise<{ created: Student[]; errors: Array<{ row: number; message: string }> }>;
@@ -146,6 +151,12 @@ export class DatabaseStorage implements IStorage {
     if (sessionId !== undefined) conditions.push(eq(documents.sessionId, sessionId));
     return db.select().from(documents).where(and(...conditions));
   }
+
+  async getBackups(schoolId: number): Promise<BackupRecord[]> { return db.select().from(backupRecords).where(and(eq(backupRecords.schoolId, schoolId), sql`${backupRecords.status} <> 'deleted'`)).orderBy(sql`${backupRecords.createdAt} DESC`); }
+  async getBackup(id: number, schoolId: number): Promise<BackupRecord | undefined> { const [value] = await db.select().from(backupRecords).where(and(eq(backupRecords.id, id), eq(backupRecords.schoolId, schoolId))); return value; }
+  async createBackupRecord(input: Omit<BackupRecord, "id">): Promise<BackupRecord> { const [value] = await db.insert(backupRecords).values(input).returning(); return value; }
+  async updateBackupRecord(id: number, schoolId: number, updates: Partial<BackupRecord>): Promise<BackupRecord | undefined> { const [value] = await db.update(backupRecords).set(updates).where(and(eq(backupRecords.id, id), eq(backupRecords.schoolId, schoolId))).returning(); return value; }
+  async deleteBackupRecord(id: number, schoolId: number): Promise<boolean> { const result = await db.update(backupRecords).set({ status: "deleted" }).where(and(eq(backupRecords.id, id), eq(backupRecords.schoolId, schoolId))).returning({ id: backupRecords.id }); return result.length > 0; }
 
   async createDocument(input: Omit<Document, "id" | "uploadedAt">): Promise<Document> {
     const [document] = await db.insert(documents).values(input).returning();

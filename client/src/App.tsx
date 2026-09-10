@@ -27,6 +27,7 @@ import Settings from "@/pages/Settings";
 import Reports from "@/pages/Reports";
 import ImportExport from "@/pages/ImportExport";
 import Documents from "@/pages/Documents";
+import BackupRestore from "@/pages/BackupRestore";
 
 function Router() {
   return (
@@ -49,6 +50,7 @@ function Router() {
       <Route path="/import-export" component={ImportExport} />
       <Route path="/documents" component={Documents} />
       <Route path="/settings" component={Settings} />
+      <Route path="/backup-restore" component={BackupRestore} />
       <Route component={NotFound} />
     </Switch>
   );

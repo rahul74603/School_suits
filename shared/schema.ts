@@ -522,6 +522,27 @@ export const documents = pgTable("documents", {
   uploaderSchoolForeignKey: foreignKey({ columns: [table.uploadedByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "documents_uploader_school_fk" }),
 }));
 
+// === Database backups ===
+export const backupRecords = pgTable("backup_records", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  createdByUserId: integer("created_by_user_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  backupType: text("backup_type").notNull().default("postgres-custom"),
+  status: text("status").notNull().default("pending"),
+  sizeBytes: integer("size_bytes"),
+  storageKey: text("storage_key").notNull(),
+  restoreStatus: text("restore_status"),
+  restoreStartedAt: timestamp("restore_started_at"),
+  restoreCompletedAt: timestamp("restore_completed_at"),
+  errorMessage: text("error_message"),
+}, (table) => ({
+  schoolCreatedIndex: index("backup_records_school_created_idx").on(table.schoolId, table.createdAt),
+  creatorSchoolForeignKey: foreignKey({ columns: [table.createdByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "backup_records_creator_school_fk" }),
+  typeCheck: check("backup_records_type_check", sql`${table.backupType} = 'postgres-custom'`),
+  statusCheck: check("backup_records_status_check", sql`${table.status} IN ('pending', 'completed', 'failed', 'deleted')`),
+}));
+
 // === Relations ===
 export const schoolsRelations = relations(schools, ({ many }) => ({
   users: many(users),
@@ -637,6 +658,7 @@ export const insertStudentUserLinkSchema = createInsertSchema(studentUserLinks).
 
 // === Types ===
 export type Document = typeof documents.$inferSelect;
+export type BackupRecord = typeof backupRecords.$inferSelect;
 export type SchoolClass = typeof schoolClasses.$inferSelect;
 export type SchoolSection = typeof schoolSections.$inferSelect;
 export type School = typeof schools.$inferSelect;
