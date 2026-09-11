@@ -131,10 +131,12 @@ export default function Students() {
                     <TableCell>{student.fatherName}</TableCell>
                     <TableCell>{student.contact}</TableCell>
                     <TableCell className="text-right">
-                      <Dialog>
-                        <DialogTrigger asChild>
-                            <Link href={`/students/${student.id}`}><Button variant="ghost" size="sm">View</Button></Link>
-                            <Button
+                      <Link href={`/students/${student.id}`}>
+  <Button variant="ghost" size="sm">View</Button>
+</Link>
+<Dialog>
+  <DialogTrigger asChild>
+    <Button
                             variant="outline"
                             size="sm"
                             onClick={() => setSelectedStudent(student)}

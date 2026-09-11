@@ -9,7 +9,7 @@ export default function Settings() {
   const { data: user } = useAuth(); const qc = useQueryClient();
   const manager = user?.role === "admin" || user?.role === "principal";
   const school = useQuery<any>({ queryKey: [`/api/schools/${user?.schoolId}`], queryFn: () => json(`/api/schools/${user?.schoolId}`), enabled: !!user });
-  const sessions = useQuery<any[]>({ queryKey: ["/api/academic-sessions"], queryFn: () => json("/api/academic-sessions"), enabled: !!user });
+  const sessions = useQuery<any[]>({ queryKey: ["/api/academic-sessions"], queryFn: async () => { const data = await json("/api/academic-sessions"); return Array.isArray(data) ? data : []; }, enabled: !!user });
   const [name, setName] = useState(""); const [sessionId, setSessionId] = useState(""); const [className, setClassName] = useState(""); const [currentPassword, setCurrentPassword] = useState(""); const [newPassword, setNewPassword] = useState(""); const [confirmPassword, setConfirmPassword] = useState(""); const [securityMessage, setSecurityMessage] = useState("");
   const saveSchool = useMutation({ mutationFn: (data: any) => apiRequest("PUT", `/api/schools/${user?.schoolId}`, data), onSuccess: () => qc.invalidateQueries({ queryKey: [`/api/schools/${user?.schoolId}`] }) });
   const createSession = useMutation({ mutationFn: (data: any) => apiRequest("POST", "/api/academic-sessions", data), onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/academic-sessions"] }); setName(""); } });
