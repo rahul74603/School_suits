@@ -17,6 +17,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertFeePaymentSchema, insertFeeStructureSchema } from "@shared/schema";
 import { z } from "zod";
+import { Bus } from "lucide-react";
 
 export default function Fees() {
   const { toast } = useToast(); const session = useActiveSession(); const structures = useFeeStructures(); const payments = usePayments({ sessionId: session.data?.id ? String(session.data.id) : undefined }); const month = format(new Date(), "MMMM"); const defaulters = useDefaulters({ month, year: new Date().getFullYear() }); const collect = useCollectFee(); const createStructure = useCreateFeeStructure();
@@ -28,12 +29,61 @@ export default function Fees() {
     const options = { onSuccess: () => { toast({ title: editingStructure ? "Fee structure updated" : "Fee structure created" }); structureForm.reset(); setEditingStructure(null); }, onError: (error: Error) => toast({ variant: "destructive", title: "Fee structure failed", description: error.message }) };
     if (editingStructure) updateStructure.mutate({ id: editingStructure, ...data }, options); else createStructure.mutate(data, options);
   };
-  const error = [structures, payments, defaulters, session].find((q) => q.isError);
-  return <div className="flex min-h-screen bg-slate-50"><Sidebar /><main className="flex-1 ml-64 p-8"><h1 className="text-3xl font-bold">Fees Management</h1><p className="text-slate-500 mt-1 mb-8">Active session: {session.data?.name || "not available"}</p>{error && <QueryError message={error.error instanceof Error ? error.error.message : "Unable to load fee data."} onRetry={() => error.refetch()} />}<Tabs value={tab} onValueChange={setTab} className="mt-6 space-y-6"><TabsList><TabsTrigger value="collect">Collect Fee</TabsTrigger><TabsTrigger value="history">Payment History</TabsTrigger><TabsTrigger value="defaulters">Defaulters</TabsTrigger><TabsTrigger value="dues">Student Dues</TabsTrigger><TabsTrigger value="structure">Fee Structure</TabsTrigger></TabsList>
+  type TransportRoute = {
+    id: number;
+    routeName: string;
+    amount: number;
+    isActive: boolean;
+  };
+
+  const transportRoutes = useQuery<TransportRoute[]>({
+    queryKey: ["/api/transport-routes"],
+    queryFn: async () => {
+      const response = await fetch("/api/transport-routes", { credentials: "include" });
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
+    },
+  });
+
+  const error = [structures, payments, defaulters, session, transportRoutes].find((q) => q.isError);
+  return <div className="flex min-h-screen bg-slate-50"><Sidebar /><main className="flex-1 ml-64 p-8"><h1 className="text-3xl font-bold">Fees Management</h1><p className="text-slate-500 mt-1 mb-8">Active session: {session.data?.name || "not available"}</p>{error && <QueryError message={error.error instanceof Error ? error.error.message : "Unable to load fee data."} onRetry={() => error.refetch()} />}<Tabs value={tab} onValueChange={setTab} className="mt-6 space-y-6"><TabsList><TabsTrigger value="collect">Collect Fee</TabsTrigger><TabsTrigger value="history">Payment History</TabsTrigger><TabsTrigger value="defaulters">Defaulters</TabsTrigger><TabsTrigger value="dues">Student Dues</TabsTrigger><TabsTrigger value="structure">Fee Structure</TabsTrigger><TabsTrigger value="transport"><Bus className="w-4 h-4 mr-1" />Transport</TabsTrigger></TabsList>
     <TabsContent value="collect"><Card><CardHeader><CardTitle>New fee collection</CardTitle></CardHeader><CardContent><form className="max-w-xl space-y-4" onSubmit={paymentForm.handleSubmit(submitPayment)}>{(["studentId","amount","year","receiptNo","remarks"] as const).map((field) => <label key={field} className="block text-sm font-medium">{field}<Input className="mt-1" type={field === "studentId" || field === "amount" || field === "year" ? "number" : "text"} {...paymentForm.register(field, { valueAsNumber: ["studentId","amount","year"].includes(field) })} /></label>)}<label className="block text-sm font-medium">Month<select className="mt-1 w-full border rounded-md p-2" {...paymentForm.register("month")}>{["January","February","March","April","May","June","July","August","September","October","November","December"].map((value) => <option key={value}>{value}</option>)}</select></label><Button disabled={collect.isPending}>{collect.isPending ? "Processing..." : "Collect Payment"}</Button></form></CardContent></Card></TabsContent>
     <TabsContent value="history"><Card><CardHeader><CardTitle>Payment history</CardTitle></CardHeader><CardContent>{payments.isLoading ? <p>Loading payments...</p> : payments.data?.length ? <Table><TableHeader><TableRow><TableHead>Receipt</TableHead><TableHead>Student ID</TableHead><TableHead>Amount</TableHead><TableHead>Month/year</TableHead><TableHead>Date</TableHead><TableHead>Remarks</TableHead></TableRow></TableHeader><TableBody>{payments.data.map((p) => <TableRow key={p.id}><TableCell>{p.receiptNo}</TableCell><TableCell>{p.studentId}</TableCell><TableCell>₹{p.amount.toLocaleString()}</TableCell><TableCell>{p.month || "—"}/{p.year}</TableCell><TableCell>{new Date(p.paymentDate).toLocaleDateString()}</TableCell><TableCell>{p.remarks || "—"}</TableCell></TableRow>)}</TableBody></Table> : <p>No payments in the active session.</p>}</CardContent></Card></TabsContent>
     <TabsContent value="defaulters"><Card><CardHeader><CardTitle>Defaulters for {month}</CardTitle></CardHeader><CardContent>{defaulters.isLoading ? <p>Loading defaulters...</p> : defaulters.data?.length ? <Table><TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Class</TableHead><TableHead>Paid</TableHead><TableHead>Outstanding</TableHead></TableRow></TableHeader><TableBody>{defaulters.data.map((d) => <TableRow key={d.studentId}><TableCell>{d.name}</TableCell><TableCell>{d.class}-{d.section}</TableCell><TableCell>₹{d.amountPaid}</TableCell><TableCell className="text-red-600 font-bold">₹{d.amountPending}</TableCell></TableRow>)}</TableBody></Table> : <p>No students with outstanding monthly fees.</p>}</CardContent></Card></TabsContent>
     <TabsContent value="dues"><Card><CardHeader><CardTitle>Student dues</CardTitle></CardHeader><CardContent>{dues.isLoading ? <p>Loading dues...</p> : dues.data?.length ? <Table><TableHeader><TableRow><TableHead>Student ID</TableHead><TableHead>Description</TableHead><TableHead>Amount</TableHead><TableHead>Status</TableHead><TableHead>Action</TableHead></TableRow></TableHeader><TableBody>{dues.data.map(d=><TableRow key={d.id}><TableCell>{d.studentId}</TableCell><TableCell>{d.description}</TableCell><TableCell>₹{d.amount}</TableCell><TableCell>{d.status}</TableCell><TableCell>{d.status === "open" && <Button size="sm" onClick={()=>dueStatus.mutate({id:d.id,status:"settled"})}>Mark settled</Button>}</TableCell></TableRow>)}</TableBody></Table> : <p>No dues recorded for the active session.</p>}</CardContent></Card></TabsContent>
+    <TabsContent value="transport">
+      <Card>
+        <CardHeader>
+          <CardTitle>Transport / Bus Charges</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-slate-500 mb-4">
+            Active bus routes and their monthly charges. Student route assignment is managed from the Students directory.
+          </p>
+          {transportRoutes.isLoading ? <p>Loading transport routes...</p> : transportRoutes.data?.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Route</TableHead>
+                  <TableHead>Monthly Charge</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {transportRoutes.data.map(route => (
+                  <TableRow key={route.id}>
+                    <TableCell className="font-medium">{route.routeName}</TableCell>
+                    <TableCell>₹{route.amount.toLocaleString()}</TableCell>
+                    <TableCell>{route.isActive ? "Active" : "Inactive"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : <p className="text-slate-500">No active transport routes configured.</p>}
+        </CardContent>
+      </Card>
+    </TabsContent>
+
     <TabsContent value="structure"><Card><CardHeader><CardTitle>Fee structures</CardTitle></CardHeader><CardContent><form className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6" onSubmit={structureForm.handleSubmit(submitStructure)}>{(["class","monthlyFee","admissionFee","examFee","otherFee"] as const).map((field) => <label key={field} className="text-sm">{field}<Input type={field === "class" ? "text" : "number"} {...structureForm.register(field, { valueAsNumber: field !== "class" })} /></label>)}<div className="col-span-2 md:col-span-1 flex gap-2"><Button type="submit">{editingStructure ? "Save" : "Add"}</Button>{editingStructure && <Button type="button" variant="outline" onClick={() => { setEditingStructure(null); structureForm.reset(); }}>Cancel</Button>}</div></form>{structures.isLoading ? <p>Loading structures...</p> : structures.data?.length ? <Table><TableHeader><TableRow><TableHead>Class</TableHead><TableHead>Monthly</TableHead><TableHead>Admission</TableHead><TableHead>Exam</TableHead><TableHead>Other</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader><TableBody>{structures.data.map((s) => <TableRow key={s.id}><TableCell>{s.class}</TableCell><TableCell>₹{s.monthlyFee}</TableCell><TableCell>₹{s.admissionFee}</TableCell><TableCell>₹{s.examFee}</TableCell><TableCell>₹{s.otherFee}</TableCell><TableCell className="flex gap-2"><Button size="sm" variant="outline" onClick={() => { setEditingStructure(s.id); structureForm.reset({ class: s.class, monthlyFee: s.monthlyFee, admissionFee: s.admissionFee, examFee: s.examFee, otherFee: s.otherFee }); }}>Edit</Button><Button size="sm" variant="destructive" disabled={deleteStructure.isPending} onClick={() => { if (window.confirm("Delete this unused fee structure?")) deleteStructure.mutate(s.id, { onError: (error) => toast({ variant: "destructive", title: "Cannot delete structure", description: error.message }) }); }}>Delete</Button></TableCell></TableRow>)}</TableBody></Table> : <p>No fee structures in the active session.</p>}</CardContent></Card></TabsContent>
   </Tabs></main></div>;
 }

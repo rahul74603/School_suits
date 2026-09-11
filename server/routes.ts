@@ -793,6 +793,63 @@ export async function registerRoutes(
   app.post("/api/student-dues", requireRole("admin", "principal", "accountant", "staff"), async (req,res)=>{const input=z.object({studentId:z.number().int().positive(),description:z.string().trim().min(1).max(200),amount:z.number().int().positive(),dueDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/).nullable().optional()}).parse(req.body);const user=currentUser(req);const session=await dataStore.getActiveSession(user.schoolId);if(!session)return res.status(409).json({message:"No active session"});const student=await dataStore.getStudent(input.studentId,user.schoolId);if(!student||student.sessionId!==session.id)return res.status(404).json({message:"Student not found"});res.status(201).json(await dataStore.createStudentDue({...input,schoolId:user.schoolId,sessionId:session.id,status:"open",dueDate:input.dueDate??null}));});
   app.patch("/api/student-dues/:id", requireRole("admin", "principal", "accountant", "staff"), async(req,res)=>{const input=z.object({status:z.enum(["open","settled","void"])}).parse(req.body);const session=await dataStore.getActiveSession(currentUser(req).schoolId);if(!session)return res.status(409).json({message:"No active session"});const value=await dataStore.updateStudentDue(routeId(req.params.id),currentUser(req).schoolId,session.id,input.status);if(!value)return res.status(404).json({message:"Due not found"});res.json(value);});
 
+  // === Transport / Bus Routes ===
+  app.get(api.transport.list.path, requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const includeInactive = req.query.includeInactive === "true";
+
+    if (includeInactive && !["admin", "principal"].includes(user.role)) {
+      return res.status(403).json({ message: "Inactive transport routes are restricted" });
+    }
+
+    res.json(await dataStore.getTransportRoutes(user.schoolId, includeInactive));
+  });
+
+  app.post(api.transport.create.path, requireRole("admin", "principal"), async (req, res) => {
+    const input = api.transport.create.input.parse(req.body);
+    const user = currentUser(req);
+    const route = await dataStore.createTransportRoute({
+      ...input,
+      schoolId: user.schoolId,
+    });
+    res.status(201).json(route);
+  });
+
+  app.patch(api.transport.update.path, requireRole("admin", "principal"), async (req, res) => {
+    const input = api.transport.update.input.parse(req.body);
+    const user = currentUser(req);
+    const route = await dataStore.updateTransportRoute(routeId(req.params.id), user.schoolId, input);
+    if (!route) return res.status(404).json({ message: "Transport route not found" });
+    res.json(route);
+  });
+
+  app.post(api.transport.deactivate.path, requireRole("admin", "principal"), async (req, res) => {
+    const user = currentUser(req);
+    const route = await dataStore.deactivateTransportRoute(routeId(req.params.id), user.schoolId);
+    if (!route) return res.status(404).json({ message: "Transport route not found" });
+    res.json(route);
+  });
+
+  app.put(api.transport.assignStudent.path, requireRole("admin", "principal", "staff", "teacher"), async (req, res) => {
+    const input = api.transport.assignStudent.input.parse(req.body);
+    const user = currentUser(req);
+    const student = await dataStore.assignStudentTransport(
+      routeId(req.params.id),
+      user.schoolId,
+      input.transportId,
+    );
+
+    if (!student) {
+      return res.status(404).json({
+        message: input.transportId === null
+          ? "Student not found"
+          : "Student or active transport route not found",
+      });
+    }
+
+    res.json(safeStudent(student));
+  });
+
   // === Fees ===
   app.get(api.fees.structures.list.path, requireAuth, async (req, res) => {
     const user = currentUser(req);

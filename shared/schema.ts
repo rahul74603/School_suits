@@ -94,6 +94,22 @@ export const subjects = pgTable("subjects", {
   }),
 }));
 
+// === Transport / Bus Routes ===
+export const transportRoutes = pgTable("transport_routes", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  routeName: text("route_name").notNull(),
+  amount: integer("amount").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolNameUnique: uniqueIndex("transport_routes_school_name_unique").on(table.schoolId, table.routeName),
+  idSchoolUnique: uniqueIndex("transport_routes_id_school_unique").on(table.id, table.schoolId),
+  schoolActiveIndex: index("transport_routes_school_active_idx").on(table.schoolId, table.isActive),
+  amountCheck: check("transport_routes_amount_positive", sql`${table.amount} > 0`),
+}));
+
 // === Students Master ===
 export const students = pgTable("students", {
   id: serial("id").primaryKey(),
@@ -120,6 +136,7 @@ export const students = pgTable("students", {
   isActive: boolean("is_active").default(true).notNull(),
   isPromoted: boolean("is_promoted").default(false).notNull(),
   schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  transportId: integer("transport_id"),
   sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -599,7 +616,13 @@ export const academicSessionsRelations = relations(academicSessions, ({ one, man
 export const studentsRelations = relations(students, ({ one, many }) => ({
   school: one(schools, { fields: [students.schoolId], references: [schools.id] }),
   session: one(academicSessions, { fields: [students.sessionId], references: [academicSessions.id] }),
+  transport: one(transportRoutes, { fields: [students.transportId, students.schoolId], references: [transportRoutes.id, transportRoutes.schoolId] }),
   payments: many(feePayments),
+}));
+
+export const transportRoutesRelations = relations(transportRoutes, ({ one, many }) => ({
+  school: one(schools, { fields: [transportRoutes.schoolId], references: [schools.id] }),
+  students: many(students),
 }));
 
 export const feeStructuresRelations = relations(feeStructures, ({ one }) => ({
@@ -626,6 +649,17 @@ export const insertStudentSchema = createInsertSchema(students).omit({ id: true,
   name: z.string().trim().min(1),
   fatherName: z.string().trim().min(1),
 });
+export const insertTransportRouteSchema = createInsertSchema(transportRoutes).omit({
+  id: true,
+  schoolId: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  routeName: z.string().trim().min(1).max(150),
+  amount: z.number().int().positive(),
+  isActive: z.boolean().optional(),
+});
+
 export const insertFeeStructureSchema = createInsertSchema(feeStructures).omit({ id: true, schoolId: true, sessionId: true, createdAt: true, updatedAt: true }).extend({
   monthlyFee: z.number().int().nonnegative(),
   admissionFee: z.number().int().nonnegative().optional(),
@@ -704,6 +738,7 @@ export type School = typeof schools.$inferSelect;
 export type AcademicSession = typeof academicSessions.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Student = typeof students.$inferSelect;
+export type TransportRoute = typeof transportRoutes.$inferSelect;
 export type FeeStructure = typeof feeStructures.$inferSelect;
 export type FeePayment = typeof feePayments.$inferSelect;
 export type StudentDue = typeof studentDues.$inferSelect;
@@ -729,6 +764,7 @@ export type InsertSchool = z.infer<typeof insertSchoolSchema>;
 export type InsertAcademicSession = z.infer<typeof insertAcademicSessionSchema>;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type InsertStudent = z.infer<typeof insertStudentSchema>;
+export type InsertTransportRoute = z.infer<typeof insertTransportRouteSchema>;
 export type InsertFeeStructure = z.infer<typeof insertFeeStructureSchema>;
 export type InsertFeePayment = z.infer<typeof insertFeePaymentSchema>;
 export type InsertStaff = z.infer<typeof insertStaffSchema>;
@@ -749,6 +785,7 @@ export type InsertExamResult = z.infer<typeof insertExamResultSchema>;
 
 // Server-side insert types retain tenant columns; client input schemas intentionally omit them.
 export type StoredStudentInsert = typeof students.$inferInsert;
+export type StoredTransportRouteInsert = typeof transportRoutes.$inferInsert;
 export type StoredFeeStructureInsert = typeof feeStructures.$inferInsert;
 export type StoredFeePaymentInsert = typeof feePayments.$inferInsert;
 export type StoredStaffInsert = typeof staff.$inferInsert;

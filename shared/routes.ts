@@ -4,8 +4,8 @@ import {
   insertSchoolSchema, insertUserSchema, insertStudentSchema, 
   insertFeeStructureSchema, insertFeePaymentSchema, insertStaffSchema, insertStaffUserLinkSchema, insertSalaryStructureSchema, insertPayrollSchema, insertExpenseCategorySchema, insertExpenseSchema,
   insertSubjectSchema, insertTeacherSubjectAssignmentSchema, insertTeacherClassAssignmentSchema, insertStudentUserLinkSchema, insertAttendanceSchema,
-  insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema, insertExamResultSchema, insertClassSchema, insertSectionSchema,
-  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses
+  insertExamSchema, insertExamClassScopeSchema, insertExamScheduleSchema, insertExamResultSchema, insertClassSchema, insertSectionSchema, insertTransportRouteSchema,
+  students, feePayments, schools, staff, feeStructures, academicSessions, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, transportRoutes
 } from './schema';
 
 export const errorSchemas = {
@@ -107,6 +107,38 @@ export const api = {
       responses: {
         200: z.object({ message: z.string() }),
       },
+    },
+  },
+
+  // === Transport / Bus Routes ===
+  transport: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/transport-routes',
+      responses: { 200: z.array(z.custom<typeof transportRoutes.$inferSelect>()) },
+    },
+    create: {
+      method: 'POST' as const,
+      path: '/api/transport-routes',
+      input: insertTransportRouteSchema,
+      responses: { 201: z.custom<typeof transportRoutes.$inferSelect>() },
+    },
+    update: {
+      method: 'PATCH' as const,
+      path: '/api/transport-routes/:id',
+      input: insertTransportRouteSchema.partial(),
+      responses: { 200: z.custom<typeof transportRoutes.$inferSelect>() },
+    },
+    deactivate: {
+      method: 'POST' as const,
+      path: '/api/transport-routes/:id/deactivate',
+      responses: { 200: z.custom<typeof transportRoutes.$inferSelect>() },
+    },
+    assignStudent: {
+      method: 'PUT' as const,
+      path: '/api/students/:id/transport',
+      input: z.object({ transportId: z.number().int().positive().nullable() }).strict(),
+      responses: { 200: z.custom<typeof students.$inferSelect>() },
     },
   },
 

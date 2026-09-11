@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/Sidebar";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -10,11 +11,28 @@ import { useCreateStudent } from "@/hooks/use-students";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { useLocation } from "wouter";
+import { Bus } from "lucide-react";
 
 export default function Admissions() {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const createStudent = useCreateStudent();
+
+  type TransportRoute = {
+    id: number;
+    routeName: string;
+    amount: number;
+    isActive: boolean;
+  };
+
+  const transportRoutes = useQuery<TransportRoute[]>({
+    queryKey: ["/api/transport-routes"],
+    queryFn: async () => {
+      const response = await fetch("/api/transport-routes", { credentials: "include" });
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
+    },
+  });
 
   const form = useForm({
     resolver: zodResolver(insertStudentSchema),
@@ -30,7 +48,8 @@ export default function Admissions() {
       category: "General",
       contact: "",
       address: "",
-      dob: undefined
+      dob: undefined,
+      transportId: null,
     }
   });
 
@@ -237,6 +256,47 @@ export default function Admissions() {
                       </FormItem>
                     )}
                   />
+
+                  {/* Transport */}
+                  <Card className="border border-dashed">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Bus className="w-4 h-4" />
+                        Transport / Bus Service
+                      </CardTitle>
+                      <CardDescription>Optional. Assign an active bus route to this student.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <FormField
+                        control={form.control}
+                        name="transportId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Bus Route</FormLabel>
+                            <FormControl>
+                              <select
+                                className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+                                value={field.value == null ? "" : String(field.value)}
+                                onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : null)}
+                              >
+                                <option value="">No Transport</option>
+                                {transportRoutes.data?.map(route => (
+                                  <option key={route.id} value={route.id}>
+                                    {route.routeName} — ₹{route.amount.toLocaleString()}/month
+                                  </option>
+                                ))}
+                              </select>
+                            </FormControl>
+                            {transportRoutes.isLoading && <p className="text-xs text-slate-500">Loading routes...</p>}
+                            {!transportRoutes.isLoading && transportRoutes.data?.length === 0 && (
+                              <p className="text-xs text-slate-500">No active bus routes configured. You can add them in Settings.</p>
+                            )}
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </CardContent>
+                  </Card>
 
                   <div className="flex gap-4 pt-4">
                     <Button type="button" variant="outline" className="w-full" onClick={() => setLocation("/students")}>

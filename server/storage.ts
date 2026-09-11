@@ -1,11 +1,12 @@
 
 import { 
-  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, studentDues, auditEvents, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
+  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, studentDues, auditEvents, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff, transportRoutes,
   type User, type InsertUser, type School, type InsertSchool, type Document, type BackupRecord, type StudentDue, type AuditEvent,
   type AcademicSession, type InsertAcademicSession, type SchoolClass, type SchoolSection, type InsertClass, type InsertSection, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
   type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
-  type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
+  type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert,
+  type TransportRoute, type InsertTransportRoute
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, ilike, and, or, sql } from "drizzle-orm";
@@ -95,6 +96,14 @@ export interface IStorage {
   updateStudent(id: number, schoolId: number, student: Partial<StoredStudentInsert>): Promise<Student>;
   deactivateStudent(id: number, schoolId: number): Promise<Student | undefined>;
   promoteStudents(studentIds: number[], schoolId: number, targetClass: string): Promise<void>;
+
+  // Transport / Bus Routes
+  getTransportRoutes(schoolId: number, includeInactive?: boolean): Promise<TransportRoute[]>;
+  getTransportRoute(id: number, schoolId: number): Promise<TransportRoute | undefined>;
+  createTransportRoute(input: InsertTransportRoute & { schoolId: number }): Promise<TransportRoute>;
+  updateTransportRoute(id: number, schoolId: number, updates: Partial<InsertTransportRoute>): Promise<TransportRoute | undefined>;
+  deactivateTransportRoute(id: number, schoolId: number): Promise<TransportRoute | undefined>;
+  assignStudentTransport(studentId: number, schoolId: number, transportId: number | null): Promise<Student | undefined>;
 
   // Fees
   getStudentDues(schoolId: number, sessionId: number, studentId?: number): Promise<StudentDue[]>;
@@ -600,6 +609,68 @@ export class DatabaseStorage implements IStorage {
     await db.update(students)
       .set({ class: targetClass, isPromoted: true, updatedAt: new Date() })
       .where(and(eq(students.schoolId, schoolId), sql`${students.id} IN ${studentIds}`));
+  }
+
+  // === Transport / Bus Routes ===
+  async getTransportRoutes(schoolId: number, includeInactive = false): Promise<TransportRoute[]> {
+    const conditions = [eq(transportRoutes.schoolId, schoolId)];
+    if (!includeInactive) conditions.push(eq(transportRoutes.isActive, true));
+    return await db.select().from(transportRoutes).where(and(...conditions)).orderBy(transportRoutes.routeName);
+  }
+
+  async getTransportRoute(id: number, schoolId: number): Promise<TransportRoute | undefined> {
+    const [route] = await db.select().from(transportRoutes).where(
+      and(eq(transportRoutes.id, id), eq(transportRoutes.schoolId, schoolId)),
+    );
+    return route;
+  }
+
+  async createTransportRoute(input: InsertTransportRoute & { schoolId: number }): Promise<TransportRoute> {
+    const [route] = await db.insert(transportRoutes).values(input).returning();
+    return route;
+  }
+
+  async updateTransportRoute(
+    id: number,
+    schoolId: number,
+    updates: Partial<InsertTransportRoute>,
+  ): Promise<TransportRoute | undefined> {
+    const [route] = await db.update(transportRoutes).set({
+      ...updates,
+      updatedAt: new Date(),
+    }).where(
+      and(eq(transportRoutes.id, id), eq(transportRoutes.schoolId, schoolId)),
+    ).returning();
+    return route;
+  }
+
+  async deactivateTransportRoute(id: number, schoolId: number): Promise<TransportRoute | undefined> {
+    const [route] = await db.update(transportRoutes).set({
+      isActive: false,
+      updatedAt: new Date(),
+    }).where(
+      and(eq(transportRoutes.id, id), eq(transportRoutes.schoolId, schoolId)),
+    ).returning();
+    return route;
+  }
+
+  async assignStudentTransport(
+    studentId: number,
+    schoolId: number,
+    transportId: number | null,
+  ): Promise<Student | undefined> {
+    if (transportId !== null) {
+      const route = await this.getTransportRoute(transportId, schoolId);
+      if (!route || !route.isActive) return undefined;
+    }
+
+    const [student] = await db.update(students).set({
+      transportId,
+      updatedAt: new Date(),
+    }).where(
+      and(eq(students.id, studentId), eq(students.schoolId, schoolId)),
+    ).returning();
+    return student;
   }
 
   // === Fees ===
