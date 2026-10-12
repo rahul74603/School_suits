@@ -2118,8 +2118,8 @@ export async function registerRoutes(
     if (!session) return res.status(409).json({ message: "No active academic session" });
     const rawStaffId = req.body?.staffId ? Number(req.body.staffId) : null;
     const input = insertLeaveRequestSchema.parse(req.body);
-    let applicantType: "student" | "staff" = user.role === "student" ? "student" : (input.applicantType ?? "staff");
-    let studentId: number | null = input.studentId ?? null;
+    const applicantType: "student" | "staff" = user.role === "student" ? "student" : "staff";
+    let studentId: number | null = user.role === "student" ? (input.studentId ?? null) : null;
     let applicantName = user.name;
     let className: string | null = input.className ?? null;
     let section: string | null = input.section ?? null;
@@ -2131,14 +2131,15 @@ export async function registerRoutes(
         applicantName = `${own.name} (Father: ${own.fatherName} · Adm: ${own.admissionNo})`;
         className = own.class;
         section = own.section;
+      } else if (studentId) {
+        const student = await dataStore.getStudent(studentId, user.schoolId);
+        if (student) {
+          applicantName = `${student.name} (Father: ${student.fatherName} · Adm: ${student.admissionNo})`;
+          className = student.class;
+          section = student.section;
+        }
       }
-    } else if (applicantType === "student" && studentId) {
-      const student = await dataStore.getStudent(studentId, user.schoolId);
-      if (!student) return res.status(400).json({ message: "Selected student not found" });
-      applicantName = `${student.name} (Father: ${student.fatherName} · Adm: ${student.admissionNo})`;
-      className = student.class;
-      section = student.section;
-    } else if (applicantType === "staff" && rawStaffId) {
+    } else if (rawStaffId) {
       const staffMembers = await dataStore.getStaff(user.schoolId);
       const foundStaff = staffMembers.find((st) => st.id === rawStaffId);
       if (!foundStaff) return res.status(400).json({ message: "Selected staff member not found" });
@@ -2171,7 +2172,7 @@ export async function registerRoutes(
     res.json(updated);
   });
 
-  // === Certificates (Transfer / Bonafide / Character / Fee) ===
+  // === Certificates (All 8 Official School Certificates: Transfer / Character / Bonafide / DOB / Fee / Migration / Passing / Sports) ===
   app.get("/api/certificates", requireAuth, async (req, res) => {
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
@@ -2185,12 +2186,22 @@ export async function registerRoutes(
     res.json(await (dataStore as any).getCertificates(user.schoolId, session.id, studentId));
   });
 
-  app.post("/api/certificates", requireRole("admin", "principal"), async (req, res) => {
+  app.post("/api/certificates", requireRole("admin", "principal", "accountant", "staff"), async (req, res) => {
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
     if (!session) return res.status(409).json({ message: "No active academic session" });
     const input = insertCertificateSchema.parse(req.body);
-    const prefix = input.certificateType.slice(0, 3).toUpperCase();
+    const prefixMap: Record<string, string> = {
+      transfer: "TC",
+      character: "CC",
+      bonafide: "BC",
+      dob: "DOB",
+      fee: "FC",
+      migration: "MIG",
+      passing: "PC",
+      sports: "SPC",
+    };
+    const prefix = prefixMap[input.certificateType] || input.certificateType.slice(0, 3).toUpperCase();
     const certificateNo = input.certificateNo?.trim() || `${prefix}-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}`;
     const created = await (dataStore as any).createCertificate({
       ...input,
@@ -2201,12 +2212,40 @@ export async function registerRoutes(
       conduct: input.conduct ?? "Good",
       reason: input.reason ?? null,
       remarks: input.remarks ?? null,
+      promotedToClass: input.promotedToClass ?? null,
+      duesStatus: input.duesStatus ?? "No Dues Pending",
+      lastAttendanceDate: input.lastAttendanceDate ?? null,
+      customBody: input.customBody ?? null,
     });
     void audit({ schoolId: user.schoolId, sessionId: session.id, actorUserId: user.id, actorRole: user.role, action: `certificate.issue.${input.certificateType}`, targetType: "student", targetId: input.studentId, metadata: { certificateNo } });
     res.status(201).json(created);
   });
 
-  app.post("/api/certificates/:id/revoke", requireRole("admin", "principal"), async (req, res) => {
+  app.patch("/api/certificates/:id", requireRole("admin", "principal", "accountant", "staff"), async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session || typeof (dataStore as any).updateCertificate !== "function") {
+      return res.status(409).json({ message: "No active academic session" });
+    }
+    const patchSchema = z.object({
+      certificateNo: z.string().trim().min(1).max(100).optional(),
+      issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      reason: z.string().max(500).nullable().optional(),
+      conduct: z.string().max(100).nullable().optional(),
+      remarks: z.string().max(500).nullable().optional(),
+      promotedToClass: z.string().max(100).nullable().optional(),
+      duesStatus: z.string().max(200).nullable().optional(),
+      lastAttendanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+      customBody: z.string().max(4000).nullable().optional(),
+      status: z.enum(["issued", "revoked"]).optional(),
+    });
+    const updates = patchSchema.parse(req.body);
+    const updated = await (dataStore as any).updateCertificate(routeId(req.params.id), user.schoolId, session.id, updates);
+    if (!updated) return res.status(404).json({ message: "Certificate not found" });
+    res.json(updated);
+  });
+
+  app.post("/api/certificates/:id/revoke", requireRole("admin", "principal", "accountant"), async (req, res) => {
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
     if (!session) return res.status(409).json({ message: "No active academic session" });

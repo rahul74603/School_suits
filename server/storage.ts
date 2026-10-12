@@ -299,6 +299,21 @@ export class DatabaseStorage implements IStorage {
           ADD COLUMN IF NOT EXISTS "reviewed_by_user_id" integer,
           ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp;
       `);
+      await db.execute(sql`
+        ALTER TABLE "certificates" DROP CONSTRAINT IF EXISTS "certificates_type_check";
+      `);
+      await db.execute(sql`
+        ALTER TABLE "certificates"
+          ADD CONSTRAINT "certificates_type_check"
+          CHECK ("certificate_type" IN ('transfer', 'bonafide', 'character', 'fee', 'dob', 'migration', 'passing', 'sports'));
+      `);
+      await db.execute(sql`
+        ALTER TABLE "certificates"
+          ADD COLUMN IF NOT EXISTS "promoted_to_class" text,
+          ADD COLUMN IF NOT EXISTS "dues_status" text DEFAULT 'No Dues Pending',
+          ADD COLUMN IF NOT EXISTS "last_attendance_date" date,
+          ADD COLUMN IF NOT EXISTS "custom_body" text;
+      `);
     } catch {
       // Ignore in mock test environments without PostgreSQL
     }
@@ -1240,6 +1255,31 @@ export class DatabaseStorage implements IStorage {
       await db.update(students).set({ tcNumber: input.certificateNo, tcIssueDate: input.issueDate, updatedAt: new Date() }).where(and(eq(students.id, input.studentId), eq(students.schoolId, input.schoolId)));
     }
     return created;
+  }
+
+  async updateCertificate(
+    id: number,
+    schoolId: number,
+    sessionId: number,
+    updates: Partial<{
+      certificateNo: string;
+      issueDate: string;
+      reason: string | null;
+      conduct: string | null;
+      remarks: string | null;
+      promotedToClass: string | null;
+      duesStatus: string | null;
+      lastAttendanceDate: string | null;
+      customBody: string | null;
+      status: "issued" | "revoked";
+    }>,
+  ): Promise<Certificate | undefined> {
+    const [updated] = await db
+      .update(certificates)
+      .set(updates as any)
+      .where(and(eq(certificates.id, id), eq(certificates.schoolId, schoolId), eq(certificates.sessionId, sessionId)))
+      .returning();
+    return updated;
   }
 
   async revokeCertificate(id: number, schoolId: number, sessionId: number): Promise<Certificate | undefined> {

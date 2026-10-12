@@ -790,13 +790,17 @@ export const certificates = pgTable("certificates", {
   reason: text("reason"),
   conduct: text("conduct").default("Good"),
   remarks: text("remarks"),
+  promotedToClass: text("promoted_to_class"),
+  duesStatus: text("dues_status").default("No Dues Pending"),
+  lastAttendanceDate: date("last_attendance_date"),
+  customBody: text("custom_body"),
   issuedByUserId: integer("issued_by_user_id").notNull(),
   status: text("status").notNull().default("issued"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   certNoUnique: uniqueIndex("certificates_school_cert_no_unique").on(table.schoolId, table.certificateNo),
   studentIdx: index("certificates_school_student_idx").on(table.schoolId, table.sessionId, table.studentId),
-  typeCheck: check("certificates_type_check", sql`${table.certificateType} IN ('transfer', 'bonafide', 'character', 'fee')`),
+  typeCheck: check("certificates_type_check", sql`${table.certificateType} IN ('transfer', 'bonafide', 'character', 'fee', 'dob', 'migration', 'passing', 'sports')`),
   statusCheck: check("certificates_status_check", sql`${table.status} IN ('issued', 'revoked')`),
   studentSchoolForeignKey: foreignKey({ columns: [table.studentId, table.schoolId], foreignColumns: [students.id, students.schoolId], name: "certificates_student_school_fk" }),
   sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "certificates_session_school_fk" }),
@@ -1011,12 +1015,16 @@ export const insertLeaveRequestSchema = createInsertSchema(leaveRequests).omit({
 
 export const insertCertificateSchema = createInsertSchema(certificates).omit({ id: true, schoolId: true, sessionId: true, issuedByUserId: true, status: true, createdAt: true }).extend({
   studentId: z.number().int().positive(),
-  certificateType: z.enum(["transfer", "bonafide", "character", "fee"]),
+  certificateType: z.enum(["transfer", "bonafide", "character", "fee", "dob", "migration", "passing", "sports"]),
   certificateNo: z.string().trim().max(100).optional(),
   issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   reason: z.string().max(500).nullable().optional(),
   conduct: z.string().max(100).nullable().optional(),
   remarks: z.string().max(500).nullable().optional(),
+  promotedToClass: z.string().max(100).nullable().optional(),
+  duesStatus: z.string().max(200).nullable().optional(),
+  lastAttendanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  customBody: z.string().max(4000).nullable().optional(),
 });
 
 export const insertStudentTransportAllocationSchema = createInsertSchema(studentTransportAllocations).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({

@@ -274,7 +274,8 @@ export default function StudentProfile() {
                   </div>
                 )}
 
-                {/* Upload Document directly into this student's profile */}
+                {/* Upload Document directly into this student's profile (School Staff Only) */}
+                {canManage && (
                 <div className="rounded-lg border bg-slate-50 p-4 space-y-3">
                   <div className="text-xs font-bold uppercase text-slate-600">
                     Upload New Document for {st.name}
@@ -332,6 +333,7 @@ export default function StudentProfile() {
                     </Button>
                   </div>
                 </div>
+                )}
 
                 {/* List of Student's Uploaded Documents with Approve / Reject */}
                 {studentDocs.isLoading ? (

@@ -5,18 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
-import { useSchoolCatalog } from "@/hooks/use-school-catalog";
-import { useStudents } from "@/hooks/use-students";
 import { useStaff } from "@/hooks/use-staff";
 import { apiRequest } from "@/lib/queryClient";
-import { CheckCircle2, GraduationCap, ShieldCheck, UserCheck, XCircle } from "lucide-react";
+import { CheckCircle2, ShieldCheck, UserCheck, XCircle } from "lucide-react";
 
 const leaveTypes = ["sick", "casual", "personal", "medical", "emergency"] as const;
 
 export default function Leaves() {
   const { data: user } = useAuth();
-  const { classOptions, sectionOptions } = useSchoolCatalog();
-  const { data: students } = useStudents();
   const { data: staffList } = useStaff();
   const qc = useQueryClient();
 
@@ -25,16 +21,8 @@ export default function Leaves() {
   const isStudent = user?.role === "student";
   const today = new Date().toISOString().slice(0, 10);
 
-  const [applicantCategory, setApplicantCategory] = useState<"student" | "staff">(
-    isStudent ? "student" : "student",
-  );
-  const [filterClass, setFilterClass] = useState("all");
-  const [filterSection, setFilterSection] = useState("all");
-  const [studentSearch, setStudentSearch] = useState("");
-  const [selectedStudentId, setSelectedStudentId] = useState("");
   const [selectedStaffId, setSelectedStaffId] = useState("");
-
-  const [leaveType, setLeaveType] = useState<string>("sick");
+  const [leaveType, setLeaveType] = useState<string>("casual");
   const [fromDate, setFromDate] = useState(today);
   const [toDate, setToDate] = useState(today);
   const [reason, setReason] = useState("");
@@ -52,23 +40,6 @@ export default function Leaves() {
     enabled: !!user,
   });
 
-  const filteredStudents = (students ?? []).filter((s) => {
-    if (filterClass !== "all" && s.class !== filterClass) return false;
-    if (filterSection !== "all" && s.section !== filterSection) return false;
-    if (studentSearch.trim()) {
-      const q = studentSearch.toLowerCase();
-      return (
-        s.name.toLowerCase().includes(q) ||
-        s.fatherName.toLowerCase().includes(q) ||
-        s.admissionNo.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
-
-  const selectedStudentObj = (students ?? []).find(
-    (s) => String(s.id) === selectedStudentId,
-  );
   const selectedStaffObj = (staffList ?? []).find(
     (st) => String(st.id) === selectedStaffId,
   );
@@ -76,22 +47,10 @@ export default function Leaves() {
   const submitLeave = useMutation({
     mutationFn: () => {
       setErrorMsg("");
-      if (!isStudent && applicantCategory === "student" && !selectedStudentId) {
-        throw new Error(
-          "Please select the Student (Name, Class, Father's Name & Admission No) from the dropdown.",
-        );
-      }
-      if (!isStudent && applicantCategory === "staff" && !selectedStaffId) {
-        throw new Error("Please select the Teacher / Staff member from the dropdown.");
-      }
       return apiRequest("POST", "/api/leaves", {
-        applicantType: isStudent ? "student" : applicantCategory,
-        studentId:
-          !isStudent && applicantCategory === "student" ? Number(selectedStudentId) : null,
-        staffId:
-          !isStudent && applicantCategory === "staff" ? Number(selectedStaffId) : null,
-        className: selectedStudentObj?.class ?? null,
-        section: selectedStudentObj?.section ?? null,
+        applicantType: isStudent ? "student" : "staff",
+        studentId: null,
+        staffId: !isStudent && selectedStaffId ? Number(selectedStaffId) : null,
         leaveType,
         fromDate,
         toDate,
@@ -101,7 +60,11 @@ export default function Leaves() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/leaves"] });
       setReason("");
-      setMessage("Leave application submitted with full identity details.");
+      setMessage(
+        isStudent
+          ? "आपकी छुट्टी का आवेदन (Student Leave Application) प्रिंसिपल को भेज दिया गया है।"
+          : "Staff / Teacher leave application submitted for Principal approval.",
+      );
     },
     onError: (err: Error) => setErrorMsg(err.message),
   });
@@ -130,10 +93,14 @@ export default function Leaves() {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">
-              Leave Applications & Principal Approvals
+              {isStudent
+                ? "My Student Leave Applications (छुट्टी के लिए आवेदन करें)"
+                : "Staff Leave Applications & Principal Approvals"}
             </h1>
             <p className="text-slate-500 mt-1">
-              Select Student (with Class, Father&apos;s Name & Reg/Admission No) or Staff Member · Approval authority: <b>Principal Only</b>
+              {isStudent
+                ? "Parents / Students can directly apply for leave from here. Principal approves all leave requests."
+                : "Teachers & Staff apply for their own leave here · Student leaves are applied directly by Parents from the Student Portal · Approval authority: Principal Only"}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -141,16 +108,18 @@ export default function Leaves() {
               <ShieldCheck className="h-4 w-4 text-amber-700" />
               Approval Authority: Principal Only
             </span>
-            <select
-              className="h-10 rounded-md border bg-white px-3 text-sm font-medium"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <option value="all">All Requests</option>
-              <option value="pending">Pending Principal Approval</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-            </select>
+            <div>
+              <select
+                className="h-10 rounded-md border bg-white px-3 text-sm font-medium"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <option value="all">Filter: All Leave Requests</option>
+                <option value="pending">Pending Principal Approval</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -167,176 +136,50 @@ export default function Leaves() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Submit New Leave Request (Select Student or Staff Identity)</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <UserCheck className="h-5 w-5 text-indigo-600" />
+              {isStudent
+                ? "Apply for Student Leave (छात्र की छुट्टी का आवेदन भेजें)"
+                : "Apply for Teacher / Staff Leave (टीचर / स्टाफ की छुट्टी का आवेदन)"}
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {!isStudent && (
-              <div className="space-y-4 rounded-xl border bg-slate-50/80 p-4">
-                {/* 1. Choose Student vs Staff/Teacher */}
-                <div className="flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setApplicantCategory("student")}
-                    className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition ${
-                      applicantCategory === "student"
-                        ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
-                        : "bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
+            {!isStudent && (staffList ?? []).length > 0 && (
+              <div className="rounded-xl border bg-slate-50/80 p-4 space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    1. Select Teacher / Staff Member (अपना नाम चुनें — यदि अकाउंट लिंक नहीं है)
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-white px-3 text-sm font-medium"
+                    value={selectedStaffId}
+                    onChange={(e) => setSelectedStaffId(e.target.value)}
                   >
-                    <GraduationCap className="h-4 w-4" />
-                    Student Leave (Chhatra ki Chhutti)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setApplicantCategory("staff")}
-                    className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition ${
-                      applicantCategory === "staff"
-                        ? "border-purple-600 bg-purple-600 text-white shadow-sm"
-                        : "bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    <UserCheck className="h-4 w-4" />
-                    Teacher / Staff Leave (Staff ki Chhutti)
-                  </button>
+                    <option value="">
+                      -- Logged-in Account ({user?.name}) or Select Staff Member --
+                    </option>
+                    {(staffList ?? []).map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.name} — {st.designation} — Mob: {st.contact}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
-                {/* 2A. If Student Leave: Filter by Class, Section, Search & Select Student Dropdown */}
-                {applicantCategory === "student" ? (
-                  <div className="space-y-3">
-                    <div className="grid gap-3 md:grid-cols-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
-                          Filter Class (Dropdown)
-                        </label>
-                        <select
-                          className="h-10 w-full rounded-md border bg-white px-3 text-sm"
-                          value={filterClass}
-                          onChange={(e) => {
-                            setFilterClass(e.target.value);
-                            setSelectedStudentId("");
-                          }}
-                        >
-                          <option value="all">All Classes</option>
-                          {classOptions.map((c) => (
-                            <option key={c} value={c}>
-                              Class {c}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
-                          Filter Section (Dropdown)
-                        </label>
-                        <select
-                          className="h-10 w-full rounded-md border bg-white px-3 text-sm"
-                          value={filterSection}
-                          onChange={(e) => {
-                            setFilterSection(e.target.value);
-                            setSelectedStudentId("");
-                          }}
-                        >
-                          <option value="all">All Sections</option>
-                          {sectionOptions.map((sec) => (
-                            <option key={sec} value={sec}>
-                              Section {sec}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="md:col-span-2">
-                        <label className="block text-xs font-semibold text-slate-600 mb-1">
-                          Quick Search (Name / Father&apos;s Name / Registration No)
-                        </label>
-                        <Input
-                          className="bg-white"
-                          placeholder="Search student name, father name, or ADM number..."
-                          value={studentSearch}
-                          onChange={(e) => setStudentSearch(e.target.value)}
-                        />
-                      </div>
-                    </div>
-
+                {selectedStaffObj && (
+                  <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-xs text-purple-950 grid grid-cols-3 gap-2">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Select Student (Name · Class-Section · Father&apos;s Name · Reg/Admission No) *
-                      </label>
-                      <select
-                        className="h-10 w-full rounded-md border bg-white px-3 text-sm font-medium"
-                        value={selectedStudentId}
-                        onChange={(e) => setSelectedStudentId(e.target.value)}
-                      >
-                        <option value="">
-                          -- Select Student ({filteredStudents.length} available) --
-                        </option>
-                        {filteredStudents.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name} — Class {s.class}-{s.section} — Father: {s.fatherName} — Reg/Adm No: {s.admissionNo}
-                          </option>
-                        ))}
-                      </select>
+                      <span className="text-slate-500 block">Staff Name:</span>
+                      <b>{selectedStaffObj.name}</b>
                     </div>
-
-                    {selectedStudentObj && (
-                      <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs text-indigo-950 grid grid-cols-2 md:grid-cols-4 gap-2">
-                        <div>
-                          <span className="text-slate-500 block">Student Name:</span>
-                          <b>{selectedStudentObj.name}</b>
-                        </div>
-                        <div>
-                          <span className="text-slate-500 block">Class & Section:</span>
-                          <b>
-                            Class {selectedStudentObj.class}-{selectedStudentObj.section}
-                          </b>
-                        </div>
-                        <div>
-                          <span className="text-slate-500 block">Father&apos;s Name:</span>
-                          <b>{selectedStudentObj.fatherName}</b>
-                        </div>
-                        <div>
-                          <span className="text-slate-500 block">Reg / Admission No:</span>
-                          <b className="font-mono">{selectedStudentObj.admissionNo}</b>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  /* 2B. If Staff Leave: Select Teacher / Staff Dropdown */
-                  <div className="space-y-3">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        Select Teacher / Staff Member (Name · Designation · Mobile) *
-                      </label>
-                      <select
-                        className="h-10 w-full rounded-md border bg-white px-3 text-sm font-medium"
-                        value={selectedStaffId}
-                        onChange={(e) => setSelectedStaffId(e.target.value)}
-                      >
-                        <option value="">-- Select Teacher / Staff Member --</option>
-                        {(staffList ?? []).map((st) => (
-                          <option key={st.id} value={st.id}>
-                            {st.name} — {st.designation} — Mob: {st.contact}
-                          </option>
-                        ))}
-                      </select>
+                      <span className="text-slate-500 block">Designation:</span>
+                      <b>{selectedStaffObj.designation}</b>
                     </div>
-
-                    {selectedStaffObj && (
-                      <div className="rounded-lg border border-purple-200 bg-purple-50 p-3 text-xs text-purple-950 grid grid-cols-3 gap-2">
-                        <div>
-                          <span className="text-slate-500 block">Staff Name:</span>
-                          <b>{selectedStaffObj.name}</b>
-                        </div>
-                        <div>
-                          <span className="text-slate-500 block">Designation:</span>
-                          <b>{selectedStaffObj.designation}</b>
-                        </div>
-                        <div>
-                          <span className="text-slate-500 block">Contact No:</span>
-                          <b>{selectedStaffObj.contact}</b>
-                        </div>
-                      </div>
-                    )}
+                    <div>
+                      <span className="text-slate-500 block">Contact No:</span>
+                      <b>{selectedStaffObj.contact}</b>
+                    </div>
                   </div>
                 )}
               </div>
@@ -344,8 +187,8 @@ export default function Leaves() {
 
             <div className="grid gap-3 md:grid-cols-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Leave Type (Dropdown)
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Leave Type (छुट्टी का प्रकार) *
                 </label>
                 <select
                   className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
@@ -360,8 +203,8 @@ export default function Leaves() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  From Date
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  From Date (कब से) *
                 </label>
                 <Input
                   type="date"
@@ -370,8 +213,8 @@ export default function Leaves() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  To Date
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  To Date (कब तक) *
                 </label>
                 <Input
                   type="date"
@@ -381,24 +224,35 @@ export default function Leaves() {
               </div>
             </div>
 
-            <Input
-              placeholder="Reason for leave (e.g., Fever & medical rest / Family wedding function)"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-            />
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Reason for Leave (छुट्टी का कारण लिखें) *
+              </label>
+              <Input
+                placeholder="e.g., Personal work / Family function / Medical rest"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </div>
 
             <Button
               onClick={() => submitLeave.mutate()}
               disabled={submitLeave.isPending || !reason.trim()}
             >
-              {submitLeave.isPending ? "Submitting..." : "Submit Leave Request for Principal Approval"}
+              {submitLeave.isPending
+                ? "Submitting..."
+                : "Submit Leave Request for Principal Approval"}
             </Button>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Leave Requests & Principal Approval Register</CardTitle>
+            <CardTitle>
+              {isStudent
+                ? "My Submitted Leave Requests"
+                : "Leave Requests & Principal Approval Register (Staff & Student Leaves)"}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto rounded-lg border bg-white">
@@ -406,9 +260,7 @@ export default function Leaves() {
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="p-3 text-left">Category</th>
-                    <th className="p-3 text-left">
-                      Applicant Full Identity (Name, Class, Father&apos;s Name, Reg No)
-                    </th>
+                    <th className="p-3 text-left">Applicant Full Identity</th>
                     <th className="p-3 text-left">Leave Type</th>
                     <th className="p-3 text-left">Dates</th>
                     <th className="p-3 text-left">Reason</th>

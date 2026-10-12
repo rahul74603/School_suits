@@ -288,16 +288,15 @@ export default function Documents() {
           </div>
         )}
 
-        {/* Upload Document Card (Available to BOTH Student/Parent AND School Admin/Principal/Accountant/Staff) */}
+        {/* Upload Document Card (School Admin/Principal/Accountant/Staff Only) */}
+        {canUploadForOthers && (
         <Card className="border-indigo-200 shadow-sm">
           <CardHeader className="bg-indigo-50/40 border-b">
             <CardTitle className="flex items-center justify-between">
               <span>
                 {reuploadingDoc
                   ? `Re-Upload Corrected Document: ${docTypeLabel.get(reuploadingDoc.documentType) || reuploadingDoc.documentType}`
-                  : isStudent
-                    ? "Upload My School Document (नया दस्तावेज़ अपलोड करें — PDF / Photo)"
-                    : "Upload & Register Document (छात्र / स्टाफ दस्तावेज़ अपलोड करें)"}
+                  : "Upload & Register Document (छात्र / स्टाफ दस्तावेज़ अपलोड करें)"}
               </span>
               {reuploadingDoc && (
                 <Button
@@ -461,6 +460,7 @@ export default function Documents() {
             )}
           </CardContent>
         </Card>
+        )}
 
         {/* Registered & Uploaded Documents List */}
         <Card>

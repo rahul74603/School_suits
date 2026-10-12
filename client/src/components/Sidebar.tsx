@@ -45,7 +45,7 @@ const navigation = [
   { name: "Staff Directory", href: "/staff", icon: School, roles: ["admin", "principal", "accountant"] },
   { name: "Staff Payroll", href: "/payroll", icon: Briefcase, roles: ["admin", "principal", "accountant", "staff", "teacher"] },
   { name: "Financial Dashboard", href: "/financial", icon: BarChart3, roles: ["admin", "principal", "accountant"] },
-  { name: "Documents", href: "/documents", icon: FolderOpen, roles: ["admin", "principal", "accountant", "teacher", "staff", "student"] },
+  { name: "Documents", href: "/documents", icon: FolderOpen, roles: ["admin", "principal", "accountant", "teacher", "staff"] },
   { name: "Reports", href: "/reports", icon: FileText, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
   { name: "Import / Export", href: "/import-export", icon: Upload, roles: ["admin", "principal", "accountant"] },
   { name: "Settings & Users", href: "/settings", icon: Settings, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
