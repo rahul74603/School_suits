@@ -62,6 +62,11 @@ export default function Settings() {
     queryFn: () => json("/api/subjects"),
     enabled: !!user && manager,
   });
+  const academicStreams = useQuery<any[]>({
+    queryKey: ["/api/academic-streams"],
+    queryFn: () => json("/api/academic-streams"),
+    enabled: !!user && manager,
+  });
   const schoolUsers = useQuery<any[]>({
     queryKey: ["/api/school-users"],
     queryFn: () => json("/api/school-users"),
@@ -112,9 +117,20 @@ export default function Settings() {
   const [sessionEnd, setSessionEnd] = useState("");
   const [className, setClassName] = useState("");
   const [selectedClassId, setSelectedClassId] = useState("");
+  const [filterSectionClassId, setFilterSectionClassId] = useState("all");
   const [sectionName, setSectionName] = useState("");
   const [subjectName, setSubjectName] = useState("");
   const [subjectCode, setSubjectCode] = useState("");
+  const [subjectStream, setSubjectStream] = useState("All");
+  const [subjectType, setSubjectType] = useState("core");
+
+  // Stream & 11th-12th Electives States
+  const [streamName, setStreamName] = useState("");
+  const [streamCode, setStreamCode] = useState("");
+  const [streamCompulsory, setStreamCompulsory] = useState("Hindi, English");
+  const [streamCore, setStreamCore] = useState("");
+  const [streamElectives, setStreamElectives] = useState("");
+  const [streamMaxElectives, setStreamMaxElectives] = useState("1");
 
   // User Creation & Linking States
   const [newUsername, setNewUsername] = useState("");
@@ -190,6 +206,16 @@ export default function Settings() {
     },
   });
 
+  const deleteClass = useMutation({
+    mutationFn: (id: number) =>
+      apiRequest("DELETE", `/api/management/classes/${id}?sessionId=${activeSession?.id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/management/classes"] });
+      qc.invalidateQueries({ queryKey: ["/api/management/sections"] });
+      setMessage("Class removed.");
+    },
+  });
+
   const createSection = useMutation({
     mutationFn: () =>
       apiRequest("POST", "/api/management/sections", {
@@ -204,11 +230,23 @@ export default function Settings() {
     },
   });
 
+  const deleteSection = useMutation({
+    mutationFn: (id: number) =>
+      apiRequest("DELETE", `/api/management/sections/${id}?sessionId=${activeSession?.id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/management/sections"] });
+      setMessage("Section deleted.");
+    },
+  });
+
   const createSubject = useMutation({
     mutationFn: () =>
       apiRequest("POST", "/api/subjects", {
         name: subjectName,
         code: subjectCode || undefined,
+        stream: subjectStream,
+        subjectType,
+        applicableClasses: subjectStream === "All" ? "All" : "11,12",
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/subjects"] });
@@ -221,6 +259,45 @@ export default function Settings() {
   const deleteSubject = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/subjects/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/subjects"] }),
+  });
+
+  const applyBoardPreset = useMutation({
+    mutationFn: (board: "MPBSE" | "CBSE" | "STATE" | "ICSE") =>
+      apiRequest("POST", "/api/academic-streams/preset", { board }),
+    onSuccess: (_, board) => {
+      qc.invalidateQueries({ queryKey: ["/api/academic-streams"] });
+      qc.invalidateQueries({ queryKey: ["/api/subjects"] });
+      qc.invalidateQueries({ queryKey: [`/api/schools/${user?.schoolId}`] });
+      setMessage(`${board} Class 11–12 streams & elective subjects configured automatically!`);
+    },
+  });
+
+  const createStream = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/academic-streams", {
+        name: streamName,
+        code: streamCode.toUpperCase().replace(/\s+/g, "_"),
+        compulsorySubjects: streamCompulsory,
+        coreSubjects: streamCore,
+        electiveOptions: streamElectives,
+        maxElectives: Number(streamMaxElectives) || 1,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/academic-streams"] });
+      setStreamName("");
+      setStreamCode("");
+      setStreamCore("");
+      setStreamElectives("");
+      setMessage("Custom 11th–12th stream saved.");
+    },
+  });
+
+  const deleteStream = useMutation({
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/academic-streams/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/academic-streams"] });
+      setMessage("Stream deleted.");
+    },
   });
 
   const createUserAccount = useMutation({
@@ -394,6 +471,25 @@ export default function Settings() {
   const subjectById = new Map((subjects.data ?? []).map((s) => [s.id, s]));
   const classById = new Map((classes.data ?? []).map((c) => [c.id, c]));
 
+  const classOrderWeight = (name: string) => {
+    const clean = name.trim().toLowerCase();
+    if (clean === "nursery") return -3;
+    if (clean === "lkg" || clean === "kg1") return -2;
+    if (clean === "ukg" || clean === "kg2") return -1;
+    const num = Number(clean);
+    if (!Number.isNaN(num)) return num;
+    return 100;
+  };
+  const sortedClasses = [...(classes.data ?? [])].sort((a, b) => {
+    const wa = classOrderWeight(a.name);
+    const wb = classOrderWeight(b.name);
+    if (wa !== wb) return wa - wb;
+    return a.name.localeCompare(b.name);
+  });
+  const filteredSections = (sections.data ?? []).filter((sec) =>
+    filterSectionClassId === "all" ? true : String(sec.classId) === filterSectionClassId,
+  );
+
   return (
     <div className="flex min-h-screen bg-slate-50">
       <Sidebar />
@@ -551,12 +647,28 @@ export default function Settings() {
                       </Button>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {(classes.data ?? []).map((c) => (
+                      {sortedClasses.map((c) => (
                         <span
                           key={c.id}
-                          className="rounded-lg border bg-slate-50 px-3 py-1.5 text-sm font-medium"
+                          className="inline-flex items-center gap-1.5 rounded-lg border bg-slate-50 px-3 py-1.5 text-sm font-medium"
                         >
-                          Class {c.name}
+                          <span>Class {c.name}</span>
+                          <button
+                            type="button"
+                            title={`Delete Class ${c.name}`}
+                            className="ml-1 text-slate-400 hover:text-red-600"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Delete Class ${c.name} and its sections from this session?`,
+                                )
+                              ) {
+                                deleteClass.mutate(c.id);
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         </span>
                       ))}
                     </div>
@@ -565,7 +677,21 @@ export default function Settings() {
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>Sections</CardTitle>
+                    <div className="flex items-center justify-between gap-2">
+                      <CardTitle>Sections (A, B, C...)</CardTitle>
+                      <select
+                        className="h-8 rounded-md border bg-background px-2 text-xs"
+                        value={filterSectionClassId}
+                        onChange={(e) => setFilterSectionClassId(e.target.value)}
+                      >
+                        <option value="all">Filter: All Classes</option>
+                        {sortedClasses.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            Class {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="flex gap-2">
@@ -575,7 +701,7 @@ export default function Settings() {
                         onChange={(e) => setSelectedClassId(e.target.value)}
                       >
                         <option value="">Select Class</option>
-                        {(classes.data ?? []).map((c) => (
+                        {sortedClasses.map((c) => (
                           <option key={c.id} value={c.id}>
                             Class {c.name}
                           </option>
@@ -595,14 +721,27 @@ export default function Settings() {
                         Add Section
                       </Button>
                     </div>
+                    <p className="text-xs text-slate-500">
+                      Tip: Sections are classroom divisions (A, B, C). For Class 11–12 subject streams (PCM, PCB, Commerce, Arts), use the Streams section below. Click the trash icon to delete any unwanted section.
+                    </p>
                     <div className="flex flex-wrap gap-2">
-                      {(sections.data ?? []).map((sec) => (
+                      {filteredSections.map((sec) => (
                         <span
                           key={sec.id}
-                          className="rounded-lg border bg-slate-50 px-3 py-1.5 text-xs font-medium"
+                          className="inline-flex items-center gap-1.5 rounded-lg border bg-slate-50 px-3 py-1.5 text-xs font-medium"
                         >
-                          Class {classById.get(sec.classId)?.name ?? sec.classId} - Section{" "}
-                          {sec.name}
+                          <span>
+                            Class {classById.get(sec.classId)?.name ?? sec.classId} - Section{" "}
+                            {sec.name}
+                          </span>
+                          <button
+                            type="button"
+                            title="Delete section"
+                            className="ml-1 text-slate-400 hover:text-red-600"
+                            onClick={() => deleteSection.mutate(sec.id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         </span>
                       ))}
                     </div>
@@ -610,12 +749,160 @@ export default function Settings() {
                 </Card>
               </div>
 
+              <Card className="border-indigo-200 bg-indigo-50/30">
+                <CardHeader>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div>
+                      <CardTitle>
+                        Class 11th & 12th Streams & Elective Subjects (MP Board / CBSE / State Boards)
+                      </CardTitle>
+                      <p className="text-xs text-slate-600 mt-1">
+                        Up to Class 10 all students follow common class subjects. After Class 10 (in 11th & 12th), students elect a Stream (PCM, PCB, Commerce, Arts/Humanities, Agriculture) and optional subjects as per board rules.Current Board:{" "}
+                        <b className="text-indigo-700">
+                          {school.data?.boardAffiliation || "MP Board (MPBSE)"}
+                        </b>
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => applyBoardPreset.mutate("MPBSE")}
+                        disabled={applyBoardPreset.isPending}
+                      >
+                        1-Click Setup: MP Board (MPBSE)
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => applyBoardPreset.mutate("CBSE")}
+                        disabled={applyBoardPreset.isPending}
+                      >
+                        Setup CBSE (10+2)
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => applyBoardPreset.mutate("STATE")}
+                        disabled={applyBoardPreset.isPending}
+                      >
+                        Setup State Board (UP/RJ/BR/CG)
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => applyBoardPreset.mutate("ICSE")}
+                        disabled={applyBoardPreset.isPending}
+                      >
+                        Setup ICSE / ISC
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="rounded-lg border bg-white p-4 space-y-3">
+                    <div className="text-xs font-semibold uppercase text-slate-500">
+                      Add / Customize Stream Combination (Class 11–12)
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <Input
+                        placeholder="Stream Name (e.g., Science - PCM)"
+                        value={streamName}
+                        onChange={(e) => setStreamName(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Stream Code (e.g., PCM, PCB, COMMERCE, ARTS)"
+                        value={streamCode}
+                        onChange={(e) => setStreamCode(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Compulsory Languages (e.g., Hindi, English)"
+                        value={streamCompulsory}
+                        onChange={(e) => setStreamCompulsory(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Core Stream Subjects (e.g., Physics, Chemistry, Mathematics)"
+                        value={streamCore}
+                        onChange={(e) => setStreamCore(e.target.value)}
+                      />
+                      <Input
+                        placeholder="Optional / Elective Pool (e.g., Computer Science, IP, PE)"
+                        value={streamElectives}
+                        onChange={(e) => setStreamElectives(e.target.value)}
+                      />
+                      <div className="flex gap-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          max="5"
+                          placeholder="Max Electives"
+                          value={streamMaxElectives}
+                          onChange={(e) => setStreamMaxElectives(e.target.value)}
+                        />
+                        <Button
+                          onClick={() => createStream.mutate()}
+                          disabled={
+                            createStream.isPending || !streamName.trim() || !streamCode.trim()
+                          }
+                        >
+                          Save Stream
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {!academicStreams.data?.length ? (
+                    <div className="rounded-lg border border-dashed bg-white p-6 text-center text-sm text-slate-600">
+                      No Class 11–12 streams configured yet. Click{" "}
+                      <b>&ldquo;1-Click Setup: MP Board (MPBSE)&rdquo;</b> (or your state/CBSE board) above to automatically set up PCM, PCB, Commerce, Arts, and Agriculture streams and subjects!
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {(academicStreams.data ?? []).map((st: any) => (
+                        <div
+                          key={st.id}
+                          className="rounded-lg border bg-white p-4 shadow-sm space-y-2"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <span className="rounded bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-800 mr-2">
+                                {st.code}
+                              </span>
+                              <span className="font-semibold text-slate-900">{st.name}</span>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-red-600 h-7 px-2"
+                              onClick={() => deleteStream.mutate(st.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <div className="text-xs space-y-1 text-slate-600">
+                            <div>
+                              <b>Compulsory Languages:</b> {st.compulsorySubjects || "—"}
+                            </div>
+                            <div>
+                              <b>Core Subjects:</b> {st.coreSubjects || "—"}
+                            </div>
+                            <div>
+                              <b>Elective Choices (Pick up to {st.maxElectives}):</b>{" "}
+                              {st.electiveOptions || "None"}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader>
                   <CardTitle>Subjects Master</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-5">
                     <Input
                       placeholder="Subject Name (e.g., Mathematics)"
                       value={subjectName}
@@ -626,6 +913,28 @@ export default function Settings() {
                       value={subjectCode}
                       onChange={(e) => setSubjectCode(e.target.value)}
                     />
+                    <select
+                      className="h-10 rounded-md border bg-background px-3 text-sm"
+                      value={subjectStream}
+                      onChange={(e) => setSubjectStream(e.target.value)}
+                    >
+                      <option value="All">All Classes (1st–10th Common)</option>
+                      <option value="PCM">11th–12th Science (PCM)</option>
+                      <option value="PCB">11th–12th Science (PCB)</option>
+                      <option value="COMMERCE">11th–12th Commerce</option>
+                      <option value="ARTS">11th–12th Arts / Humanities</option>
+                      <option value="AGRICULTURE">11th–12th Agriculture</option>
+                    </select>
+                    <select
+                      className="h-10 rounded-md border bg-background px-3 text-sm"
+                      value={subjectType}
+                      onChange={(e) => setSubjectType(e.target.value)}
+                    >
+                      <option value="core">Core / Main Subject</option>
+                      <option value="compulsory_language">Compulsory Language</option>
+                      <option value="elective">Optional / Elective</option>
+                      <option value="vocational">Vocational / Additional</option>
+                    </select>
                     <Button
                       onClick={() => createSubject.mutate()}
                       disabled={createSubject.isPending || !subjectName.trim()}
@@ -633,14 +942,24 @@ export default function Settings() {
                       Add Subject
                     </Button>
                   </div>
-                  <div className="divide-y rounded-lg border bg-white">
+                  <div className="divide-y rounded-lg border bg-white max-h-96 overflow-y-auto">
                     {(subjects.data ?? []).map((subj) => (
                       <div key={subj.id} className="flex items-center justify-between p-3 text-sm">
-                        <div>
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="font-semibold text-slate-900">{subj.name}</span>
                           {subj.code && (
-                            <span className="ml-2 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                            <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
                               {subj.code}
+                            </span>
+                          )}
+                          {subj.stream && subj.stream !== "All" && (
+                            <span className="rounded bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                              Stream: {subj.stream}
+                            </span>
+                          )}
+                          {subj.subjectType && (
+                            <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-800 capitalize">
+                              {String(subj.subjectType).replace("_", " ")}
                             </span>
                           )}
                         </div>

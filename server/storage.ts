@@ -1,10 +1,10 @@
 
 import { 
-  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, studentDues, auditEvents, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
+  users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, studentDues, auditEvents, subjects, academicStreams, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
   notices, homeworkAssignments, timetableEntries, leaveRequests, certificates, transportRoutes, studentTransportAllocations,
   type User, type InsertUser, type School, type InsertSchool, type Document, type BackupRecord, type StudentDue, type AuditEvent,
   type AcademicSession, type InsertAcademicSession, type SchoolClass, type SchoolSection, type InsertClass, type InsertSection, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
-  type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
+  type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type AcademicStream, type InsertAcademicStream, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
   type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
   type Notice, type InsertNotice, type HomeworkAssignment, type InsertHomework, type TimetableEntry, type InsertTimetableEntry, type LeaveRequest, type InsertLeaveRequest, type Certificate, type InsertCertificate, type TransportRoute, type InsertTransportRoute, type StudentTransportAllocation, type InsertStudentTransportAllocation,
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
@@ -48,9 +48,17 @@ export interface IStorage {
   getClasses(schoolId: number, sessionId: number): Promise<SchoolClass[]>;
   createClass(input: InsertClass & { schoolId: number; sessionId: number }): Promise<SchoolClass>;
   updateClass(id: number, schoolId: number, sessionId: number, updates: Partial<InsertClass>): Promise<SchoolClass | undefined>;
+  deleteClass(id: number, schoolId: number, sessionId: number): Promise<boolean>;
   getSections(schoolId: number, sessionId: number, classId?: number): Promise<SchoolSection[]>;
   createSection(input: InsertSection & { schoolId: number; sessionId: number; classId: number }): Promise<SchoolSection>;
   updateSection(id: number, schoolId: number, sessionId: number, updates: Partial<InsertSection>): Promise<SchoolSection | undefined>;
+  deleteSection(id: number, schoolId: number, sessionId: number): Promise<boolean>;
+
+  // Academic Streams (Class 11–12 PCM, PCB, Commerce, Arts, Agriculture, etc.)
+  getAcademicStreams(schoolId: number, sessionId: number): Promise<AcademicStream[]>;
+  createAcademicStream(input: InsertAcademicStream & { schoolId: number; sessionId: number }): Promise<AcademicStream>;
+  updateAcademicStream(id: number, schoolId: number, sessionId: number, updates: Partial<InsertAcademicStream & { isActive: boolean }>): Promise<AcademicStream | undefined>;
+  deleteAcademicStream(id: number, schoolId: number, sessionId: number): Promise<boolean>;
 
   // Subjects and assignments
   getSubjects(schoolId: number, sessionId: number): Promise<Subject[]>;
@@ -318,6 +326,13 @@ export class DatabaseStorage implements IStorage {
   async updateClass(id: number, schoolId: number, sessionId: number, updates: Partial<InsertClass>): Promise<SchoolClass | undefined> {
     const [value] = await db.update(schoolClasses).set(updates).where(and(eq(schoolClasses.id, id), eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.sessionId, sessionId))).returning(); return value;
   }
+  async deleteClass(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    return db.transaction(async (tx) => {
+      await tx.delete(schoolSections).where(and(eq(schoolSections.classId, id), eq(schoolSections.schoolId, schoolId), eq(schoolSections.sessionId, sessionId)));
+      const deleted = await tx.delete(schoolClasses).where(and(eq(schoolClasses.id, id), eq(schoolClasses.schoolId, schoolId), eq(schoolClasses.sessionId, sessionId))).returning({ id: schoolClasses.id });
+      return deleted.length > 0;
+    });
+  }
   async getSections(schoolId: number, sessionId: number, classId?: number): Promise<SchoolSection[]> {
     return db.select().from(schoolSections).where(and(eq(schoolSections.schoolId, schoolId), eq(schoolSections.sessionId, sessionId), ...(classId ? [eq(schoolSections.classId, classId)] : []))).orderBy(schoolSections.displayOrder, schoolSections.name);
   }
@@ -326,6 +341,41 @@ export class DatabaseStorage implements IStorage {
   }
   async updateSection(id: number, schoolId: number, sessionId: number, updates: Partial<InsertSection>): Promise<SchoolSection | undefined> {
     const [value] = await db.update(schoolSections).set(updates).where(and(eq(schoolSections.id, id), eq(schoolSections.schoolId, schoolId), eq(schoolSections.sessionId, sessionId))).returning(); return value;
+  }
+  async deleteSection(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const deleted = await db.delete(schoolSections).where(and(eq(schoolSections.id, id), eq(schoolSections.schoolId, schoolId), eq(schoolSections.sessionId, sessionId))).returning({ id: schoolSections.id });
+    return deleted.length > 0;
+  }
+
+  // === Academic Streams ===
+  async getAcademicStreams(schoolId: number, sessionId: number): Promise<AcademicStream[]> {
+    return db.select().from(academicStreams).where(and(eq(academicStreams.schoolId, schoolId), eq(academicStreams.sessionId, sessionId))).orderBy(academicStreams.id);
+  }
+  async createAcademicStream(input: InsertAcademicStream & { schoolId: number; sessionId: number }): Promise<AcademicStream> {
+    const existing = await db.select().from(academicStreams).where(and(eq(academicStreams.schoolId, input.schoolId), eq(academicStreams.sessionId, input.sessionId), eq(academicStreams.code, input.code))).limit(1);
+    if (existing.length > 0) {
+      const [updated] = await db.update(academicStreams).set({
+        name: input.name,
+        boardPattern: input.boardPattern ?? "MPBSE",
+        applicableClasses: input.applicableClasses ?? "11,12",
+        compulsorySubjects: input.compulsorySubjects ?? "",
+        coreSubjects: input.coreSubjects ?? "",
+        electiveOptions: input.electiveOptions ?? "",
+        maxElectives: input.maxElectives ?? 1,
+        isActive: true,
+      }).where(eq(academicStreams.id, existing[0].id)).returning();
+      return updated;
+    }
+    const [created] = await db.insert(academicStreams).values(input).returning();
+    return created;
+  }
+  async updateAcademicStream(id: number, schoolId: number, sessionId: number, updates: Partial<InsertAcademicStream & { isActive: boolean }>): Promise<AcademicStream | undefined> {
+    const [updated] = await db.update(academicStreams).set(updates).where(and(eq(academicStreams.id, id), eq(academicStreams.schoolId, schoolId), eq(academicStreams.sessionId, sessionId))).returning();
+    return updated;
+  }
+  async deleteAcademicStream(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const deleted = await db.delete(academicStreams).where(and(eq(academicStreams.id, id), eq(academicStreams.schoolId, schoolId), eq(academicStreams.sessionId, sessionId))).returning({ id: academicStreams.id });
+    return deleted.length > 0;
   }
 
   // === Subjects and assignments ===

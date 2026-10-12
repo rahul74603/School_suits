@@ -11,6 +11,7 @@ export const schools = pgTable("schools", {
   address: text("address").notNull(),
   logo: text("logo"),
   contact: text("contact").notNull(),
+  boardAffiliation: text("board_affiliation").default("MP Board (MPBSE)").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -80,6 +81,9 @@ export const subjects = pgTable("subjects", {
   sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
   name: text("name").notNull(),
   code: text("code"),
+  stream: text("stream").default("All"),
+  subjectType: text("subject_type").default("core").notNull(),
+  applicableClasses: text("applicable_classes").default("All").notNull(),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -91,6 +95,30 @@ export const subjects = pgTable("subjects", {
     columns: [table.sessionId, table.schoolId],
     foreignColumns: [academicSessions.id, academicSessions.schoolId],
     name: "subjects_session_school_fk",
+  }),
+}));
+
+// === Higher Secondary Streams (PCM, PCB, Commerce, Arts, Agriculture, etc.) ===
+export const academicStreams = pgTable("academic_streams", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
+  name: text("name").notNull(),
+  code: text("code").notNull(),
+  boardPattern: text("board_pattern").default("MPBSE").notNull(),
+  applicableClasses: text("applicable_classes").default("11,12").notNull(),
+  compulsorySubjects: text("compulsory_subjects").default("").notNull(),
+  coreSubjects: text("core_subjects").default("").notNull(),
+  electiveOptions: text("elective_options").default("").notNull(),
+  maxElectives: integer("max_electives").default(1).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolSessionCodeUnique: uniqueIndex("academic_streams_school_session_code_unique").on(table.schoolId, table.sessionId, table.code),
+  sessionSchoolForeignKey: foreignKey({
+    columns: [table.sessionId, table.schoolId],
+    foreignColumns: [academicSessions.id, academicSessions.schoolId],
+    name: "academic_streams_session_school_fk",
   }),
 }));
 
@@ -140,6 +168,9 @@ export const students = pgTable("students", {
   photo: text("photo"),
   isActive: boolean("is_active").default(true).notNull(),
   isPromoted: boolean("is_promoted").default(false).notNull(),
+  stream: text("stream"),
+  streamId: integer("stream_id"),
+  electedSubjects: text("elected_subjects"),
   schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
   transportId: integer("transport_id"),
   sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
@@ -874,6 +905,19 @@ export const insertAttendanceSchema = createInsertSchema(attendanceRecords).omit
 export const insertSubjectSchema = createInsertSchema(subjects).omit({ id: true, schoolId: true, sessionId: true, createdAt: true, updatedAt: true }).extend({
   name: z.string().trim().min(1).max(100),
   code: z.string().trim().max(50).optional(),
+  stream: z.string().trim().max(80).optional(),
+  subjectType: z.enum(["compulsory_language", "core", "elective", "vocational"]).optional(),
+  applicableClasses: z.string().trim().max(50).optional(),
+});
+export const insertAcademicStreamSchema = createInsertSchema(academicStreams).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({
+  name: z.string().trim().min(1).max(120),
+  code: z.string().trim().min(1).max(40),
+  boardPattern: z.string().trim().max(50).optional(),
+  applicableClasses: z.string().trim().max(50).optional(),
+  compulsorySubjects: z.string().max(1000).optional(),
+  coreSubjects: z.string().max(1000).optional(),
+  electiveOptions: z.string().max(1500).optional(),
+  maxElectives: z.number().int().nonnegative().optional(),
 });
 export const insertTeacherSubjectAssignmentSchema = createInsertSchema(teacherSubjectAssignments).omit({ id: true, schoolId: true, sessionId: true, createdAt: true });
 export const insertTeacherClassAssignmentSchema = createInsertSchema(teacherClassAssignments).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({
@@ -965,6 +1009,7 @@ export type PayrollRecord = typeof payrollRecords.$inferSelect;
 export type ExpenseCategory = typeof expenseCategories.$inferSelect;
 export type Expense = typeof expenses.$inferSelect;
 export type Subject = typeof subjects.$inferSelect;
+export type AcademicStream = typeof academicStreams.$inferSelect;
 export type TeacherSubjectAssignment = typeof teacherSubjectAssignments.$inferSelect;
 export type TeacherClassAssignment = typeof teacherClassAssignments.$inferSelect;
 export type StudentUserLink = typeof studentUserLinks.$inferSelect;
@@ -990,6 +1035,7 @@ export type InsertPayroll = z.infer<typeof insertPayrollSchema>;
 export type InsertExpenseCategory = z.infer<typeof insertExpenseCategorySchema>;
 export type InsertExpense = z.infer<typeof insertExpenseSchema>;
 export type InsertSubject = z.infer<typeof insertSubjectSchema>;
+export type InsertAcademicStream = z.infer<typeof insertAcademicStreamSchema>;
 export type InsertTeacherSubjectAssignment = z.infer<typeof insertTeacherSubjectAssignmentSchema>;
 export type InsertTeacherClassAssignment = z.infer<typeof insertTeacherClassAssignmentSchema>;
 export type InsertStudentUserLink = z.infer<typeof insertStudentUserLinkSchema>;

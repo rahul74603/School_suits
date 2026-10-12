@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { storage, type IStorage } from "./storage";
 import { api } from "@shared/routes";
 import {
+  insertAcademicStreamSchema,
   insertNoticeSchema,
   insertHomeworkSchema,
   insertTimetableEntrySchema,
@@ -198,9 +199,311 @@ export async function registerRoutes(
     res.status(201).json(await dataStore.createClass({ ...input, schoolId: user.schoolId, isActive: input.isActive ?? true }));
   });
   app.patch("/api/management/classes/:id", requireRole("admin", "principal"), async (req, res) => { const user=currentUser(req); const sessionId=idSchema.parse(req.body.sessionId); const input=z.object({name:z.string().trim().min(1).max(100).optional(),displayOrder:z.number().int().optional(),isActive:z.boolean().optional()}).parse(req.body); const result=await dataStore.updateClass(routeId(req.params.id),user.schoolId,sessionId,input); if(!result)return res.status(404).json({message:"Class not found"}); res.json(result); });
+  app.delete("/api/management/classes/:id", requireRole("admin", "principal"), async (req, res) => {
+    const user = currentUser(req);
+    const active = await dataStore.getActiveSession(user.schoolId);
+    const sessionId = req.query.sessionId ? idSchema.parse(req.query.sessionId) : active?.id;
+    if (!sessionId) return res.status(409).json({ message: "No active academic session" });
+    if (typeof (dataStore as any).deleteClass !== "function") return res.status(503).json({ message: "Delete class unavailable" });
+    const deleted = await (dataStore as any).deleteClass(routeId(req.params.id), user.schoolId, sessionId);
+    if (!deleted) return res.status(404).json({ message: "Class not found" });
+    res.status(204).send();
+  });
   app.get("/api/management/sections", requireAuth, async (req, res) => { const user=currentUser(req); res.json(await dataStore.getSections(user.schoolId,idSchema.parse(req.query.sessionId),req.query.classId ? idSchema.parse(req.query.classId) : undefined)); });
   app.post("/api/management/sections", requireRole("admin", "principal"), async (req, res) => { const input=z.object({sessionId:z.number().int().positive(),classId:z.number().int().positive(),name:z.string().trim().min(1).max(50),displayOrder:z.number().int().optional(),isActive:z.boolean().optional()}).parse(req.body); const user=currentUser(req); res.status(201).json(await dataStore.createSection({...input,schoolId:user.schoolId,isActive:input.isActive ?? true})); });
   app.patch("/api/management/sections/:id", requireRole("admin", "principal"), async (req, res) => { const user=currentUser(req); const sessionId=idSchema.parse(req.body.sessionId); const input=z.object({name:z.string().trim().min(1).max(50).optional(),displayOrder:z.number().int().optional(),isActive:z.boolean().optional()}).parse(req.body); const result=await dataStore.updateSection(routeId(req.params.id),user.schoolId,sessionId,input); if(!result)return res.status(404).json({message:"Section not found"}); res.json(result); });
+  app.delete("/api/management/sections/:id", requireRole("admin", "principal"), async (req, res) => {
+    const user = currentUser(req);
+    const active = await dataStore.getActiveSession(user.schoolId);
+    const sessionId = req.query.sessionId ? idSchema.parse(req.query.sessionId) : active?.id;
+    if (!sessionId) return res.status(409).json({ message: "No active academic session" });
+    if (typeof (dataStore as any).deleteSection !== "function") return res.status(503).json({ message: "Delete section unavailable" });
+    const deleted = await (dataStore as any).deleteSection(routeId(req.params.id), user.schoolId, sessionId);
+    if (!deleted) return res.status(404).json({ message: "Section not found" });
+    res.status(204).send();
+  });
+
+  // === Academic Streams & Board Presets (Class 11–12 PCM, PCB, Commerce, Arts, Agriculture) ===
+  app.get("/api/academic-streams", requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session || typeof (dataStore as any).getAcademicStreams !== "function") return res.json([]);
+    res.json(await (dataStore as any).getAcademicStreams(user.schoolId, session.id));
+  });
+
+  app.post("/api/academic-streams", requireRole("admin", "principal"), async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const input = insertAcademicStreamSchema.parse(req.body);
+    const created = await (dataStore as any).createAcademicStream({
+      ...input,
+      schoolId: user.schoolId,
+      sessionId: session.id,
+      boardPattern: input.boardPattern ?? "MPBSE",
+      applicableClasses: input.applicableClasses ?? "11,12",
+      compulsorySubjects: input.compulsorySubjects ?? "",
+      coreSubjects: input.coreSubjects ?? "",
+      electiveOptions: input.electiveOptions ?? "",
+      maxElectives: input.maxElectives ?? 1,
+      isActive: true,
+    });
+    res.status(201).json(created);
+  });
+
+  app.delete("/api/academic-streams/:id", requireRole("admin", "principal"), async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const deleted = await (dataStore as any).deleteAcademicStream(routeId(req.params.id), user.schoolId, session.id);
+    if (!deleted) return res.status(404).json({ message: "Stream not found" });
+    res.status(204).send();
+  });
+
+  app.post("/api/academic-streams/preset", requireRole("admin", "principal"), async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const { board } = z.object({ board: z.enum(["MPBSE", "CBSE", "STATE", "ICSE"]) }).parse(req.body);
+
+    const presetsByBoard: Record<string, Array<{
+      name: string;
+      code: string;
+      compulsorySubjects: string;
+      coreSubjects: string;
+      electiveOptions: string;
+      maxElectives: number;
+    }>> = {
+      MPBSE: [
+        {
+          name: "Science — Mathematics Group (PCM / गणित संकाय)",
+          code: "PCM",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Physics, Chemistry, Mathematics",
+          electiveOptions: "Computer Science, Informatics Practices, Physical Education, Sanskrit",
+          maxElectives: 1,
+        },
+        {
+          name: "Science — Biology Group (PCB / जीव विज्ञान संकाय)",
+          code: "PCB",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Physics, Chemistry, Biology",
+          electiveOptions: "Informatics Practices, Physical Education, Biotechnology, Mathematics (Additional)",
+          maxElectives: 1,
+        },
+        {
+          name: "Science — Maths + Biology Combined (PCMB)",
+          code: "PCMB",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Physics, Chemistry, Mathematics, Biology",
+          electiveOptions: "Physical Education, Computer Science",
+          maxElectives: 1,
+        },
+        {
+          name: "Commerce Group (वाणिज्य संकाय)",
+          code: "COMMERCE",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Book Keeping & Accountancy, Business Studies",
+          electiveOptions: "Economics, Informatics Practices, Business Mathematics, Industrial Organisation, Physical Education",
+          maxElectives: 2,
+        },
+        {
+          name: "Arts / Humanities Group (कला संकाय)",
+          code: "ARTS",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "History, Political Science",
+          electiveOptions: "Geography, Economics, Sociology, Psychology, Sanskrit, Home Science, Drawing & Painting",
+          maxElectives: 2,
+        },
+        {
+          name: "Agriculture Group (कृषि संकाय)",
+          code: "AGRICULTURE",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Elements of Science & Maths for Agriculture, Crop Production & Horticulture, Animal Husbandry & Poultry Farming",
+          electiveOptions: "Physical Education, Computer Basics",
+          maxElectives: 1,
+        },
+      ],
+      CBSE: [
+        {
+          name: "Science — Engineering (PCM)",
+          code: "PCM",
+          compulsorySubjects: "English Core",
+          coreSubjects: "Physics, Chemistry, Mathematics",
+          electiveOptions: "Computer Science, Informatics Practices, Physical Education, Economics, Hindi Core, Engineering Graphics",
+          maxElectives: 2,
+        },
+        {
+          name: "Science — Medical (PCB)",
+          code: "PCB",
+          compulsorySubjects: "English Core",
+          coreSubjects: "Physics, Chemistry, Biology",
+          electiveOptions: "Physical Education, Psychology, Biotechnology, Informatics Practices, Hindi Core, Mathematics",
+          maxElectives: 2,
+        },
+        {
+          name: "Commerce Stream",
+          code: "COMMERCE",
+          compulsorySubjects: "English Core",
+          coreSubjects: "Accountancy, Business Studies, Economics",
+          electiveOptions: "Mathematics, Applied Mathematics, Informatics Practices, Entrepreneurship, Physical Education, Hindi Core",
+          maxElectives: 2,
+        },
+        {
+          name: "Humanities / Arts Stream",
+          code: "ARTS",
+          compulsorySubjects: "English Core",
+          coreSubjects: "History, Political Science",
+          electiveOptions: "Geography, Economics, Sociology, Psychology, Fine Arts, Physical Education, Hindi Core, Legal Studies",
+          maxElectives: 3,
+        },
+      ],
+      STATE: [
+        {
+          name: "Science — Mathematics (PCM)",
+          code: "PCM",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Physics, Chemistry, Mathematics",
+          electiveOptions: "Computer Science, Physical Education, Sanskrit",
+          maxElectives: 1,
+        },
+        {
+          name: "Science — Biology (PCB)",
+          code: "PCB",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Physics, Chemistry, Biology",
+          electiveOptions: "Computer Science, Physical Education, Agriculture",
+          maxElectives: 1,
+        },
+        {
+          name: "Commerce",
+          code: "COMMERCE",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Accountancy, Business Organisation / Studies, Economics",
+          electiveOptions: "Mathematics, Computer Application, Banking",
+          maxElectives: 1,
+        },
+        {
+          name: "Arts / Humanities",
+          code: "ARTS",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "History, Civics / Political Science",
+          electiveOptions: "Geography, Economics, Sociology, Education, Sanskrit, Home Science",
+          maxElectives: 2,
+        },
+        {
+          name: "Agriculture",
+          code: "AGRICULTURE",
+          compulsorySubjects: "Hindi, English",
+          coreSubjects: "Agronomy / Crop Production, Animal Husbandry, Agricultural Science",
+          electiveOptions: "Physical Education",
+          maxElectives: 1,
+        },
+      ],
+      ICSE: [
+        {
+          name: "ISC Science (PCM / PCB)",
+          code: "SCIENCE",
+          compulsorySubjects: "English",
+          coreSubjects: "Physics, Chemistry",
+          electiveOptions: "Mathematics, Biology, Computer Science, Biotechnology, Physical Education, Economics",
+          maxElectives: 3,
+        },
+        {
+          name: "ISC Commerce",
+          code: "COMMERCE",
+          compulsorySubjects: "English",
+          coreSubjects: "Accounts, Commerce, Economics",
+          electiveOptions: "Mathematics, Business Studies, Computer Science, Physical Education",
+          maxElectives: 2,
+        },
+        {
+          name: "ISC Humanities",
+          code: "ARTS",
+          compulsorySubjects: "English",
+          coreSubjects: "History, Political Science",
+          electiveOptions: "Geography, Sociology, Psychology, Economics, Art, Legal Studies",
+          maxElectives: 3,
+        },
+      ],
+    };
+
+    const boardLabelMap: Record<string, string> = {
+      MPBSE: "MP Board (MPBSE)",
+      CBSE: "CBSE (Central Board)",
+      STATE: "State Board (UP / RBSE / Bihar / CG / MH)",
+      ICSE: "ICSE / ISC Board",
+    };
+
+    await dataStore.updateSchool(user.schoolId, { boardAffiliation: boardLabelMap[board] } as any);
+
+    const existingSubjects = await dataStore.getSubjects(user.schoolId, session.id);
+    const existingSubjectNames = new Set(existingSubjects.map((s) => s.name.toLowerCase()));
+
+    const createdStreams = [];
+    for (const preset of presetsByBoard[board] ?? []) {
+      const stream = await (dataStore as any).createAcademicStream({
+        schoolId: user.schoolId,
+        sessionId: session.id,
+        name: preset.name,
+        code: preset.code,
+        boardPattern: board,
+        applicableClasses: "11,12",
+        compulsorySubjects: preset.compulsorySubjects,
+        coreSubjects: preset.coreSubjects,
+        electiveOptions: preset.electiveOptions,
+        maxElectives: preset.maxElectives,
+        isActive: true,
+      });
+      createdStreams.push(stream);
+
+      const allStreamSubjects = [
+        ...preset.compulsorySubjects.split(",").map((s) => ({ name: s.trim(), type: "compulsory_language" as const })),
+        ...preset.coreSubjects.split(",").map((s) => ({ name: s.trim(), type: "core" as const })),
+        ...preset.electiveOptions.split(",").map((s) => ({ name: s.trim(), type: "elective" as const })),
+      ].filter((item) => item.name.length > 0);
+
+      for (const subj of allStreamSubjects) {
+        if (!existingSubjectNames.has(subj.name.toLowerCase())) {
+          existingSubjectNames.add(subj.name.toLowerCase());
+          try {
+            await dataStore.createSubject({
+              schoolId: user.schoolId,
+              sessionId: session.id,
+              name: subj.name,
+              code: `${preset.code.slice(0, 3)}-${subj.name.replace(/[^A-Za-z]/g, "").slice(0, 4).toUpperCase()}`,
+              stream: preset.code,
+              subjectType: subj.type,
+              applicableClasses: "11,12",
+              isActive: true,
+            });
+          } catch {
+            // Ignore duplicate code/name
+          }
+        }
+      }
+    }
+
+    res.status(201).json({ board: boardLabelMap[board], streams: createdStreams });
+  });
+
+  app.put("/api/students/:id/stream", requireRole("admin", "principal", "staff", "teacher"), async (req, res) => {
+    const user = currentUser(req);
+    const studentId = routeId(req.params.id);
+    const input = z.object({
+      stream: z.string().max(120).nullable().optional(),
+      streamId: z.number().int().positive().nullable().optional(),
+      electedSubjects: z.string().max(1500).nullable().optional(),
+    }).parse(req.body);
+    const student = await dataStore.getStudent(studentId, user.schoolId);
+    if (!student) return res.status(404).json({ message: "Student not found" });
+    const updated = await dataStore.updateStudent(studentId, user.schoolId, {
+      stream: input.stream ?? null,
+      streamId: input.streamId ?? null,
+      electedSubjects: input.electedSubjects ?? null,
+    });
+    res.json(updated);
+  });
 
   // === Database backups ===
   const backupAdmin = requireRole("admin");
