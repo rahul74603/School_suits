@@ -26,7 +26,7 @@ export default function Fees() {
   const { data: user } = useAuth();
   const { classOptions } = useSchoolCatalog();
   const isStudent = user?.role === "student";
-  const canCollect = ["admin", "accountant"].includes(user?.role ?? "");
+  const canCollect = ["admin", "principal", "accountant"].includes(user?.role ?? "");
   const canManageDues = ["admin", "principal", "accountant", "staff"].includes(user?.role ?? "");
 
   const { toast } = useToast();

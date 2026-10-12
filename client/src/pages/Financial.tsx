@@ -37,7 +37,7 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 export default function Financial() {
   const { data: user } = useAuth();
-  const manager = user?.role === "admin" || user?.role === "accountant";
+  const manager = ["admin", "principal", "accountant"].includes(user?.role ?? "");
   const qc = useQueryClient();
   const [month, setMonth] = useState(String(new Date().getMonth() + 1));
   const [year, setYear] = useState(String(new Date().getFullYear()));

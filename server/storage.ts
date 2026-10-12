@@ -30,7 +30,8 @@ export interface IStorage {
   createBackupRecord(input: Omit<BackupRecord, "id">): Promise<BackupRecord>;
   updateBackupRecord(id: number, schoolId: number, updates: Partial<BackupRecord>): Promise<BackupRecord | undefined>;
   deleteBackupRecord(id: number, schoolId: number): Promise<boolean>;
-  createDocument(input: Omit<Document, "id" | "uploadedAt">): Promise<Document>;
+  createDocument(input: Omit<Document, "id" | "uploadedAt" | "fileData" | "status" | "rejectionReason" | "remarks" | "reviewedByUserId" | "reviewedAt"> & Partial<Pick<Document, "fileData" | "status" | "rejectionReason" | "remarks" | "reviewedByUserId" | "reviewedAt">>): Promise<Document>;
+  reviewDocument?(id: number, schoolId: number, updates: Partial<Pick<Document, "status" | "rejectionReason" | "remarks" | "reviewedByUserId" | "reviewedAt" | "fileData" | "filename" | "mimeType" | "sizeBytes">>): Promise<Document | undefined>;
   deactivateDocument(id: number, schoolId: number): Promise<Document | undefined>;
   importStudents(schoolId: number, sessionId: number, rows: Array<Record<string, unknown>>): Promise<{ created: Student[]; errors: Array<{ row: number; message: string }> }>;
   importStaff(schoolId: number, rows: Array<Record<string, unknown>>): Promise<{ created: Staff[]; errors: Array<{ row: number; message: string }> }>;
@@ -223,14 +224,84 @@ export class DatabaseStorage implements IStorage {
   async updateBackupRecord(id: number, schoolId: number, updates: Partial<BackupRecord>): Promise<BackupRecord | undefined> { const [value] = await db.update(backupRecords).set(updates).where(and(eq(backupRecords.id, id), eq(backupRecords.schoolId, schoolId))).returning(); return value; }
   async deleteBackupRecord(id: number, schoolId: number): Promise<boolean> { const result = await db.update(backupRecords).set({ status: "deleted" }).where(and(eq(backupRecords.id, id), eq(backupRecords.schoolId, schoolId))).returning({ id: backupRecords.id }); return result.length > 0; }
 
-  async createDocument(input: Omit<Document, "id" | "uploadedAt">): Promise<Document> {
-    const [document] = await db.insert(documents).values(input).returning();
+  async createDocument(input: Omit<Document, "id" | "uploadedAt" | "fileData" | "status" | "rejectionReason" | "remarks" | "reviewedByUserId" | "reviewedAt"> & Partial<Pick<Document, "fileData" | "status" | "rejectionReason" | "remarks" | "reviewedByUserId" | "reviewedAt">>): Promise<Document> {
+    const [document] = await db.insert(documents).values({
+      fileData: null,
+      status: "pending",
+      rejectionReason: null,
+      remarks: null,
+      reviewedByUserId: null,
+      reviewedAt: null,
+      ...input,
+    }).returning();
+    return document;
+  }
+
+  async reviewDocument(id: number, schoolId: number, updates: Partial<Pick<Document, "status" | "rejectionReason" | "remarks" | "reviewedByUserId" | "reviewedAt" | "fileData" | "filename" | "mimeType" | "sizeBytes">>): Promise<Document | undefined> {
+    const [document] = await db.update(documents).set(updates).where(and(eq(documents.id, id), eq(documents.schoolId, schoolId), eq(documents.isActive, true))).returning();
     return document;
   }
 
   async deactivateDocument(id: number, schoolId: number): Promise<Document | undefined> {
     const [document] = await db.update(documents).set({ isActive: false }).where(and(eq(documents.id, id), eq(documents.schoolId, schoolId))).returning();
     return document;
+  }
+
+  async ensureExtendedSchema(): Promise<void> {
+    try {
+      await db.execute(sql`
+        ALTER TABLE "students"
+          ADD COLUMN IF NOT EXISTS "gender" text,
+          ADD COLUMN IF NOT EXISTS "blood_group" text,
+          ADD COLUMN IF NOT EXISTS "religion" text,
+          ADD COLUMN IF NOT EXISTS "nationality" text DEFAULT 'Indian',
+          ADD COLUMN IF NOT EXISTS "mother_tongue" text,
+          ADD COLUMN IF NOT EXISTS "medium" text DEFAULT 'Hindi',
+          ADD COLUMN IF NOT EXISTS "admission_date" date,
+          ADD COLUMN IF NOT EXISTS "admission_type" text DEFAULT 'new',
+          ADD COLUMN IF NOT EXISTS "samagra_id" text,
+          ADD COLUMN IF NOT EXISTS "pen_number" text,
+          ADD COLUMN IF NOT EXISTS "apaar_id" text,
+          ADD COLUMN IF NOT EXISTS "father_occupation" text,
+          ADD COLUMN IF NOT EXISTS "mother_occupation" text,
+          ADD COLUMN IF NOT EXISTS "annual_income" integer,
+          ADD COLUMN IF NOT EXISTS "alternate_contact" text,
+          ADD COLUMN IF NOT EXISTS "parent_email" text,
+          ADD COLUMN IF NOT EXISTS "bank_account_no" text,
+          ADD COLUMN IF NOT EXISTS "bank_ifsc" text,
+          ADD COLUMN IF NOT EXISTS "bank_name" text,
+          ADD COLUMN IF NOT EXISTS "rte_admission" boolean NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS "cwsn_status" text DEFAULT 'No',
+          ADD COLUMN IF NOT EXISTS "previous_school_udise" text,
+          ADD COLUMN IF NOT EXISTS "previous_school_board" text,
+          ADD COLUMN IF NOT EXISTS "previous_school_address" text,
+          ADD COLUMN IF NOT EXISTS "previous_school_state" text,
+          ADD COLUMN IF NOT EXISTS "previous_school_district" text,
+          ADD COLUMN IF NOT EXISTS "previous_passing_year" text,
+          ADD COLUMN IF NOT EXISTS "previous_percentage" text,
+          ADD COLUMN IF NOT EXISTS "migration_certificate_no" text,
+          ADD COLUMN IF NOT EXISTS "migration_issue_date" date,
+          ADD COLUMN IF NOT EXISTS "deo_countersigned" boolean NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS "leaving_reason" text,
+          ADD COLUMN IF NOT EXISTS "previous_conduct" text DEFAULT 'Good',
+          ADD COLUMN IF NOT EXISTS "birth_certificate_submitted" boolean NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS "aadhaar_submitted" boolean NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS "caste_certificate_submitted" boolean NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS "migration_submitted" boolean NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS "photo_submitted" boolean NOT NULL DEFAULT false;
+      `);
+      await db.execute(sql`
+        ALTER TABLE "documents"
+          ADD COLUMN IF NOT EXISTS "file_data" text,
+          ADD COLUMN IF NOT EXISTS "status" text NOT NULL DEFAULT 'pending',
+          ADD COLUMN IF NOT EXISTS "rejection_reason" text,
+          ADD COLUMN IF NOT EXISTS "remarks" text,
+          ADD COLUMN IF NOT EXISTS "reviewed_by_user_id" integer,
+          ADD COLUMN IF NOT EXISTS "reviewed_at" timestamp;
+      `);
+    } catch {
+      // Ignore in mock test environments without PostgreSQL
+    }
   }
 
   async importStudents(schoolId: number, sessionId: number, rows: Array<Record<string, unknown>>) {

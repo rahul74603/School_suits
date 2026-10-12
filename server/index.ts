@@ -34,14 +34,14 @@ app.use(express.text({ type: ["text/csv", "text/plain"], limit: "2mb" }));
 
 app.use(
   express.json({
-    limit: "100kb",
+    limit: "15mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false, limit: "100kb" }));
+app.use(express.urlencoded({ extended: false, limit: "15mb" }));
 app.use(session({
   name: "school_suite.sid",
   secret: process.env.SESSION_SECRET || (isProduction ? (() => {

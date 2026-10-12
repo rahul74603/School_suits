@@ -41,7 +41,7 @@ export default function Payroll() {
   const { data: user } = useAuth();
   const school = useSchool();
   const session = useActiveSession();
-  const manager = user?.role === "admin" || user?.role === "accountant";
+  const manager = ["admin", "principal", "accountant"].includes(user?.role ?? "");
   const qc = useQueryClient();
 
   const [staffId, setStaffId] = useState("");

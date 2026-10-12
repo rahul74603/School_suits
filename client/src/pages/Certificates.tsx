@@ -22,7 +22,7 @@ export default function Certificates() {
   const qc = useQueryClient();
   const school = useSchool();
   const session = useActiveSession();
-  const isManager = ["admin", "principal"].includes(user?.role ?? "");
+  const isManager = ["admin", "principal", "accountant"].includes(user?.role ?? "");
   const isStudent = user?.role === "student";
   const today = new Date().toISOString().slice(0, 10);
 

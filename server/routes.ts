@@ -49,6 +49,9 @@ export async function registerRoutes(
   app: Express,
   dataStore: IStorage = storage,
 ): Promise<Server> {
+  if (typeof (dataStore as any).ensureExtendedSchema === "function") {
+    await (dataStore as any).ensureExtendedSchema();
+  }
   const audit = async (input: { schoolId?: number | null; sessionId?: number | null; actorUserId?: number | null; actorRole?: string | null; action: string; targetType?: string | null; targetId?: number | null; metadata?: Record<string, unknown> }) => { if (typeof (dataStore as any).createAuditEvent !== "function") return; try { await (dataStore as any).createAuditEvent({ schoolId: input.schoolId ?? null, sessionId: input.sessionId ?? null, actorUserId: input.actorUserId ?? null, actorRole: input.actorRole ?? null, action: input.action, targetType: input.targetType ?? null, targetId: input.targetId ?? null, metadata: input.metadata ? JSON.stringify(input.metadata) : null }); } catch { /* audit failure must not break the protected business operation */ } };
   app.use(csrfProtection);
   app.use(async (req, res, next) => { const sessionUser = req.session.user; const getState = (dataStore as any).getUserAuthState; if (!sessionUser || typeof getState !== "function") return next(); try { const current = await getState(sessionUser.id); if (!current || !current.isActive || current.schoolId !== sessionUser.schoolId || current.role !== sessionUser.role || (sessionUser.authVersion !== undefined && current.authVersion !== sessionUser.authVersion)) { req.session.destroy(() => undefined); return res.status(401).json({ message: "Authentication required" }); } next(); } catch { return res.status(503).json({ message: "Authentication service unavailable" }); } });
@@ -620,29 +623,217 @@ export async function registerRoutes(
   app.post("/api/backups/:id/restore", backupAdmin, async (req,res)=>{const user=currentUser(req);if(req.body?.confirmation!=="RESTORE_DATABASE")return res.status(400).json({message:"Explicit confirmation is required"});if(restoreInProgress)return res.status(409).json({message:"Another restore is already in progress"});const value=await dataStore.getBackup(routeId(req.params.id),user.schoolId);if(!value||value.status!=="completed")return res.status(404).json({message:"Backup not found"});const safetyKey=newBackupKey();let safety:any;try{const safetyRecord=await dataStore.createBackupRecord({schoolId:user.schoolId,createdByUserId:user.id,createdAt:new Date(),backupType:"postgres-custom",status:"pending",sizeBytes:null,storageKey:safetyKey,restoreStatus:null,restoreStartedAt:null,restoreCompletedAt:null,errorMessage:null});const size=await createNativeDump(safetyKey);safety=await dataStore.updateBackupRecord(safetyRecord.id,user.schoolId,{status:"completed",sizeBytes:size});await dataStore.updateBackupRecord(value.id,user.schoolId,{restoreStatus:"running",restoreStartedAt:new Date(),errorMessage:null});await restoreNativeDump(value.storageKey);const done=await dataStore.updateBackupRecord(value.id,user.schoolId,{restoreStatus:"completed",restoreCompletedAt:new Date()});return res.json({message:"Database restored",backup:backupDto(done),safetyBackupId:safety?.id});}catch(error){await dataStore.updateBackupRecord(value.id,user.schoolId,{restoreStatus:"failed",errorMessage:error instanceof Error?error.message:"Restore failed"});return res.status(503).json({message:error instanceof Error?error.message:"Restore failed",safetyBackupId:safety?.id});}});
 
   // === Documents, imports, exports and reports ===
-  const management = requireRole("admin", "principal");
+  const management = requireRole("admin", "principal", "accountant");
   app.get("/api/documents", requireAuth, async (req, res) => {
-    const user = currentUser(req); const sessionId = req.query.sessionId ? idSchema.parse(req.query.sessionId) : undefined;
-    if (user.role === "student") { const session = await dataStore.getActiveSession(user.schoolId); const student = session ? await dataStore.getStudentForUser(user.id, user.schoolId, session.id) : undefined; if (!student) return res.json([]); const docs = await dataStore.getDocuments(user.schoolId, session?.id); return res.json(docs.filter((d) => d.ownerType === "student" && d.ownerId === student.id)); }
-    if (!["admin", "principal", "teacher"].includes(user.role)) return res.status(403).json({ message: "Document access is not authorized" });
-    const docs = await dataStore.getDocuments(user.schoolId, sessionId);
-    if (user.role === "teacher") { const session = sessionId ? (await dataStore.getAcademicSessions(user.schoolId)).find((value) => value.id === sessionId) : await dataStore.getActiveSession(user.schoolId); if (!session) return res.json([]); const assignments = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id); const allowed = new Set((await Promise.all(assignments.map((assignment) => dataStore.getStudents(user.schoolId, { class: assignment.className, section: assignment.section }, session.id)))).flat().map((student) => student.id)); return res.json(docs.filter((document) => document.ownerType !== "student" || allowed.has(document.ownerId ?? -1))); }
+    const user = currentUser(req);
+    const sessionId = req.query.sessionId ? idSchema.parse(req.query.sessionId) : undefined;
+    const filterOwnerType = typeof req.query.ownerType === "string" ? req.query.ownerType : undefined;
+    const filterOwnerId = typeof req.query.ownerId === "string" && req.query.ownerId ? idSchema.parse(req.query.ownerId) : undefined;
+
+    if (user.role === "student") {
+      const session = await dataStore.getActiveSession(user.schoolId);
+      const student = session ? await dataStore.getStudentForUser(user.id, user.schoolId, session.id) : undefined;
+      if (!student) return res.json([]);
+      const docs = await dataStore.getDocuments(user.schoolId, session?.id);
+      return res.json(docs.filter((d) => d.ownerType === "student" && d.ownerId === student.id));
+    }
+
+    if (!["admin", "principal", "accountant", "staff", "teacher"].includes(user.role)) {
+      return res.status(403).json({ message: "Document access is not authorized" });
+    }
+
+    let docs = await dataStore.getDocuments(user.schoolId, sessionId);
+    if (filterOwnerType) docs = docs.filter((d) => d.ownerType === filterOwnerType);
+    if (filterOwnerId !== undefined) docs = docs.filter((d) => d.ownerId === filterOwnerId);
+
+    if (user.role === "teacher") {
+      const session = sessionId
+        ? (await dataStore.getAcademicSessions(user.schoolId)).find((value) => value.id === sessionId)
+        : await dataStore.getActiveSession(user.schoolId);
+      if (!session) return res.json([]);
+      const assignments = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id);
+      const allowed = new Set(
+        (
+          await Promise.all(
+            assignments.map((assignment) =>
+              dataStore.getStudents(
+                user.schoolId,
+                {
+                  class: assignment.className,
+                  section: assignment.section === "ALL" ? undefined : assignment.section,
+                },
+                session.id,
+              ),
+            ),
+          )
+        )
+          .flat()
+          .map((student) => student.id),
+      );
+      return res.json(docs.filter((document) => document.ownerType !== "student" || allowed.has(document.ownerId ?? -1)));
+    }
     res.json(docs);
   });
+
   const createDocumentHandler = async (req: any, res: any) => {
-    const input = z.object({ sessionId: z.number().int().positive().nullable().optional(), ownerType: z.enum(["student", "staff", "school"]), ownerId: z.number().int().positive().nullable().optional(), documentType: z.string().trim().min(1).max(60), filename: z.string().trim().regex(/^[^\\/\\\\]{1,180}$/), mimeType: z.enum(["application/pdf", "image/jpeg", "image/png"]), sizeBytes: z.number().int().positive().max(10 * 1024 * 1024) }).parse(req.body);
     const user = currentUser(req);
     const activeSession = await dataStore.getActiveSession(user.schoolId);
+    const input = z.object({
+      sessionId: z.number().int().positive().nullable().optional(),
+      ownerType: z.enum(["student", "staff", "school"]).optional(),
+      ownerId: z.number().int().positive().nullable().optional(),
+      documentType: z.string().trim().min(1).max(60),
+      filename: z.string().trim().regex(/^[^\\/\\\\]{1,180}$/),
+      mimeType: z.enum(["application/pdf", "image/jpeg", "image/png", "image/jpg", "image/webp"]),
+      sizeBytes: z.number().int().positive().max(10 * 1024 * 1024).optional(),
+      fileData: z.string().max(15 * 1024 * 1024).nullable().optional(),
+      remarks: z.string().max(500).nullable().optional(),
+    }).parse(req.body);
+
     const targetSessionId = input.sessionId ?? activeSession?.id ?? null;
-    if (input.ownerType === "student") { const owner = await dataStore.getStudent(input.ownerId!, user.schoolId); if (!owner || (input.sessionId && owner.sessionId !== input.sessionId)) return res.status(404).json({ message: "Document owner not found" }); }
-    if (input.ownerType === "staff") { const owner = (await dataStore.getStaff(user.schoolId)).find((value) => value.id === input.ownerId); if (!owner) return res.status(404).json({ message: "Document owner not found" }); }
-    if (input.sessionId && !(await dataStore.getAcademicSessions(user.schoolId)).some((session) => session.id === input.sessionId)) return res.status(404).json({ message: "Session not found" });
-    const document = await dataStore.createDocument({ ...input, schoolId: user.schoolId, ownerId: input.ownerId ?? null, sessionId: targetSessionId, storageKey: `metadata-only/${user.schoolId}/${randomUUID()}`, uploadedByUserId: user.id, isActive: true });
-    res.status(201).json({ id: document.id, schoolId: document.schoolId, sessionId: document.sessionId, ownerType: document.ownerType, ownerId: document.ownerId, documentType: document.documentType, filename: document.filename, mimeType: document.mimeType, sizeBytes: document.sizeBytes, isActive: document.isActive, uploadedAt: document.uploadedAt });
+    let ownerType = input.ownerType ?? "student";
+    let ownerId = input.ownerId ?? null;
+
+    if (user.role === "student") {
+      if (!activeSession) return res.status(409).json({ message: "No active academic session" });
+      const ownStudent = await dataStore.getStudentForUser(user.id, user.schoolId, activeSession.id);
+      if (!ownStudent) return res.status(404).json({ message: "Your student profile is not linked yet" });
+      ownerType = "student";
+      ownerId = ownStudent.id;
+    } else {
+      if (ownerType === "student") {
+        if (!ownerId) return res.status(400).json({ message: "Please select a student" });
+        const owner = await dataStore.getStudent(ownerId, user.schoolId);
+        if (!owner || (input.sessionId && owner.sessionId !== input.sessionId)) {
+          return res.status(404).json({ message: "Document owner not found" });
+        }
+      }
+      if (ownerType === "staff") {
+        if (!ownerId) return res.status(400).json({ message: "Please select a staff member" });
+        const owner = (await dataStore.getStaff(user.schoolId)).find((value) => value.id === ownerId);
+        if (!owner) return res.status(404).json({ message: "Document owner not found" });
+      }
+    }
+
+    if (input.sessionId && !(await dataStore.getAcademicSessions(user.schoolId)).some((session) => session.id === input.sessionId)) {
+      return res.status(404).json({ message: "Session not found" });
+    }
+
+    const computedSize =
+      input.sizeBytes ??
+      (input.fileData ? Math.max(1, Math.round((input.fileData.length * 3) / 4)) : 1024);
+
+    const initialStatus = ["admin", "principal", "accountant"].includes(user.role)
+      ? "approved"
+      : "pending";
+
+    const document = await dataStore.createDocument({
+      schoolId: user.schoolId,
+      ownerType,
+      ownerId,
+      sessionId: targetSessionId,
+      documentType: input.documentType,
+      filename: input.filename,
+      mimeType: input.mimeType === "image/jpg" ? "image/jpeg" : input.mimeType,
+      sizeBytes: Math.min(computedSize, 10 * 1024 * 1024),
+      fileData: input.fileData ?? null,
+      status: initialStatus,
+      rejectionReason: null,
+      remarks: input.remarks ?? null,
+      reviewedByUserId: initialStatus === "approved" ? user.id : null,
+      reviewedAt: initialStatus === "approved" ? new Date() : null,
+      storageKey: `uploaded/${user.schoolId}/${randomUUID()}`,
+      uploadedByUserId: user.id,
+      isActive: true,
+    });
+
+    res.status(201).json(document);
   };
-  app.post("/api/documents/metadata", management, createDocumentHandler);
-  app.post("/api/documents", management, createDocumentHandler);
-  app.delete("/api/documents/:id", management, async (req, res) => { const value=await dataStore.deactivateDocument(routeId(req.params.id),currentUser(req).schoolId); if(!value)return res.status(404).json({message:"Document not found"}); res.json({id:value.id,isActive:value.isActive}); });
+
+  app.post("/api/documents/metadata", requireAuth, createDocumentHandler);
+  app.post("/api/documents", requireAuth, createDocumentHandler);
+
+  app.patch("/api/documents/:id/review", requireRole("admin", "principal", "accountant"), async (req, res) => {
+    const user = currentUser(req);
+    const id = routeId(req.params.id);
+    const input = z.object({
+      status: z.enum(["approved", "rejected", "pending"]),
+      rejectionReason: z.string().max(1000).nullable().optional(),
+      remarks: z.string().max(500).nullable().optional(),
+    }).parse(req.body);
+
+    if (input.status === "rejected" && (!input.rejectionReason || !input.rejectionReason.trim())) {
+      return res.status(400).json({ message: "Please provide a reason for rejecting this document (e.g., Photo blur / Wrong document)" });
+    }
+
+    if (typeof (dataStore as any).reviewDocument !== "function") {
+      return res.status(503).json({ message: "Document review service unavailable" });
+    }
+
+    const updated = await (dataStore as any).reviewDocument(id, user.schoolId, {
+      status: input.status,
+      rejectionReason: input.status === "rejected" ? input.rejectionReason?.trim() ?? null : null,
+      remarks: input.remarks ?? null,
+      reviewedByUserId: user.id,
+      reviewedAt: new Date(),
+    });
+    if (!updated) return res.status(404).json({ message: "Document not found" });
+    res.json(updated);
+  });
+
+  app.patch("/api/documents/:id/reupload", requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const id = routeId(req.params.id);
+    const input = z.object({
+      filename: z.string().trim().regex(/^[^\\/\\\\]{1,180}$/),
+      mimeType: z.enum(["application/pdf", "image/jpeg", "image/png", "image/jpg", "image/webp"]),
+      sizeBytes: z.number().int().positive().max(10 * 1024 * 1024).optional(),
+      fileData: z.string().max(15 * 1024 * 1024),
+      remarks: z.string().max(500).nullable().optional(),
+    }).parse(req.body);
+
+    const docs = await dataStore.getDocuments(user.schoolId);
+    const existing = docs.find((d) => d.id === id);
+    if (!existing) return res.status(404).json({ message: "Document not found" });
+
+    if (user.role === "student") {
+      const session = await dataStore.getActiveSession(user.schoolId);
+      const ownStudent = session ? await dataStore.getStudentForUser(user.id, user.schoolId, session.id) : undefined;
+      if (!ownStudent || existing.ownerType !== "student" || existing.ownerId !== ownStudent.id) {
+        return res.status(403).json({ message: "You can only re-upload your own documents" });
+      }
+    }
+
+    const updated = await (dataStore as any).reviewDocument(id, user.schoolId, {
+      filename: input.filename,
+      mimeType: input.mimeType === "image/jpg" ? "image/jpeg" : input.mimeType,
+      sizeBytes: input.sizeBytes ?? Math.max(1, Math.round((input.fileData.length * 3) / 4)),
+      fileData: input.fileData,
+      status: ["admin", "principal", "accountant"].includes(user.role) ? "approved" : "pending",
+      rejectionReason: null,
+      remarks: input.remarks ?? existing.remarks ?? null,
+    });
+    res.json(updated);
+  });
+
+  app.delete("/api/documents/:id", requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const id = routeId(req.params.id);
+    if (user.role === "student") {
+      const session = await dataStore.getActiveSession(user.schoolId);
+      const ownStudent = session ? await dataStore.getStudentForUser(user.id, user.schoolId, session.id) : undefined;
+      const docs = await dataStore.getDocuments(user.schoolId, session?.id);
+      const target = docs.find((d) => d.id === id);
+      if (!ownStudent || !target || target.ownerType !== "student" || target.ownerId !== ownStudent.id || target.status === "approved") {
+        return res.status(403).json({ message: "Approved documents cannot be deleted by students" });
+      }
+    } else if (!["admin", "principal", "accountant"].includes(user.role)) {
+      return res.status(403).json({ message: "Only Admin, Principal, or Accountant can delete documents" });
+    }
+    const value = await dataStore.deactivateDocument(id, user.schoolId);
+    if (!value) return res.status(404).json({ message: "Document not found" });
+    res.json({ id: value.id, isActive: value.isActive });
+  });
   const importCsv = async (req: any, res: any, kind: "students" | "staff") => { try { const user=currentUser(req); const parsed=parseCsv(typeof req.body === "string" ? req.body : ""); if (kind === "students") { const session=await dataStore.getActiveSession(user.schoolId); if(!session)return res.status(409).json({message:"No active session"}); const result=await dataStore.importStudents(user.schoolId,session.id,parsed.rows); return res.status(201).json({created:result.created.length,errors:result.errors}); } const result=await dataStore.importStaff(user.schoolId,parsed.rows); return res.status(201).json({created:result.created.length,errors:result.errors}); } catch (error) { const message=error instanceof Error ? error.message : "Import failed"; try { const parsed=JSON.parse(message); if(parsed.importErrors)return res.status(422).json(parsed); } catch {} return res.status(400).json({message}); } };
   app.post("/api/import/students", requireRole("admin", "principal", "accountant"), (req,res)=>importCsv(req,res,"students"));
   app.post("/api/import/staff", management, (req,res)=>importCsv(req,res,"staff"));
@@ -1236,7 +1427,7 @@ export async function registerRoutes(
   });
 
   // === Payroll ===
-  const payrollManagers = requireRole("admin", "accountant");
+  const payrollManagers = requireRole("admin", "principal", "accountant");
   const payrollReaders = requireRole("admin", "principal", "accountant", "staff", "teacher");
   async function payrollSession(user: ReturnType<typeof currentUser>) { return dataStore.getActiveSession(user.schoolId); }
   async function ownStaffId(user: ReturnType<typeof currentUser>, sessionId?: number) {
@@ -1244,7 +1435,7 @@ export async function registerRoutes(
     const staffMember = await dataStore.getStaffForUser(user.id, user.schoolId);
     return staffMember?.id;
   }
-  app.post(api.payroll.staffLinks.path, requireRole("admin"), async (req, res) => {
+  app.post(api.payroll.staffLinks.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const input = api.payroll.staffLinks.input.parse(req.body); const user = currentUser(req);
     const link = await dataStore.createStaffUserLink({ ...input, schoolId: user.schoolId });
     return link ? res.status(201).json(link) : res.status(400).json({ message: "Staff or user is invalid for this school" });
@@ -1309,7 +1500,7 @@ export async function registerRoutes(
 
   // === Financial management ===
   const financialReaders = requireRole("admin", "principal", "accountant");
-  const financialManagers = requireRole("admin", "accountant");
+  const financialManagers = requireRole("admin", "principal", "accountant");
   function financialRange(query: any): { from?: string; to?: string } {
     const month = typeof query.month === "string" ? Number(query.month) : undefined;
     const year = typeof query.year === "string" ? Number(query.year) : undefined;
@@ -1366,7 +1557,7 @@ export async function registerRoutes(
     res.json(students.map(safeStudent));
   });
 
-  app.post(api.students.create.path, requireRole("admin", "principal", "staff", "teacher"), async (req, res) => {
+  app.post(api.students.create.path, requireRole("admin", "principal", "accountant", "staff", "teacher"), async (req, res) => {
     const input = api.students.create.input.parse(req.body);
     const user = currentUser(req);
     const activeSession = await dataStore.getActiveSession(user.schoolId);
@@ -1383,7 +1574,7 @@ export async function registerRoutes(
     if (user.role === "student") {
       const own = activeSession ? await dataStore.getStudentForUser(user.id, user.schoolId, activeSession.id) : undefined;
       if (!own || own.id !== requestedId) return res.status(404).json({ message: "Student not found" });
-      return res.json(safeStudent(own));
+      return res.json(own);
     }
     const student = await dataStore.getStudent(requestedId, user.schoolId);
     if (!student) return res.status(404).json({ message: "Student not found" });
@@ -1393,10 +1584,10 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Student not found" });
       }
     }
-    res.json(safeStudent(student));
+    res.json(student);
   });
 
-  app.put(api.students.update.path, requireRole("admin", "principal", "staff", "teacher"), async (req, res) => {
+  app.put(api.students.update.path, requireRole("admin", "principal", "accountant", "staff", "teacher"), async (req, res) => {
     const input = api.students.update.input.parse(req.body);
     const user = currentUser(req);
     const updated = await dataStore.updateStudent(routeId(req.params.id), user.schoolId, input);
@@ -1404,13 +1595,13 @@ export async function registerRoutes(
     res.json(safeStudent(updated));
   });
 
-  app.post(api.students.deactivate.path, requireRole("admin", "principal", "staff"), async (req, res) => {
+  app.post(api.students.deactivate.path, requireRole("admin", "principal", "accountant", "staff"), async (req, res) => {
     const updated = await dataStore.deactivateStudent(routeId(req.params.id), currentUser(req).schoolId);
     if (!updated) return res.status(404).json({ message: "Student not found" });
     res.json(safeStudent(updated));
   });
 
-  app.post(api.students.promote.path, requireRole("admin", "principal"), async (req, res) => {
+  app.post(api.students.promote.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const input = api.students.promote.input.parse(req.body);
     const user = currentUser(req);
     await dataStore.promoteStudents(input.studentIds, user.schoolId, input.targetClass);
@@ -1489,7 +1680,7 @@ export async function registerRoutes(
     res.json(structures);
   });
 
-  app.post(api.fees.structures.create.path, requireRole("admin", "accountant"), async (req, res) => {
+  app.post(api.fees.structures.create.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const input = api.fees.structures.create.input.parse(req.body);
     const user = currentUser(req);
     const activeSession = await dataStore.getActiveSession(user.schoolId);
@@ -1502,14 +1693,14 @@ export async function registerRoutes(
     res.status(201).json(structure);
   });
 
-  app.put(api.fees.structures.update.path, requireRole("admin", "accountant"), async (req, res) => {
+  app.put(api.fees.structures.update.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const input = api.fees.structures.update.input.parse(req.body);
     const updated = await dataStore.updateFeeStructure(routeId(req.params.id), currentUser(req).schoolId, input);
     if (!updated) return res.status(404).json({ message: "Fee structure not found" });
     res.json(updated);
   });
 
-  app.delete(api.fees.structures.delete.path, requireRole("admin", "accountant"), async (req, res) => {
+  app.delete(api.fees.structures.delete.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const deleted = await dataStore.deleteFeeStructure(routeId(req.params.id), currentUser(req).schoolId);
     if (!deleted) return res.status(409).json({ message: "Fee structure not found or already used by fee records" });
     res.status(204).send();
@@ -1531,7 +1722,7 @@ export async function registerRoutes(
     res.json(payments);
   });
 
-  app.post(api.fees.payments.create.path, requireRole("admin", "accountant"), async (req, res) => {
+  app.post(api.fees.payments.create.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const input = api.fees.payments.create.input.parse(req.body);
     const user = currentUser(req);
     const activeSession = await dataStore.getActiveSession(user.schoolId);
@@ -1554,12 +1745,12 @@ export async function registerRoutes(
   });
 
   // === Staff ===
-  app.get(api.staff.list.path, requireRole("admin", "principal"), async (req, res) => {
+  app.get(api.staff.list.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const staffMembers = await dataStore.getStaff(currentUser(req).schoolId);
     res.json(staffMembers);
   });
 
-  app.post(api.staff.create.path, requireRole("admin", "principal"), async (req, res) => {
+  app.post(api.staff.create.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const input = api.staff.create.input.parse(req.body);
     const staffMember = await dataStore.createStaff({
       ...input,
@@ -1568,7 +1759,7 @@ export async function registerRoutes(
     res.status(201).json(staffMember);
   });
 
-  app.put(api.staff.update.path, requireRole("admin", "principal"), async (req, res) => {
+  app.put(api.staff.update.path, requireRole("admin", "principal", "accountant"), async (req, res) => {
     const input = api.staff.update.input.parse(req.body);
     const updated = await dataStore.updateStaff(routeId(req.params.id), currentUser(req).schoolId, input);
     if (!updated) return res.status(404).json({ message: "Staff member not found" });

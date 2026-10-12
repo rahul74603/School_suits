@@ -103,8 +103,8 @@ export default function Students() {
   const promote = usePromoteStudents();
   const { toast } = useToast();
   const auth = useAuth();
-  const isManager = ["admin", "principal"].includes(auth.data?.role ?? "");
-  const canAdmit = ["admin", "principal", "staff", "teacher"].includes(auth.data?.role ?? "");
+  const isManager = ["admin", "principal", "accountant"].includes(auth.data?.role ?? "");
+  const canAdmit = ["admin", "principal", "accountant", "staff", "teacher"].includes(auth.data?.role ?? "");
   const schoolQuery = useSchool(auth.data?.schoolId);
   const sessionQuery = useActiveSession();
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
