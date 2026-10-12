@@ -133,16 +133,18 @@ export async function registerRoutes(
   app.post("/api/school-users", requireRole("admin", "principal"), async (req, res) => {
     const actor = currentUser(req);
     const input = z.object({
-      username: z.string().trim().min(3).max(80).regex(/^[a-zA-Z0-9._-]+$/, "Username may only contain letters, numbers, dots, underscores, and hyphens"),
+      username: z.string().trim().min(3).max(120).regex(/^[a-zA-Z0-9._@-]+$/, "Login ID / Email may only contain letters, numbers, @, dots, underscores, and hyphens"),
       name: z.string().trim().min(1).max(120),
       role: z.enum(["admin", "principal", "accountant", "teacher", "staff", "student"]),
-      password: z.string().min(8).max(200),
+      password: z.string().min(6).max(200),
+      staffId: z.number().int().positive().nullable().optional(),
+      studentId: z.number().int().positive().nullable().optional(),
     }).parse(req.body);
     if (actor.role === "principal" && input.role === "admin") {
       return res.status(403).json({ message: "Principals cannot create administrator accounts" });
     }
     const existing = await dataStore.getUserByUsername(input.username);
-    if (existing) return res.status(409).json({ message: "Username already exists" });
+    if (existing) return res.status(409).json({ message: "Login ID / Email already exists" });
     const created = await dataStore.createUser({
       username: input.username,
       name: input.name,
@@ -150,8 +152,50 @@ export async function registerRoutes(
       passwordHash: await hashPassword(input.password),
       schoolId: actor.schoolId,
     });
+    if (input.staffId && (input.role === "teacher" || input.role === "staff")) {
+      try {
+        await dataStore.createStaffUserLink({
+          staffId: input.staffId,
+          userId: created.id,
+          schoolId: actor.schoolId,
+        });
+      } catch {
+        // Ignore if already linked
+      }
+    }
+    if (input.studentId && input.role === "student") {
+      const session = await dataStore.getActiveSession(actor.schoolId);
+      if (session) {
+        try {
+          await dataStore.createStudentUserLink({
+            studentId: input.studentId,
+            userId: created.id,
+            schoolId: actor.schoolId,
+            sessionId: session.id,
+          });
+        } catch {
+          // Ignore if already linked
+        }
+      }
+    }
     void audit({ schoolId: actor.schoolId, actorUserId: actor.id, actorRole: actor.role, action: "user.create", targetType: "user", targetId: created.id, metadata: { role: created.role } });
     res.status(201).json({ id: created.id, username: created.username, name: created.name, role: created.role, schoolId: created.schoolId, isActive: true });
+  });
+  app.post("/api/school-users/:id/reset-password", requireRole("admin", "principal"), async (req, res) => {
+    const actor = currentUser(req);
+    const id = routeId(req.params.id);
+    const { newPassword } = z.object({ newPassword: z.string().min(6).max(200) }).parse(req.body);
+    const target = await dataStore.getUser(id);
+    if (!target || target.schoolId !== actor.schoolId) {
+      return res.status(404).json({ message: "User not found in this school" });
+    }
+    if (actor.role === "principal" && target.role === "admin") {
+      return res.status(403).json({ message: "Principals cannot reset administrator passwords" });
+    }
+    await dataStore.updateUserPassword(id, await hashPassword(newPassword));
+    await dataStore.resetLoginFailures(id);
+    void audit({ schoolId: actor.schoolId, actorUserId: actor.id, actorRole: actor.role, action: "account.password_reset", targetType: "user", targetId: id });
+    res.json({ message: "Password reset successfully" });
   });
   app.patch("/api/school-users/:id/status", requireRole("admin"), async (req, res) => {
     const actor = currentUser(req);

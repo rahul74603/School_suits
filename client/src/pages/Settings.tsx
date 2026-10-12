@@ -137,6 +137,8 @@ export default function Settings() {
   const [newFullName, setNewFullName] = useState("");
   const [newRole, setNewRole] = useState("teacher");
   const [newUserPassword, setNewUserPassword] = useState("");
+  const [autoLinkStaffId, setAutoLinkStaffId] = useState("");
+  const [autoLinkStudentId, setAutoLinkStudentId] = useState("");
   const [linkStudentId, setLinkStudentId] = useState("");
   const [linkStudentUserId, setLinkStudentUserId] = useState("");
   const [linkStaffId, setLinkStaffId] = useState("");
@@ -303,18 +305,34 @@ export default function Settings() {
   const createUserAccount = useMutation({
     mutationFn: () =>
       apiRequest("POST", "/api/school-users", {
-        username: newUsername,
-        name: newFullName,
+        username: newUsername.trim(),
+        name: newFullName.trim(),
         role: newRole,
         password: newUserPassword,
+        staffId: autoLinkStaffId ? Number(autoLinkStaffId) : null,
+        studentId: autoLinkStudentId ? Number(autoLinkStudentId) : null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/school-users"] });
+      qc.invalidateQueries({ queryKey: ["/api/payroll/staff-links"] });
+      qc.invalidateQueries({ queryKey: ["/api/student-user-links"] });
       setNewUsername("");
       setNewFullName("");
       setNewUserPassword("");
-      setMessage("User login account created.");
+      setAutoLinkStaffId("");
+      setAutoLinkStudentId("");
+      setMessage("User login account created and linked successfully!");
     },
+    onError: (err) =>
+      setMessage(err instanceof Error ? `Error: ${err.message}` : "Unable to create user account."),
+  });
+
+  const resetUserPassword = useMutation({
+    mutationFn: ({ id, newPassword }: { id: number; newPassword: string }) =>
+      apiRequest("POST", `/api/school-users/${id}/reset-password`, { newPassword }),
+    onSuccess: () => setMessage("User password reset successfully."),
+    onError: (err) =>
+      setMessage(err instanceof Error ? `Error: ${err.message}` : "Password reset failed."),
   });
 
   const unlockAccount = useMutation({
@@ -337,7 +355,12 @@ export default function Settings() {
         studentId: Number(linkStudentId),
         userId: Number(linkStudentUserId),
       }),
-    onSuccess: () => setMessage("Student linked to user login account."),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/student-user-links"] });
+      setMessage("Student linked to user login account.");
+    },
+    onError: (err) =>
+      setMessage(err instanceof Error ? `Error: ${err.message}` : "Failed to link student."),
   });
 
   const linkStaffUser = useMutation({
@@ -346,7 +369,12 @@ export default function Settings() {
         staffId: Number(linkStaffId),
         userId: Number(linkStaffUserId),
       }),
-    onSuccess: () => setMessage("Staff member linked to user login account."),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/payroll/staff-links"] });
+      setMessage("Staff member linked to user login account.");
+    },
+    onError: (err) =>
+      setMessage(err instanceof Error ? `Error: ${err.message}` : "Failed to link staff."),
   });
 
   const assignSubjectToTeacher = useMutation({
@@ -359,6 +387,8 @@ export default function Settings() {
       qc.invalidateQueries({ queryKey: ["/api/teacher-assignments"] });
       setMessage("Subject assigned to teacher.");
     },
+    onError: (err) =>
+      setMessage(err instanceof Error ? `Error: ${err.message}` : "Failed to assign subject."),
   });
 
   const removeSubjectAssignment = useMutation({
@@ -981,50 +1011,129 @@ export default function Settings() {
 
           {manager && (
             <TabsContent value="users" className="space-y-6">
-              <Card>
+              <Card className="border-indigo-200 bg-indigo-50/20">
                 <CardHeader>
-                  <CardTitle>Create School User Account (Role-Based Login)</CardTitle>
+                  <CardTitle>
+                    Create Login Account (Teacher / Accountant / Principal / Staff / Student)
+                  </CardTitle>
+                  <p className="text-xs text-slate-600 mt-1">
+                    You can use either an <b>Email ID</b> (e.g., <code>sharma@school.com</code>) or a{" "}
+                    <b>Username</b> (e.g., <code>teacher.sharma</code>) as the Login ID. Optionally select an existing Staff or Student below to auto-fill and link in 1 click!
+                  </p>
                 </CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-5">
-                  <Input
-                    placeholder="Full Name"
-                    value={newFullName}
-                    onChange={(e) => setNewFullName(e.target.value)}
-                  />
-                  <Input
-                    placeholder="Username (e.g., teacher.sharma)"
-                    value={newUsername}
-                    onChange={(e) => setNewUsername(e.target.value)}
-                  />
-                  <select
-                    className="h-10 rounded-md border bg-background px-3 text-sm"
-                    value={newRole}
-                    onChange={(e) => setNewRole(e.target.value)}
-                  >
-                    {isAdmin && <option value="admin">Admin</option>}
-                    <option value="principal">Principal</option>
-                    <option value="accountant">Accountant</option>
-                    <option value="teacher">Teacher</option>
-                    <option value="staff">Staff</option>
-                    <option value="student">Student / Parent</option>
-                  </select>
-                  <Input
-                    type="password"
-                    placeholder="Initial Password (min 8 chars)"
-                    value={newUserPassword}
-                    onChange={(e) => setNewUserPassword(e.target.value)}
-                  />
-                  <Button
-                    onClick={() => createUserAccount.mutate()}
-                    disabled={
-                      createUserAccount.isPending ||
-                      !newUsername.trim() ||
-                      !newFullName.trim() ||
-                      newUserPassword.length < 8
-                    }
-                  >
-                    Create User
-                  </Button>
+                <CardContent className="space-y-3">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <select
+                      className="h-10 rounded-md border bg-white px-3 text-sm"
+                      value={autoLinkStaffId}
+                      onChange={(e) => {
+                        const sid = e.target.value;
+                        setAutoLinkStaffId(sid);
+                        setAutoLinkStudentId("");
+                        const st = (staffList.data ?? []).find((x) => String(x.id) === sid);
+                        if (st) {
+                          setNewFullName(st.name);
+                          setNewRole(
+                            st.designation === "Teacher"
+                              ? "teacher"
+                              : st.designation === "Principal"
+                                ? "principal"
+                                : st.designation === "Accountant"
+                                  ? "accountant"
+                                  : "staff",
+                          );
+                          const slug = st.name
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]/g, "")
+                            .slice(0, 12);
+                          if (slug && !newUsername) setNewUsername(`${slug}@school.com`);
+                        }
+                      }}
+                    >
+                      <option value="">
+                        Optional: Auto-fill & Link from Staff Directory...
+                      </option>
+                      {(staffList.data ?? []).map((st) => (
+                        <option key={st.id} value={st.id}>
+                          {st.name} ({st.designation})
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      className="h-10 rounded-md border bg-white px-3 text-sm"
+                      value={autoLinkStudentId}
+                      onChange={(e) => {
+                        const stId = e.target.value;
+                        setAutoLinkStudentId(stId);
+                        setAutoLinkStaffId("");
+                        const st = (students.data ?? []).find((x) => String(x.id) === stId);
+                        if (st) {
+                          setNewFullName(st.name);
+                          setNewRole("student");
+                          const slug = st.name
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]/g, "")
+                            .slice(0, 10);
+                          if (slug && !newUsername) setNewUsername(`${slug}@student.com`);
+                        }
+                      }}
+                    >
+                      <option value="">
+                        Optional: Auto-fill & Link from Students Directory...
+                      </option>
+                      {(students.data ?? []).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.admissionNo}) — Class {s.class}-{s.section}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-5">
+                    <Input
+                      className="bg-white"
+                      placeholder="Full Name (e.g., Rajesh Sharma)"
+                      value={newFullName}
+                      onChange={(e) => setNewFullName(e.target.value)}
+                    />
+                    <Input
+                      className="bg-white"
+                      placeholder="Login ID or Email (e.g., sharma@school.com)"
+                      value={newUsername}
+                      onChange={(e) => setNewUsername(e.target.value)}
+                    />
+                    <select
+                      className="h-10 rounded-md border bg-white px-3 text-sm"
+                      value={newRole}
+                      onChange={(e) => setNewRole(e.target.value)}
+                    >
+                      {isAdmin && <option value="admin">Admin</option>}
+                      <option value="principal">Principal</option>
+                      <option value="accountant">Accountant</option>
+                      <option value="teacher">Teacher</option>
+                      <option value="staff">Staff</option>
+                      <option value="student">Student / Parent</option>
+                    </select>
+                    <Input
+                      type="password"
+                      className="bg-white"
+                      placeholder="Password (min 6 chars)"
+                      value={newUserPassword}
+                      onChange={(e) => setNewUserPassword(e.target.value)}
+                    />
+                    <Button
+                      onClick={() => createUserAccount.mutate()}
+                      disabled={
+                        createUserAccount.isPending ||
+                        !newUsername.trim() ||
+                        !newFullName.trim() ||
+                        newUserPassword.length < 6
+                      }
+                    >
+                      {createUserAccount.isPending ? "Creating..." : "Create Login Account"}
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
 
@@ -1116,17 +1225,17 @@ export default function Settings() {
                       <thead className="bg-slate-50">
                         <tr>
                           <th className="p-3 text-left">Name</th>
-                          <th className="p-3 text-left">Username</th>
+                          <th className="p-3 text-left">Login ID / Email</th>
                           <th className="p-3 text-left">Role</th>
                           <th className="p-3 text-left">Status</th>
-                          {isAdmin && <th className="p-3 text-left">Actions</th>}
+                          {manager && <th className="p-3 text-left">Actions</th>}
                         </tr>
                       </thead>
                       <tbody>
                         {(schoolUsers.data ?? []).map((u) => (
                           <tr key={u.id} className="border-t">
                             <td className="p-3 font-medium">{u.name}</td>
-                            <td className="p-3 font-mono text-xs">@{u.username}</td>
+                            <td className="p-3 font-mono text-xs">{u.username}</td>
                             <td className="p-3 uppercase text-xs font-semibold">{u.role}</td>
                             <td className="p-3">
                               {u.lockedUntil && new Date(u.lockedUntil) > new Date() ? (
@@ -1143,8 +1252,8 @@ export default function Settings() {
                                 </span>
                               )}
                             </td>
-                            {isAdmin && (
-                              <td className="p-3 flex gap-2">
+                            {manager && (
+                              <td className="p-3 flex flex-wrap gap-2">
                                 <Button
                                   size="sm"
                                   variant="outline"
@@ -1152,7 +1261,24 @@ export default function Settings() {
                                 >
                                   <Unlock className="h-3.5 w-3.5 mr-1" /> Unlock
                                 </Button>
-                                {u.id !== user?.id && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    const pwd = window.prompt(
+                                      `Enter new password for ${u.name} (${u.username}) [min 6 chars]:`,
+                                    );
+                                    if (pwd && pwd.trim().length >= 6) {
+                                      resetUserPassword.mutate({
+                                        id: u.id,
+                                        newPassword: pwd.trim(),
+                                      });
+                                    }
+                                  }}
+                                >
+                                  Reset Password
+                                </Button>
+                                {isAdmin && u.id !== user?.id && (
                                   <Button
                                     size="sm"
                                     variant={u.isActive === false ? "default" : "destructive"}
