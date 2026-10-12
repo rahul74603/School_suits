@@ -581,6 +581,169 @@ export const auditEvents = pgTable("audit_events", {
   actorSchoolForeignKey: foreignKey({ columns: [table.actorUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "audit_events_actor_school_fk" }),
 }));
 
+// === Notice Board & Circulars ===
+export const notices = pgTable("notices", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  category: text("category").notNull().default("general"),
+  targetAudience: text("target_audience").notNull().default("all"),
+  targetClass: text("target_class"),
+  targetSection: text("target_section"),
+  isPinned: boolean("is_pinned").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  publishDate: date("publish_date").notNull(),
+  createdByUserId: integer("created_by_user_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolActiveIdx: index("notices_school_active_idx").on(table.schoolId, table.isActive, table.isPinned, table.publishDate),
+  categoryCheck: check("notices_category_check", sql`${table.category} IN ('general', 'academic', 'exam', 'holiday', 'event', 'emergency')`),
+  audienceCheck: check("notices_audience_check", sql`${table.targetAudience} IN ('all', 'students', 'teachers', 'staff', 'class')`),
+  creatorSchoolForeignKey: foreignKey({ columns: [table.createdByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "notices_creator_school_fk" }),
+}));
+
+// === Homework & Daily Class Diary ===
+export const homeworkAssignments = pgTable("homework_assignments", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  sessionId: integer("session_id").notNull().references(() => academicSessions.id, { onDelete: "restrict" }),
+  className: text("class_name").notNull(),
+  section: text("section").notNull(),
+  subjectId: integer("subject_id").notNull(),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  assignedDate: date("assigned_date").notNull(),
+  dueDate: date("due_date").notNull(),
+  assignedByUserId: integer("assigned_by_user_id").notNull(),
+  status: text("status").notNull().default("active"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  classDueIdx: index("homework_class_due_idx").on(table.schoolId, table.sessionId, table.className, table.section, table.dueDate),
+  statusCheck: check("homework_status_check", sql`${table.status} IN ('active', 'archived')`),
+  dateCheck: check("homework_date_order_check", sql`${table.dueDate} >= ${table.assignedDate}`),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "homework_session_school_fk" }),
+  subjectScopeForeignKey: foreignKey({ columns: [table.subjectId, table.schoolId, table.sessionId], foreignColumns: [subjects.id, subjects.schoolId, subjects.sessionId], name: "homework_subject_scope_fk" }),
+  teacherSchoolForeignKey: foreignKey({ columns: [table.assignedByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "homework_teacher_school_fk" }),
+}));
+
+// === Class Timetable / Routine ===
+export const timetableEntries = pgTable("timetable_entries", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  sessionId: integer("session_id").notNull().references(() => academicSessions.id, { onDelete: "restrict" }),
+  className: text("class_name").notNull(),
+  section: text("section").notNull(),
+  dayOfWeek: text("day_of_week").notNull(),
+  periodNo: integer("period_no").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  subjectId: integer("subject_id").notNull(),
+  teacherUserId: integer("teacher_user_id"),
+  roomNo: text("room_no"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  slotUnique: uniqueIndex("timetable_class_slot_unique").on(table.schoolId, table.sessionId, table.className, table.section, table.dayOfWeek, table.periodNo),
+  dayCheck: check("timetable_day_check", sql`${table.dayOfWeek} IN ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday')`),
+  periodCheck: check("timetable_period_check", sql`${table.periodNo} BETWEEN 1 AND 12`),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "timetable_session_school_fk" }),
+  subjectScopeForeignKey: foreignKey({ columns: [table.subjectId, table.schoolId, table.sessionId], foreignColumns: [subjects.id, subjects.schoolId, subjects.sessionId], name: "timetable_subject_scope_fk" }),
+}));
+
+// === Leave Requests (Student & Staff) ===
+export const leaveRequests = pgTable("leave_requests", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  sessionId: integer("session_id").notNull().references(() => academicSessions.id, { onDelete: "restrict" }),
+  applicantType: text("applicant_type").notNull(),
+  studentId: integer("student_id"),
+  userId: integer("user_id").notNull(),
+  applicantName: text("applicant_name").notNull(),
+  className: text("class_name"),
+  section: text("section"),
+  leaveType: text("leave_type").notNull().default("sick"),
+  fromDate: date("from_date").notNull(),
+  toDate: date("to_date").notNull(),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("pending"),
+  reviewedByUserId: integer("reviewed_by_user_id"),
+  reviewRemarks: text("review_remarks"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolSessionIdx: index("leave_requests_school_session_idx").on(table.schoolId, table.sessionId, table.status, table.fromDate),
+  applicantTypeCheck: check("leave_requests_applicant_type_check", sql`${table.applicantType} IN ('student', 'staff')`),
+  statusCheck: check("leave_requests_status_check", sql`${table.status} IN ('pending', 'approved', 'rejected')`),
+  dateCheck: check("leave_requests_date_order_check", sql`${table.toDate} >= ${table.fromDate}`),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "leave_requests_session_school_fk" }),
+  userSchoolForeignKey: foreignKey({ columns: [table.userId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "leave_requests_user_school_fk" }),
+}));
+
+// === Certificates (Transfer Certificate / Bonafide / Character) ===
+export const certificates = pgTable("certificates", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  sessionId: integer("session_id").notNull().references(() => academicSessions.id, { onDelete: "restrict" }),
+  studentId: integer("student_id").notNull(),
+  certificateType: text("certificate_type").notNull(),
+  certificateNo: text("certificate_no").notNull(),
+  issueDate: date("issue_date").notNull(),
+  reason: text("reason"),
+  conduct: text("conduct").default("Good"),
+  remarks: text("remarks"),
+  issuedByUserId: integer("issued_by_user_id").notNull(),
+  status: text("status").notNull().default("issued"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  certNoUnique: uniqueIndex("certificates_school_cert_no_unique").on(table.schoolId, table.certificateNo),
+  studentIdx: index("certificates_school_student_idx").on(table.schoolId, table.sessionId, table.studentId),
+  typeCheck: check("certificates_type_check", sql`${table.certificateType} IN ('transfer', 'bonafide', 'character', 'fee')`),
+  statusCheck: check("certificates_status_check", sql`${table.status} IN ('issued', 'revoked')`),
+  studentSchoolForeignKey: foreignKey({ columns: [table.studentId, table.schoolId], foreignColumns: [students.id, students.schoolId], name: "certificates_student_school_fk" }),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "certificates_session_school_fk" }),
+  issuerSchoolForeignKey: foreignKey({ columns: [table.issuedByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "certificates_issuer_school_fk" }),
+}));
+
+// === Transport Management ===
+export const transportRoutes = pgTable("transport_routes", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  sessionId: integer("session_id").notNull().references(() => academicSessions.id, { onDelete: "restrict" }),
+  routeName: text("route_name").notNull(),
+  vehicleNo: text("vehicle_no").notNull(),
+  driverName: text("driver_name").notNull(),
+  driverContact: text("driver_contact").notNull(),
+  stops: text("stops").notNull(),
+  monthlyFee: integer("monthly_fee").notNull().default(0),
+  capacity: integer("capacity").notNull().default(40),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  idScopeUnique: uniqueIndex("transport_routes_id_scope_unique").on(table.id, table.schoolId, table.sessionId),
+  routeNameUnique: uniqueIndex("transport_routes_school_session_name_unique").on(table.schoolId, table.sessionId, table.routeName),
+  feeCheck: check("transport_routes_fee_nonnegative", sql`${table.monthlyFee} >= 0 AND ${table.capacity} > 0`),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "transport_routes_session_school_fk" }),
+}));
+
+export const studentTransportAllocations = pgTable("student_transport_allocations", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
+  sessionId: integer("session_id").notNull().references(() => academicSessions.id, { onDelete: "restrict" }),
+  studentId: integer("student_id").notNull(),
+  routeId: integer("route_id").notNull(),
+  stopName: text("stop_name").notNull(),
+  monthlyFee: integer("monthly_fee").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  studentActiveUnique: uniqueIndex("student_transport_student_session_unique").on(table.schoolId, table.sessionId, table.studentId),
+  routeForeignKey: foreignKey({ columns: [table.routeId, table.schoolId, table.sessionId], foreignColumns: [transportRoutes.id, transportRoutes.schoolId, transportRoutes.sessionId], name: "student_transport_route_scope_fk" }),
+  studentSchoolForeignKey: foreignKey({ columns: [table.studentId, table.schoolId], foreignColumns: [students.id, students.schoolId], name: "student_transport_student_school_fk" }),
+  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "student_transport_session_school_fk" }),
+}));
+
 // === Relations ===
 export const schoolsRelations = relations(schools, ({ many }) => ({
   users: many(users),
@@ -694,7 +857,80 @@ export const insertTeacherClassAssignmentSchema = createInsertSchema(teacherClas
 });
 export const insertStudentUserLinkSchema = createInsertSchema(studentUserLinks).omit({ id: true, schoolId: true, sessionId: true, createdAt: true });
 
+export const insertNoticeSchema = createInsertSchema(notices).omit({ id: true, schoolId: true, sessionId: true, createdByUserId: true, createdAt: true }).extend({
+  title: z.string().trim().min(1).max(200),
+  content: z.string().trim().min(1).max(4000),
+  category: z.enum(["general", "academic", "exam", "holiday", "event", "emergency"]).optional(),
+  targetAudience: z.enum(["all", "students", "teachers", "staff", "class"]).optional(),
+  publishDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+export const insertHomeworkSchema = createInsertSchema(homeworkAssignments).omit({ id: true, schoolId: true, sessionId: true, assignedByUserId: true, createdAt: true, updatedAt: true }).extend({
+  className: z.string().trim().min(1).max(100),
+  section: z.string().trim().min(1).max(50),
+  subjectId: z.number().int().positive(),
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().min(1).max(4000),
+  assignedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  status: z.enum(["active", "archived"]).optional(),
+});
+
+export const insertTimetableEntrySchema = createInsertSchema(timetableEntries).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({
+  className: z.string().trim().min(1).max(100),
+  section: z.string().trim().min(1).max(50),
+  dayOfWeek: z.enum(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]),
+  periodNo: z.number().int().min(1).max(12),
+  startTime: z.string().trim().min(1).max(20),
+  endTime: z.string().trim().min(1).max(20),
+  subjectId: z.number().int().positive(),
+  teacherUserId: z.number().int().positive().nullable().optional(),
+  roomNo: z.string().trim().max(50).nullable().optional(),
+});
+
+export const insertLeaveRequestSchema = createInsertSchema(leaveRequests).omit({ id: true, schoolId: true, sessionId: true, userId: true, applicantName: true, status: true, reviewedByUserId: true, reviewRemarks: true, createdAt: true, updatedAt: true }).extend({
+  applicantType: z.enum(["student", "staff"]).optional(),
+  leaveType: z.enum(["sick", "casual", "personal", "medical", "emergency"]).optional(),
+  fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  reason: z.string().trim().min(1).max(1000),
+});
+
+export const insertCertificateSchema = createInsertSchema(certificates).omit({ id: true, schoolId: true, sessionId: true, issuedByUserId: true, status: true, createdAt: true }).extend({
+  studentId: z.number().int().positive(),
+  certificateType: z.enum(["transfer", "bonafide", "character", "fee"]),
+  certificateNo: z.string().trim().max(100).optional(),
+  issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  reason: z.string().max(500).nullable().optional(),
+  conduct: z.string().max(100).nullable().optional(),
+  remarks: z.string().max(500).nullable().optional(),
+});
+
+export const insertTransportRouteSchema = createInsertSchema(transportRoutes).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({
+  routeName: z.string().trim().min(1).max(120),
+  vehicleNo: z.string().trim().min(1).max(50),
+  driverName: z.string().trim().min(1).max(120),
+  driverContact: z.string().trim().min(1).max(30),
+  stops: z.string().trim().min(1).max(1000),
+  monthlyFee: z.number().int().nonnegative(),
+  capacity: z.number().int().positive().optional(),
+});
+
+export const insertStudentTransportAllocationSchema = createInsertSchema(studentTransportAllocations).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({
+  studentId: z.number().int().positive(),
+  routeId: z.number().int().positive(),
+  stopName: z.string().trim().min(1).max(150),
+  monthlyFee: z.number().int().nonnegative(),
+});
+
 // === Types ===
+export type Notice = typeof notices.$inferSelect;
+export type HomeworkAssignment = typeof homeworkAssignments.$inferSelect;
+export type TimetableEntry = typeof timetableEntries.$inferSelect;
+export type LeaveRequest = typeof leaveRequests.$inferSelect;
+export type Certificate = typeof certificates.$inferSelect;
+export type TransportRoute = typeof transportRoutes.$inferSelect;
+export type StudentTransportAllocation = typeof studentTransportAllocations.$inferSelect;
 export type Document = typeof documents.$inferSelect;
 export type BackupRecord = typeof backupRecords.$inferSelect;
 export type AuditEvent = typeof auditEvents.$inferSelect;
@@ -746,6 +982,13 @@ export type InsertExam = z.infer<typeof insertExamSchema>;
 export type InsertExamClassScope = z.infer<typeof insertExamClassScopeSchema>;
 export type InsertExamSchedule = z.infer<typeof insertExamScheduleSchema>;
 export type InsertExamResult = z.infer<typeof insertExamResultSchema>;
+export type InsertNotice = z.infer<typeof insertNoticeSchema>;
+export type InsertHomework = z.infer<typeof insertHomeworkSchema>;
+export type InsertTimetableEntry = z.infer<typeof insertTimetableEntrySchema>;
+export type InsertLeaveRequest = z.infer<typeof insertLeaveRequestSchema>;
+export type InsertCertificate = z.infer<typeof insertCertificateSchema>;
+export type InsertTransportRoute = z.infer<typeof insertTransportRouteSchema>;
+export type InsertStudentTransportAllocation = z.infer<typeof insertStudentTransportAllocationSchema>;
 
 // Server-side insert types retain tenant columns; client input schemas intentionally omit them.
 export type StoredStudentInsert = typeof students.$inferInsert;

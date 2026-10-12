@@ -25,16 +25,23 @@ PostgreSQL
 
 ## Current capabilities
 
-The current web application contains basic screens and APIs for:
+The web application provides a complete, multi-role, school- and session-scoped School ERP:
 
-- school profile data
-- student admissions and listing
-- fee structures and payment recording
-- basic fee defaulter lookup
-- staff listing and creation
-- student ID-card printing
-
-The web application now has session-based authentication, server-side role checks, school-scoped student/staff/fee access, and password hashing. Academic sessions, backups, restore, payroll, examinations, attendance, document management, and production financial reporting are not implemented yet.
+- **Dashboard & Role-Aware Overview:** Live operational stats, quick actions, latest circulars, homework diary, and fee payment summaries tailored to Admin, Principal, Accountant, Teacher, Staff, and Student/Parent roles.
+- **Notice Board & Circulars (`/notices`):** School-wide, role-targeted, or class-specific announcements with category badges and pinned circulars.
+- **Admissions & Students Directory (`/admissions`, `/students`):** Student registration, profile view/edit, deactivation, and batch class promotion.
+- **Attendance Management (`/attendance`):** Daily and subject-wise attendance marking, teacher-assigned class scoping, and attendance summary analytics.
+- **Class Timetable & Routine (`/timetable`):** Weekly period-wise schedule (Monday–Saturday) with subject, time slot, and room allocation plus printable routine.
+- **Homework & Daily Class Diary (`/homework`):** Daily homework and classwork assignments by class, section, and subject with submission due dates.
+- **Exams, Marks Entry & Printable Report Cards (`/exams`, `/exam-results`, `/report-cards`):** Draft/published/completed exam lifecycle, subject schedules, bulk marks entry, and printable marksheets with automated grading.
+- **Student ID Cards & Official Certificates (`/student-id-cards`, `/certificates`):** Printable Student ID Cards and official Transfer Certificates (TC), Bonafide Certificates, Character Certificates, and Fee Certificates.
+- **Leave Applications & Approvals (`/leaves`):** Student and staff leave applications with Teacher/Principal/Admin approval or rejection workflows.
+- **Fees, Dues & Printable Receipts (`/fees`):** Class-wise fee structures, student selector with auto-fee lookup, printable fee receipts, defaulter tracking, and student dues management.
+- **Transport & Bus Routes (`/transport`):** Bus routes, vehicle/driver directory, stoppages, seat capacity, and student transport allocations.
+- **Staff Directory & Payroll (`/staff`, `/payroll`):** Staff records, salary structures, server-calculated monthly payroll, and printable salary slips.
+- **Financial Dashboard & Expense Ledger (`/financial`):** Fee income, finalized expenses, expense categories, paid payroll, and net balance tracking.
+- **Documents, CSV Import/Export, Reports & Backups (`/documents`, `/import-export`, `/reports`, `/backup-restore`):** Verified document metadata registry, all-or-nothing CSV import/export, operational reports, and PostgreSQL custom-format backup/restore.
+- **Settings, Users & Security Audit Trail (`/settings`):** School branding, academic sessions, classes/sections/subjects, role-based user account creation, student/staff login linking, teacher class/subject assignments, account unlock, password hardening, and security audit logs.
 
 ## Prerequisites
 

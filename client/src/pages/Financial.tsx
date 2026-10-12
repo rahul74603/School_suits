@@ -5,15 +5,308 @@ import { Sidebar } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-async function api<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, { credentials: "include", ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } }); if (!response.ok) throw new Error((await response.json().catch(() => null))?.message ?? "Financial request failed"); return response.json(); }
+import { Trash2 } from "lucide-react";
+
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "include",
+    ...init,
+    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (!response.ok)
+    throw new Error(
+      (await response.json().catch(() => null))?.message ?? "Financial request failed",
+    );
+  return response.status === 204 ? (undefined as T) : response.json();
+}
+
 export default function Financial() {
-  const { data: user } = useAuth(); const manager = user?.role === "admin" || user?.role === "accountant";
-  const qc = useQueryClient(); const [month, setMonth] = useState(String(new Date().getMonth() + 1)); const [year, setYear] = useState(String(new Date().getFullYear())); const [categoryId, setCategoryId] = useState(""); const [description, setDescription] = useState(""); const [amount, setAmount] = useState(""); const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0, 10)); const [message, setMessage] = useState("");
-  const summary = useQuery<any>({ queryKey: ["/api/financial/summary", month, year], queryFn: () => api(`/api/financial/summary?month=${month}&year=${year}`) }); const categories = useQuery<any[]>({ queryKey: ["/api/financial/expense-categories"], queryFn: () => api("/api/financial/expense-categories") }); const expenses = useQuery<any[]>({ queryKey: ["/api/financial/expenses", month, year], queryFn: () => api(`/api/financial/expenses?from=${year}-${month.padStart(2, "0")}-01&to=${new Date(Number(year), Number(month), 0).toISOString().slice(0, 10)}`) });
-  const createExpense = useMutation({ mutationFn: () => api("/api/financial/expenses", { method: "POST", body: JSON.stringify({ categoryId: Number(categoryId), description, amount: Number(amount), expenseDate, paymentReference: null, remarks: null }) }), onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/financial"] }); setMessage("Expense saved as draft. Finalize it to include it in the dashboard."); setDescription(""); setAmount(""); } }); const error = summary.error ?? categories.error ?? expenses.error ?? createExpense.error;
-  return <div className="flex min-h-screen bg-slate-50"><Sidebar /><main className="flex-1 ml-64 p-8 space-y-6"><div><h1 className="text-3xl font-bold">Financial Dashboard</h1><p className="mt-1 text-slate-500">Fee income and paid payroll are derived from existing transactions. Finalized expenses are included.</p></div>{error && <div className="rounded border border-red-200 bg-red-50 p-3 text-red-700">{(error as Error).message}</div>}{message && <div className="rounded border border-green-200 bg-green-50 p-3 text-green-700">{message}</div>}{summary.data && <div className="grid grid-cols-2 gap-3 md:grid-cols-6">{([['Total Income', summary.data.totalIncome], ['Fee Collection', summary.data.totalFeeIncome], ['Total Expenses', summary.data.totalExpenses], ['Payroll', summary.data.totalPayrollExpense], ['Other Expenses', summary.data.totalOtherExpenses], ['Net Balance', summary.data.netBalance]] as const).map(([label, value]) => <div className="rounded bg-white p-4 shadow-sm" key={label}><div className="text-xs text-slate-500">{label}</div><div className="text-xl font-bold">{value}</div></div>)}</div>}
-    <div className="flex gap-3"><Input type="number" min="1" max="12" value={month} onChange={e => setMonth(e.target.value)} /><Input type="number" value={year} onChange={e => setYear(e.target.value)} /></div>
-    {manager && <Card><CardHeader><CardTitle>Record expense</CardTitle></CardHeader><CardContent className="grid gap-3 md:grid-cols-5"><select className="h-10 rounded border bg-background px-3" value={categoryId} onChange={e => setCategoryId(e.target.value)}><option value="">Category</option>{(categories.data ?? []).filter(c => c.isActive).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><Input placeholder="Description" value={description} onChange={e => setDescription(e.target.value)} /><Input type="number" min="1" placeholder="Amount" value={amount} onChange={e => setAmount(e.target.value)} /><Input type="date" value={expenseDate} onChange={e => setExpenseDate(e.target.value)} /><Button onClick={() => createExpense.mutate()} disabled={!categoryId || !description || !amount || createExpense.isPending}>Save draft</Button></CardContent></Card>}
-    <Card><CardHeader><CardTitle>Expense history</CardTitle></CardHeader><CardContent><div className="overflow-x-auto rounded border"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Date</th><th className="p-3 text-left">Description</th><th className="p-3 text-left">Amount</th><th className="p-3 text-left">Status</th></tr></thead><tbody>{(expenses.data ?? []).map(expense => <tr className="border-t" key={expense.id}><td className="p-3">{expense.expenseDate}</td><td className="p-3">{expense.description}</td><td className="p-3">{expense.amount}</td><td className="p-3">{expense.status}</td></tr>)}</tbody></table></div></CardContent></Card>
-  </main></div>;
+  const { data: user } = useAuth();
+  const manager = user?.role === "admin" || user?.role === "accountant";
+  const qc = useQueryClient();
+  const [month, setMonth] = useState(String(new Date().getMonth() + 1));
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [description, setDescription] = useState("");
+  const [amount, setAmount] = useState("");
+  const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0, 10));
+  const [message, setMessage] = useState("");
+
+  const summary = useQuery<any>({
+    queryKey: ["/api/financial/summary", month, year],
+    queryFn: () => api(`/api/financial/summary?month=${month}&year=${year}`),
+  });
+  const categories = useQuery<any[]>({
+    queryKey: ["/api/financial/expense-categories"],
+    queryFn: () => api("/api/financial/expense-categories"),
+  });
+  const expenses = useQuery<any[]>({
+    queryKey: ["/api/financial/expenses", month, year],
+    queryFn: () =>
+      api(
+        `/api/financial/expenses?from=${year}-${month.padStart(2, "0")}-01&to=${new Date(
+          Number(year),
+          Number(month),
+          0,
+        )
+          .toISOString()
+          .slice(0, 10)}`,
+      ),
+  });
+
+  const createCategory = useMutation({
+    mutationFn: () =>
+      api("/api/financial/expense-categories", {
+        method: "POST",
+        body: JSON.stringify({ name: newCategoryName }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/financial/expense-categories"] });
+      setNewCategoryName("");
+      setMessage("Expense category added.");
+    },
+  });
+
+  const createExpense = useMutation({
+    mutationFn: () =>
+      api("/api/financial/expenses", {
+        method: "POST",
+        body: JSON.stringify({
+          categoryId: Number(categoryId),
+          description,
+          amount: Number(amount),
+          expenseDate,
+          paymentReference: null,
+          remarks: null,
+        }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/financial"] });
+      setMessage("Expense saved as draft. Finalize it to include it in the dashboard.");
+      setDescription("");
+      setAmount("");
+    },
+  });
+
+  const finalizeExpense = useMutation({
+    mutationFn: (id: number) =>
+      api(`/api/financial/expenses/${id}/status`, {
+        method: "POST",
+        body: JSON.stringify({ status: "finalized" }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/financial"] });
+      setMessage("Expense finalized and included in financial summary.");
+    },
+  });
+
+  const deleteExpense = useMutation({
+    mutationFn: (id: number) =>
+      api(`/api/financial/expenses/${id}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/financial"] }),
+  });
+
+  const error =
+    summary.error ??
+    categories.error ??
+    expenses.error ??
+    createExpense.error ??
+    createCategory.error;
+
+  const categoryById = new Map((categories.data ?? []).map((c) => [c.id, c.name]));
+
+  return (
+    <div className="flex min-h-screen bg-slate-50">
+      <Sidebar />
+      <main className="flex-1 ml-64 p-8 space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Financial Dashboard & Expense Ledger</h1>
+          <p className="mt-1 text-slate-500">
+            Net balance = fee income − finalized expenses − paid payroll.
+          </p>
+        </div>
+
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 p-3 text-red-700">
+            {(error as Error).message}
+          </div>
+        )}
+        {message && (
+          <div className="rounded border border-green-200 bg-green-50 p-3 text-green-700">
+            {message}
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          <Input
+            type="number"
+            min="1"
+            max="12"
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+            className="w-32 bg-white"
+          />
+          <Input
+            type="number"
+            value={year}
+            onChange={(e) => setYear(e.target.value)}
+            className="w-36 bg-white"
+          />
+        </div>
+
+        {summary.data && (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="rounded-xl border bg-white p-4 shadow-sm">
+              <small className="text-slate-500">Fee Income</small>
+              <div className="text-xl font-bold text-green-700">
+                ₹{(summary.data.feeIncome ?? 0).toLocaleString()}
+              </div>
+            </div>
+            <div className="rounded-xl border bg-white p-4 shadow-sm">
+              <small className="text-slate-500">Finalized Expenses</small>
+              <div className="text-xl font-bold text-amber-700">
+                ₹{(summary.data.expenses ?? 0).toLocaleString()}
+              </div>
+            </div>
+            <div className="rounded-xl border bg-white p-4 shadow-sm">
+              <small className="text-slate-500">Paid Payroll</small>
+              <div className="text-xl font-bold text-purple-700">
+                ₹{(summary.data.paidPayroll ?? 0).toLocaleString()}
+              </div>
+            </div>
+            <div className="rounded-xl border bg-white p-4 shadow-sm">
+              <small className="text-slate-500">Net Balance</small>
+              <div className="text-xl font-bold text-slate-900">
+                ₹{(summary.data.netBalance ?? 0).toLocaleString()}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {manager && (
+          <div className="grid gap-6 lg:grid-cols-3">
+            <Card>
+              <CardHeader>
+                <CardTitle>Add Expense Category</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Input
+                  placeholder="Category (e.g., Electricity / Lab / Maintenance)"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                />
+                <Button
+                  onClick={() => createCategory.mutate()}
+                  disabled={createCategory.isPending || !newCategoryName.trim()}
+                >
+                  Add Category
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle>Record School Expense</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-3 md:grid-cols-5">
+                <select
+                  className="h-10 rounded border bg-background px-3 text-sm"
+                  value={categoryId}
+                  onChange={(e) => setCategoryId(e.target.value)}
+                >
+                  <option value="">Category</option>
+                  {(categories.data ?? []).map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+                <Input
+                  placeholder="Description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+                <Input
+                  type="number"
+                  min="1"
+                  placeholder="Amount (₹)"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                />
+                <Input
+                  type="date"
+                  value={expenseDate}
+                  onChange={(e) => setExpenseDate(e.target.value)}
+                />
+                <Button
+                  onClick={() => createExpense.mutate()}
+                  disabled={!categoryId || !description || !amount}
+                >
+                  Save Draft
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Expenses Ledger</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto rounded border bg-white">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="p-3 text-left">Date</th>
+                    <th className="p-3 text-left">Category</th>
+                    <th className="p-3 text-left">Description</th>
+                    <th className="p-3 text-left">Amount</th>
+                    <th className="p-3 text-left">Status</th>
+                    {manager && <th className="p-3 text-left">Action</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(expenses.data ?? []).map((expense) => (
+                    <tr className="border-t" key={expense.id}>
+                      <td className="p-3">{expense.expenseDate}</td>
+                      <td className="p-3">{categoryById.get(expense.categoryId) || "General"}</td>
+                      <td className="p-3">{expense.description}</td>
+                      <td className="p-3 font-semibold">₹{expense.amount.toLocaleString()}</td>
+                      <td className="p-3 capitalize">{expense.status}</td>
+                      {manager && (
+                        <td className="p-3 flex gap-2">
+                          {expense.status === "draft" && (
+                            <>
+                              <Button
+                                size="sm"
+                                onClick={() => finalizeExpense.mutate(expense.id)}
+                              >
+                                Finalize
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-red-600"
+                                onClick={() => deleteExpense.mutate(expense.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      </main>
+    </div>
+  );
 }

@@ -1,10 +1,12 @@
 
 import { 
   users, schools, academicSessions, schoolClasses, schoolSections, students, documents, backupRecords, studentDues, auditEvents, subjects, teacherSubjectAssignments, teacherClassAssignments, studentUserLinks, attendanceRecords, exams, examClassScopes, examSchedules, examResults, staffUserLinks, salaryStructures, payrollRecords, expenseCategories, expenses, feeStructures, feePayments, staff,
+  notices, homeworkAssignments, timetableEntries, leaveRequests, certificates, transportRoutes, studentTransportAllocations,
   type User, type InsertUser, type School, type InsertSchool, type Document, type BackupRecord, type StudentDue, type AuditEvent,
   type AcademicSession, type InsertAcademicSession, type SchoolClass, type SchoolSection, type InsertClass, type InsertSection, type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
   type FeePayment, type InsertFeePayment, type Staff, type InsertStaff, type Subject, type TeacherSubjectAssignment, type TeacherClassAssignment, type StudentUserLink, type AttendanceRecord, type Exam, type ExamClassScope, type ExamSchedule,
   type InsertSubject, type InsertTeacherSubjectAssignment, type InsertTeacherClassAssignment, type InsertStudentUserLink, type InsertAttendance, type InsertExam, type InsertExamClassScope, type InsertExamSchedule, type ExamResult, type InsertExamResult, type StaffUserLink, type SalaryStructure, type PayrollRecord, type InsertStaffUserLink, type InsertSalaryStructure, type InsertPayroll, type ExpenseCategory, type Expense, type InsertExpenseCategory, type InsertExpense,
+  type Notice, type InsertNotice, type HomeworkAssignment, type InsertHomework, type TimetableEntry, type InsertTimetableEntry, type LeaveRequest, type InsertLeaveRequest, type Certificate, type InsertCertificate, type TransportRoute, type InsertTransportRoute, type StudentTransportAllocation, type InsertStudentTransportAllocation,
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
 } from "@shared/schema";
 import { db } from "./db";
@@ -138,6 +140,46 @@ export interface IStorage {
   getStaff(schoolId: number): Promise<Staff[]>;
   createStaff(staff: StoredStaffInsert): Promise<Staff>;
   updateStaff(id: number, schoolId: number, updates: Partial<StoredStaffInsert>): Promise<Staff | undefined>;
+
+  // Account links & User administration
+  getStudentUserLinks(schoolId: number, sessionId: number): Promise<StudentUserLink[]>;
+  getStaffUserLinks(schoolId: number): Promise<StaffUserLink[]>;
+  setUserActiveStatus(userId: number, schoolId: number, isActive: boolean): Promise<boolean>;
+
+  // Notices
+  getNotices(schoolId: number, sessionId?: number): Promise<Notice[]>;
+  createNotice(input: InsertNotice & { schoolId: number; sessionId: number | null; createdByUserId: number }): Promise<Notice>;
+  updateNotice(id: number, schoolId: number, updates: Partial<InsertNotice & { isActive: boolean; isPinned: boolean }>): Promise<Notice | undefined>;
+  deleteNotice(id: number, schoolId: number): Promise<boolean>;
+
+  // Homework
+  getHomework(schoolId: number, sessionId: number, filters?: { className?: string; section?: string; subjectId?: number }): Promise<HomeworkAssignment[]>;
+  createHomework(input: InsertHomework & { schoolId: number; sessionId: number; assignedByUserId: number }): Promise<HomeworkAssignment>;
+  updateHomework(id: number, schoolId: number, sessionId: number, updates: Partial<InsertHomework>): Promise<HomeworkAssignment | undefined>;
+  deleteHomework(id: number, schoolId: number, sessionId: number): Promise<boolean>;
+
+  // Timetable
+  getTimetable(schoolId: number, sessionId: number, filters?: { className?: string; section?: string; dayOfWeek?: string; teacherUserId?: number }): Promise<TimetableEntry[]>;
+  createTimetableEntry(input: InsertTimetableEntry & { schoolId: number; sessionId: number }): Promise<TimetableEntry>;
+  deleteTimetableEntry(id: number, schoolId: number, sessionId: number): Promise<boolean>;
+
+  // Leave Requests
+  getLeaveRequests(schoolId: number, sessionId: number, filters?: { userId?: number; studentId?: number; status?: string }): Promise<LeaveRequest[]>;
+  createLeaveRequest(input: InsertLeaveRequest & { schoolId: number; sessionId: number; userId: number; applicantName: string; applicantType: "student" | "staff"; studentId?: number | null; className?: string | null; section?: string | null }): Promise<LeaveRequest>;
+  reviewLeaveRequest(id: number, schoolId: number, sessionId: number, status: "approved" | "rejected", reviewedByUserId: number, reviewRemarks?: string | null): Promise<LeaveRequest | undefined>;
+
+  // Certificates
+  getCertificates(schoolId: number, sessionId: number, studentId?: number): Promise<Certificate[]>;
+  createCertificate(input: InsertCertificate & { certificateNo: string; schoolId: number; sessionId: number; issuedByUserId: number }): Promise<Certificate>;
+  revokeCertificate(id: number, schoolId: number, sessionId: number): Promise<Certificate | undefined>;
+
+  // Transport
+  getTransportRoutes(schoolId: number, sessionId: number): Promise<TransportRoute[]>;
+  createTransportRoute(input: InsertTransportRoute & { schoolId: number; sessionId: number }): Promise<TransportRoute>;
+  updateTransportRoute(id: number, schoolId: number, sessionId: number, updates: Partial<InsertTransportRoute>): Promise<TransportRoute | undefined>;
+  getStudentTransportAllocations(schoolId: number, sessionId: number, routeId?: number): Promise<StudentTransportAllocation[]>;
+  assignStudentTransport(input: InsertStudentTransportAllocation & { schoolId: number; sessionId: number }): Promise<StudentTransportAllocation>;
+  removeStudentTransport(id: number, schoolId: number, sessionId: number): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -837,6 +879,172 @@ export class DatabaseStorage implements IStorage {
       and(eq(staff.id, id), eq(staff.schoolId, schoolId)),
     ).returning();
     return updated;
+  }
+
+  // === Account links & User administration ===
+  async getStudentUserLinks(schoolId: number, sessionId: number): Promise<StudentUserLink[]> {
+    return db.select().from(studentUserLinks).where(and(eq(studentUserLinks.schoolId, schoolId), eq(studentUserLinks.sessionId, sessionId)));
+  }
+
+  async getStaffUserLinks(schoolId: number): Promise<StaffUserLink[]> {
+    return db.select().from(staffUserLinks).where(eq(staffUserLinks.schoolId, schoolId));
+  }
+
+  async setUserActiveStatus(userId: number, schoolId: number, isActive: boolean): Promise<boolean> {
+    const result = await db.execute(sql`UPDATE users SET is_active = ${isActive}, auth_version = auth_version + 1 WHERE id = ${userId} AND school_id = ${schoolId} RETURNING id`);
+    if (!isActive) {
+      await db.execute(sql`DELETE FROM user_sessions WHERE sess->'user'->>'id' = ${String(userId)}`);
+    }
+    return result.rows.length > 0;
+  }
+
+  // === Notices ===
+  async getNotices(schoolId: number, sessionId?: number): Promise<Notice[]> {
+    const conditions = [eq(notices.schoolId, schoolId), eq(notices.isActive, true)];
+    if (sessionId !== undefined) conditions.push(or(eq(notices.sessionId, sessionId), sql`${notices.sessionId} IS NULL`)!);
+    return db.select().from(notices).where(and(...conditions)).orderBy(sql`${notices.isPinned} DESC`, sql`${notices.publishDate} DESC`, sql`${notices.createdAt} DESC`);
+  }
+
+  async createNotice(input: InsertNotice & { schoolId: number; sessionId: number | null; createdByUserId: number }): Promise<Notice> {
+    const [notice] = await db.insert(notices).values(input).returning();
+    return notice;
+  }
+
+  async updateNotice(id: number, schoolId: number, updates: Partial<InsertNotice & { isActive: boolean; isPinned: boolean }>): Promise<Notice | undefined> {
+    const [updated] = await db.update(notices).set(updates).where(and(eq(notices.id, id), eq(notices.schoolId, schoolId))).returning();
+    return updated;
+  }
+
+  async deleteNotice(id: number, schoolId: number): Promise<boolean> {
+    const [updated] = await db.update(notices).set({ isActive: false }).where(and(eq(notices.id, id), eq(notices.schoolId, schoolId))).returning({ id: notices.id });
+    return !!updated;
+  }
+
+  // === Homework ===
+  async getHomework(schoolId: number, sessionId: number, filters: { className?: string; section?: string; subjectId?: number } = {}): Promise<HomeworkAssignment[]> {
+    const conditions = [eq(homeworkAssignments.schoolId, schoolId), eq(homeworkAssignments.sessionId, sessionId)];
+    if (filters.className && filters.className !== "all") conditions.push(eq(homeworkAssignments.className, filters.className));
+    if (filters.section && filters.section !== "all") conditions.push(eq(homeworkAssignments.section, filters.section));
+    if (filters.subjectId !== undefined) conditions.push(eq(homeworkAssignments.subjectId, filters.subjectId));
+    return db.select().from(homeworkAssignments).where(and(...conditions)).orderBy(sql`${homeworkAssignments.dueDate} DESC`, sql`${homeworkAssignments.createdAt} DESC`);
+  }
+
+  async createHomework(input: InsertHomework & { schoolId: number; sessionId: number; assignedByUserId: number }): Promise<HomeworkAssignment> {
+    if (input.dueDate < input.assignedDate) throw new Error("Due date cannot precede assigned date");
+    const [created] = await db.insert(homeworkAssignments).values(input).returning();
+    return created;
+  }
+
+  async updateHomework(id: number, schoolId: number, sessionId: number, updates: Partial<InsertHomework>): Promise<HomeworkAssignment | undefined> {
+    const [updated] = await db.update(homeworkAssignments).set({ ...updates, updatedAt: new Date() }).where(and(eq(homeworkAssignments.id, id), eq(homeworkAssignments.schoolId, schoolId), eq(homeworkAssignments.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  async deleteHomework(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const deleted = await db.delete(homeworkAssignments).where(and(eq(homeworkAssignments.id, id), eq(homeworkAssignments.schoolId, schoolId), eq(homeworkAssignments.sessionId, sessionId))).returning({ id: homeworkAssignments.id });
+    return deleted.length > 0;
+  }
+
+  // === Timetable ===
+  async getTimetable(schoolId: number, sessionId: number, filters: { className?: string; section?: string; dayOfWeek?: string; teacherUserId?: number } = {}): Promise<TimetableEntry[]> {
+    const conditions = [eq(timetableEntries.schoolId, schoolId), eq(timetableEntries.sessionId, sessionId)];
+    if (filters.className && filters.className !== "all") conditions.push(eq(timetableEntries.className, filters.className));
+    if (filters.section && filters.section !== "all") conditions.push(eq(timetableEntries.section, filters.section));
+    if (filters.dayOfWeek && filters.dayOfWeek !== "all") conditions.push(eq(timetableEntries.dayOfWeek, filters.dayOfWeek));
+    if (filters.teacherUserId !== undefined) conditions.push(eq(timetableEntries.teacherUserId, filters.teacherUserId));
+    return db.select().from(timetableEntries).where(and(...conditions)).orderBy(timetableEntries.periodNo);
+  }
+
+  async createTimetableEntry(input: InsertTimetableEntry & { schoolId: number; sessionId: number }): Promise<TimetableEntry> {
+    const [entry] = await db.insert(timetableEntries).values(input).returning();
+    return entry;
+  }
+
+  async deleteTimetableEntry(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const deleted = await db.delete(timetableEntries).where(and(eq(timetableEntries.id, id), eq(timetableEntries.schoolId, schoolId), eq(timetableEntries.sessionId, sessionId))).returning({ id: timetableEntries.id });
+    return deleted.length > 0;
+  }
+
+  // === Leave Requests ===
+  async getLeaveRequests(schoolId: number, sessionId: number, filters: { userId?: number; studentId?: number; status?: string } = {}): Promise<LeaveRequest[]> {
+    const conditions = [eq(leaveRequests.schoolId, schoolId), eq(leaveRequests.sessionId, sessionId)];
+    if (filters.userId !== undefined) conditions.push(eq(leaveRequests.userId, filters.userId));
+    if (filters.studentId !== undefined) conditions.push(eq(leaveRequests.studentId, filters.studentId));
+    if (filters.status && filters.status !== "all") conditions.push(eq(leaveRequests.status, filters.status));
+    return db.select().from(leaveRequests).where(and(...conditions)).orderBy(sql`${leaveRequests.createdAt} DESC`);
+  }
+
+  async createLeaveRequest(input: InsertLeaveRequest & { schoolId: number; sessionId: number; userId: number; applicantName: string; applicantType: "student" | "staff"; studentId?: number | null; className?: string | null; section?: string | null }): Promise<LeaveRequest> {
+    if (input.toDate < input.fromDate) throw new Error("Leave end date cannot precede start date");
+    const [created] = await db.insert(leaveRequests).values(input).returning();
+    return created;
+  }
+
+  async reviewLeaveRequest(id: number, schoolId: number, sessionId: number, status: "approved" | "rejected", reviewedByUserId: number, reviewRemarks?: string | null): Promise<LeaveRequest | undefined> {
+    const [updated] = await db.update(leaveRequests).set({ status, reviewedByUserId, reviewRemarks: reviewRemarks ?? null, updatedAt: new Date() }).where(and(eq(leaveRequests.id, id), eq(leaveRequests.schoolId, schoolId), eq(leaveRequests.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  // === Certificates ===
+  async getCertificates(schoolId: number, sessionId: number, studentId?: number): Promise<Certificate[]> {
+    const conditions = [eq(certificates.schoolId, schoolId), eq(certificates.sessionId, sessionId)];
+    if (studentId !== undefined) conditions.push(eq(certificates.studentId, studentId));
+    return db.select().from(certificates).where(and(...conditions)).orderBy(sql`${certificates.createdAt} DESC`);
+  }
+
+  async createCertificate(input: InsertCertificate & { certificateNo: string; schoolId: number; sessionId: number; issuedByUserId: number }): Promise<Certificate> {
+    const student = await this.getStudent(input.studentId, input.schoolId);
+    if (!student) throw new Error("Student not found in this school");
+    const [created] = await db.insert(certificates).values(input).returning();
+    if (input.certificateType === "transfer") {
+      await db.update(students).set({ tcNumber: input.certificateNo, tcIssueDate: input.issueDate, updatedAt: new Date() }).where(and(eq(students.id, input.studentId), eq(students.schoolId, input.schoolId)));
+    }
+    return created;
+  }
+
+  async revokeCertificate(id: number, schoolId: number, sessionId: number): Promise<Certificate | undefined> {
+    const [updated] = await db.update(certificates).set({ status: "revoked" }).where(and(eq(certificates.id, id), eq(certificates.schoolId, schoolId), eq(certificates.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  // === Transport ===
+  async getTransportRoutes(schoolId: number, sessionId: number): Promise<TransportRoute[]> {
+    return db.select().from(transportRoutes).where(and(eq(transportRoutes.schoolId, schoolId), eq(transportRoutes.sessionId, sessionId))).orderBy(transportRoutes.routeName);
+  }
+
+  async createTransportRoute(input: InsertTransportRoute & { schoolId: number; sessionId: number }): Promise<TransportRoute> {
+    const [created] = await db.insert(transportRoutes).values(input).returning();
+    return created;
+  }
+
+  async updateTransportRoute(id: number, schoolId: number, sessionId: number, updates: Partial<InsertTransportRoute>): Promise<TransportRoute | undefined> {
+    const [updated] = await db.update(transportRoutes).set(updates).where(and(eq(transportRoutes.id, id), eq(transportRoutes.schoolId, schoolId), eq(transportRoutes.sessionId, sessionId))).returning();
+    return updated;
+  }
+
+  async getStudentTransportAllocations(schoolId: number, sessionId: number, routeId?: number): Promise<StudentTransportAllocation[]> {
+    const conditions = [eq(studentTransportAllocations.schoolId, schoolId), eq(studentTransportAllocations.sessionId, sessionId), eq(studentTransportAllocations.isActive, true)];
+    if (routeId !== undefined) conditions.push(eq(studentTransportAllocations.routeId, routeId));
+    return db.select().from(studentTransportAllocations).where(and(...conditions));
+  }
+
+  async assignStudentTransport(input: InsertStudentTransportAllocation & { schoolId: number; sessionId: number }): Promise<StudentTransportAllocation> {
+    const student = await this.getStudent(input.studentId, input.schoolId);
+    if (!student || student.sessionId !== input.sessionId) throw new Error("Student not found in active session");
+    const [route] = await db.select().from(transportRoutes).where(and(eq(transportRoutes.id, input.routeId), eq(transportRoutes.schoolId, input.schoolId), eq(transportRoutes.sessionId, input.sessionId)));
+    if (!route) throw new Error("Transport route not found");
+    const existing = await db.select().from(studentTransportAllocations).where(and(eq(studentTransportAllocations.schoolId, input.schoolId), eq(studentTransportAllocations.sessionId, input.sessionId), eq(studentTransportAllocations.studentId, input.studentId))).limit(1);
+    if (existing.length > 0) {
+      const [updated] = await db.update(studentTransportAllocations).set({ routeId: input.routeId, stopName: input.stopName, monthlyFee: input.monthlyFee, isActive: true }).where(eq(studentTransportAllocations.id, existing[0].id)).returning();
+      return updated;
+    }
+    const [created] = await db.insert(studentTransportAllocations).values(input).returning();
+    return created;
+  }
+
+  async removeStudentTransport(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const deleted = await db.delete(studentTransportAllocations).where(and(eq(studentTransportAllocations.id, id), eq(studentTransportAllocations.schoolId, schoolId), eq(studentTransportAllocations.sessionId, sessionId))).returning({ id: studentTransportAllocations.id });
+    return deleted.length > 0;
   }
 }
 
