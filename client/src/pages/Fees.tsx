@@ -18,7 +18,7 @@ import { format } from "date-fns";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertFeePaymentSchema, insertFeeStructureSchema, type FeePayment } from "@shared/schema";
-import { Printer } from "lucide-react";
+import { Printer, Bus } from "lucide-react";
 import { z } from "zod";
 
 export default function Fees() {
@@ -68,6 +68,22 @@ export default function Fees() {
   const dues = useQuery<any[]>({
     queryKey: ["/api/student-dues"],
     queryFn: async () => (await fetch("/api/student-dues", { credentials: "include" })).json(),
+  });
+
+  type TransportRoute = {
+    id: number;
+    routeName: string;
+    amount: number;
+    isActive: boolean;
+  };
+
+  const transportRoutes = useQuery<TransportRoute[]>({
+    queryKey: ["/api/transport-routes"],
+    queryFn: async () => {
+      const response = await fetch("/api/transport-routes", { credentials: "include" });
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
+    },
   });
 
   const createDue = useMutation({
@@ -132,7 +148,7 @@ export default function Fees() {
     else createStructure.mutate(data, options);
   };
 
-  const error = [structures, payments, session].find((q) => q.isError);
+  const error = [structures, payments, session, transportRoutes].find((q) => q.isError);
   const receiptStudent = selectedReceipt ? studentById.get(selectedReceipt.studentId) : undefined;
 
   return (
@@ -226,6 +242,9 @@ export default function Fees() {
             {!isStudent && <TabsTrigger value="defaulters">Defaulters</TabsTrigger>}
             <TabsTrigger value="dues">Student Dues</TabsTrigger>
             {canCollect && <TabsTrigger value="structure">Fee Structure</TabsTrigger>}
+            <TabsTrigger value="transport">
+              <Bus className="w-4 h-4 mr-1" /> Transport
+            </TabsTrigger>
           </TabsList>
 
           {canCollect && (
@@ -250,7 +269,14 @@ export default function Fees() {
                           const st = studentById.get(sid);
                           if (st) {
                             const str = structureByClass.get(st.class);
-                            if (str) paymentForm.setValue("amount", str.monthlyFee);
+                            const busRoute = st.transportId
+                              ? transportRoutes.data?.find((r) => r.id === st.transportId)
+                              : undefined;
+                            const baseFee = str ? str.monthlyFee : 0;
+                            const busFee = busRoute ? busRoute.amount : 0;
+                            if (baseFee + busFee > 0) {
+                              paymentForm.setValue("amount", baseFee + busFee);
+                            }
                           }
                         }}
                       >
@@ -543,6 +569,43 @@ export default function Fees() {
                   </Table>
                 ) : (
                   <p className="text-slate-500">No dues recorded for the active session.</p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="transport">
+            <Card>
+              <CardHeader>
+                <CardTitle>Transport / Bus Charges</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-slate-500 mb-4">
+                  Active bus routes and their monthly charges. Student route assignment is managed from the Students directory and Transport module.
+                </p>
+                {transportRoutes.isLoading ? (
+                  <p>Loading transport routes...</p>
+                ) : transportRoutes.data?.length ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Route</TableHead>
+                        <TableHead>Monthly Charge</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {transportRoutes.data.map((route) => (
+                        <TableRow key={route.id}>
+                          <TableCell className="font-medium">{route.routeName}</TableCell>
+                          <TableCell>₹{route.amount.toLocaleString()}</TableCell>
+                          <TableCell>{route.isActive ? "Active" : "Inactive"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <p className="text-slate-500">No active transport routes configured.</p>
                 )}
               </CardContent>
             </Card>

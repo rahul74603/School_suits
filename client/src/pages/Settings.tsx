@@ -15,6 +15,14 @@ const json = async (url: string) => {
   return res.json();
 };
 
+type TransportRoute = {
+  id: number;
+  schoolId: number;
+  routeName: string;
+  amount: number;
+  isActive: boolean;
+};
+
 export default function Settings() {
   const { data: user } = useAuth();
   const qc = useQueryClient();
@@ -301,6 +309,18 @@ export default function Settings() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/teacher-assignments"] }),
   });
 
+  const transportRoutes = useQuery<TransportRoute[]>({
+    queryKey: ["/api/transport-routes", manager],
+    queryFn: async () => {
+      const data = await json(manager ? "/api/transport-routes?includeInactive=true" : "/api/transport-routes");
+      return Array.isArray(data) ? data : [];
+    },
+    enabled: !!user,
+  });
+  const [routeName, setRouteName] = useState("");
+  const [routeAmount, setRouteAmount] = useState("");
+  const [editingRouteId, setEditingRouteId] = useState<number | null>(null);
+
   const changePassword = useMutation({
     mutationFn: () =>
       apiRequest("POST", "/api/auth/change-password", {
@@ -316,6 +336,54 @@ export default function Settings() {
     },
     onError: (err) => setMessage(err instanceof Error ? err.message : "Password change failed"),
   });
+
+  const createRoute = useMutation({
+    mutationFn: (data: { routeName: string; amount: number }) =>
+      apiRequest("POST", "/api/transport-routes", data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/transport-routes"] });
+      setRouteName("");
+      setRouteAmount("");
+      setMessage("Bus route added successfully.");
+    },
+    onError: (error) => setMessage(error instanceof Error ? error.message : "Unable to add bus route."),
+  });
+
+  const updateRoute = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { routeName?: string; amount?: number } }) =>
+      apiRequest("PATCH", `/api/transport-routes/${id}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/transport-routes"] });
+      setEditingRouteId(null);
+      setRouteName("");
+      setRouteAmount("");
+      setMessage("Bus route updated successfully.");
+    },
+    onError: (error) => setMessage(error instanceof Error ? error.message : "Unable to update bus route."),
+  });
+
+  const deactivateRoute = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/transport-routes/${id}/deactivate`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/transport-routes"] });
+      setMessage("Bus route deactivated. Existing student records are preserved.");
+    },
+    onError: (error) => setMessage(error instanceof Error ? error.message : "Unable to deactivate bus route."),
+  });
+
+  const submitRoute = () => {
+    const trimmedName = routeName.trim();
+    const amount = Number(routeAmount);
+    if (!trimmedName || !Number.isInteger(amount) || amount <= 0) {
+      setMessage("Enter a route name and a positive whole-number monthly charge.");
+      return;
+    }
+    if (editingRouteId) {
+      updateRoute.mutate({ id: editingRouteId, data: { routeName: trimmedName, amount } });
+    } else {
+      createRoute.mutate({ routeName: trimmedName, amount });
+    }
+  };
 
   const teacherUsers = (schoolUsers.data ?? []).filter((u) => u.role === "teacher");
   const studentUsers = (schoolUsers.data ?? []).filter((u) => u.role === "student");
@@ -333,7 +401,7 @@ export default function Settings() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Settings & School Administration</h1>
           <p className="mt-1 text-slate-500">
-            Configure school profile, academic sessions, classes, subjects, user logins, teacher assignments, and security.
+            Configure school profile, academic sessions, classes, subjects, user logins, teacher assignments, bus routes, and security.
           </p>
         </div>
 
@@ -349,6 +417,7 @@ export default function Settings() {
             {manager && <TabsTrigger value="academics">Classes, Sections & Subjects</TabsTrigger>}
             {manager && <TabsTrigger value="users">Users & Account Links</TabsTrigger>}
             {manager && <TabsTrigger value="assignments">Teacher Assignments</TabsTrigger>}
+            {manager && <TabsTrigger value="transport">Bus Routes & Charges</TabsTrigger>}
             <TabsTrigger value="security">Security & Audit Logs</TabsTrigger>
           </TabsList>
 
@@ -992,6 +1061,107 @@ export default function Settings() {
               </Card>
             )}
           </TabsContent>
+
+          {manager && (
+            <TabsContent value="transport" className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Bus Routes & Monthly Charges</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-slate-500">
+                    Create and manage school transport routes. Deactivating a route does not remove existing student history.
+                  </p>
+                  <div className="grid md:grid-cols-[1fr_200px_auto_auto] gap-2">
+                    <Input
+                      value={routeName}
+                      onChange={(e) => setRouteName(e.target.value)}
+                      placeholder="Route name, e.g. City Route"
+                    />
+                    <Input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={routeAmount}
+                      onChange={(e) => setRouteAmount(e.target.value)}
+                      placeholder="Monthly charge ₹"
+                    />
+                    <Button
+                      onClick={submitRoute}
+                      disabled={createRoute.isPending || updateRoute.isPending}
+                    >
+                      {editingRouteId ? "Save Route" : "Add Route"}
+                    </Button>
+                    {editingRouteId && (
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setEditingRouteId(null);
+                          setRouteName("");
+                          setRouteAmount("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
+                  <div className="space-y-2 pt-2">
+                    {transportRoutes.isLoading ? (
+                      <p className="text-sm text-slate-500">Loading bus routes...</p>
+                    ) : transportRoutes.data?.length ? (
+                      transportRoutes.data.map((route) => (
+                        <div
+                          key={route.id}
+                          className="flex flex-col md:flex-row md:items-center justify-between gap-3 border rounded-lg p-3"
+                        >
+                          <div>
+                            <div className="font-medium">{route.routeName}</div>
+                            <div className="text-sm text-slate-500">
+                              ₹{route.amount.toLocaleString()} / month ·{" "}
+                              {route.isActive ? "Active" : "Inactive"}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setEditingRouteId(route.id);
+                                setRouteName(route.routeName);
+                                setRouteAmount(String(route.amount));
+                              }}
+                            >
+                              Edit
+                            </Button>
+                            {route.isActive && (
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                disabled={deactivateRoute.isPending}
+                                onClick={() => {
+                                  if (
+                                    window.confirm(
+                                      `Deactivate "${route.routeName}"? Existing student assignments are preserved.`,
+                                    )
+                                  ) {
+                                    deactivateRoute.mutate(route.id);
+                                  }
+                                }}
+                              >
+                                Deactivate
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-500">No bus routes configured yet.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
         </Tabs>
       </main>
     </div>

@@ -98,6 +98,14 @@ export interface IStorage {
   deactivateStudent(id: number, schoolId: number): Promise<Student | undefined>;
   promoteStudents(studentIds: number[], schoolId: number, targetClass: string): Promise<void>;
 
+  // Transport / Bus Routes
+  getTransportRoutes(schoolId: number, includeInactive?: boolean): Promise<TransportRoute[]>;
+  getTransportRoute(id: number, schoolId: number): Promise<TransportRoute | undefined>;
+  createTransportRoute(input: InsertTransportRoute & { schoolId: number }): Promise<TransportRoute>;
+  updateTransportRoute(id: number, schoolId: number, updates: Partial<InsertTransportRoute>): Promise<TransportRoute | undefined>;
+  deactivateTransportRoute(id: number, schoolId: number): Promise<TransportRoute | undefined>;
+  assignStudentTransport(studentId: number, schoolId: number, transportId: number | null): Promise<Student | undefined>;
+
   // Fees
   getStudentDues(schoolId: number, sessionId: number, studentId?: number): Promise<StudentDue[]>;
   createStudentDue(input: Omit<StudentDue, "id" | "createdAt">): Promise<StudentDue>;
@@ -173,12 +181,9 @@ export interface IStorage {
   createCertificate(input: InsertCertificate & { certificateNo: string; schoolId: number; sessionId: number; issuedByUserId: number }): Promise<Certificate>;
   revokeCertificate(id: number, schoolId: number, sessionId: number): Promise<Certificate | undefined>;
 
-  // Transport
-  getTransportRoutes(schoolId: number, sessionId: number): Promise<TransportRoute[]>;
-  createTransportRoute(input: InsertTransportRoute & { schoolId: number; sessionId: number }): Promise<TransportRoute>;
-  updateTransportRoute(id: number, schoolId: number, sessionId: number, updates: Partial<InsertTransportRoute>): Promise<TransportRoute | undefined>;
+  // Student Transport Allocations
   getStudentTransportAllocations(schoolId: number, sessionId: number, routeId?: number): Promise<StudentTransportAllocation[]>;
-  assignStudentTransport(input: InsertStudentTransportAllocation & { schoolId: number; sessionId: number }): Promise<StudentTransportAllocation>;
+  createStudentTransportAllocation(input: InsertStudentTransportAllocation & { schoolId: number; sessionId: number }): Promise<StudentTransportAllocation>;
   removeStudentTransport(id: number, schoolId: number, sessionId: number): Promise<boolean>;
 }
 
@@ -644,6 +649,87 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(students.schoolId, schoolId), sql`${students.id} IN ${studentIds}`));
   }
 
+  // === Transport / Bus Routes ===
+  async getTransportRoutes(schoolId: number, includeInactive = false): Promise<TransportRoute[]> {
+    const conditions = [eq(transportRoutes.schoolId, schoolId)];
+    if (!includeInactive) conditions.push(eq(transportRoutes.isActive, true));
+    return await db.select().from(transportRoutes).where(and(...conditions)).orderBy(transportRoutes.routeName);
+  }
+
+  async getTransportRoute(id: number, schoolId: number): Promise<TransportRoute | undefined> {
+    const [route] = await db.select().from(transportRoutes).where(
+      and(eq(transportRoutes.id, id), eq(transportRoutes.schoolId, schoolId)),
+    );
+    return route;
+  }
+
+  async createTransportRoute(input: InsertTransportRoute & { schoolId: number }): Promise<TransportRoute> {
+    const amount = input.amount ?? input.monthlyFee ?? 500;
+    const [route] = await db.insert(transportRoutes).values({
+      schoolId: input.schoolId,
+      routeName: input.routeName,
+      amount: amount > 0 ? amount : 500,
+      vehicleNo: input.vehicleNo ?? null,
+      driverName: input.driverName ?? null,
+      driverContact: input.driverContact ?? null,
+      stops: input.stops ?? null,
+      capacity: input.capacity ?? 40,
+      isActive: input.isActive ?? true,
+    }).returning();
+    return route;
+  }
+
+  async updateTransportRoute(
+    id: number,
+    schoolId: number,
+    updates: Partial<InsertTransportRoute>,
+  ): Promise<TransportRoute | undefined> {
+    const nextAmount = updates.amount ?? updates.monthlyFee;
+    const [route] = await db.update(transportRoutes).set({
+      ...(updates.routeName !== undefined ? { routeName: updates.routeName } : {}),
+      ...(nextAmount !== undefined && nextAmount > 0 ? { amount: nextAmount } : {}),
+      ...(updates.vehicleNo !== undefined ? { vehicleNo: updates.vehicleNo } : {}),
+      ...(updates.driverName !== undefined ? { driverName: updates.driverName } : {}),
+      ...(updates.driverContact !== undefined ? { driverContact: updates.driverContact } : {}),
+      ...(updates.stops !== undefined ? { stops: updates.stops } : {}),
+      ...(updates.capacity !== undefined ? { capacity: updates.capacity } : {}),
+      ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {}),
+      updatedAt: new Date(),
+    }).where(
+      and(eq(transportRoutes.id, id), eq(transportRoutes.schoolId, schoolId)),
+    ).returning();
+    return route;
+  }
+
+  async deactivateTransportRoute(id: number, schoolId: number): Promise<TransportRoute | undefined> {
+    const [route] = await db.update(transportRoutes).set({
+      isActive: false,
+      updatedAt: new Date(),
+    }).where(
+      and(eq(transportRoutes.id, id), eq(transportRoutes.schoolId, schoolId)),
+    ).returning();
+    return route;
+  }
+
+  async assignStudentTransport(
+    studentId: number,
+    schoolId: number,
+    transportId: number | null,
+  ): Promise<Student | undefined> {
+    if (transportId !== null) {
+      const route = await this.getTransportRoute(transportId, schoolId);
+      if (!route || !route.isActive) return undefined;
+    }
+
+    const [student] = await db.update(students).set({
+      transportId,
+      updatedAt: new Date(),
+    }).where(
+      and(eq(students.id, studentId), eq(students.schoolId, schoolId)),
+    ).returning();
+    return student;
+  }
+
   // === Fees ===
   async getStudentDues(schoolId: number, sessionId: number, studentId?: number): Promise<StudentDue[]> { const conditions=[eq(studentDues.schoolId,schoolId),eq(studentDues.sessionId,sessionId)]; if(studentId!==undefined)conditions.push(eq(studentDues.studentId,studentId)); return db.select().from(studentDues).where(and(...conditions)); }
   async createStudentDue(input: Omit<StudentDue, "id" | "createdAt">): Promise<StudentDue> { const [value]=await db.insert(studentDues).values(input).returning(); return value; }
@@ -1007,32 +1093,19 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  // === Transport ===
-  async getTransportRoutes(schoolId: number, sessionId: number): Promise<TransportRoute[]> {
-    return db.select().from(transportRoutes).where(and(eq(transportRoutes.schoolId, schoolId), eq(transportRoutes.sessionId, sessionId))).orderBy(transportRoutes.routeName);
-  }
-
-  async createTransportRoute(input: InsertTransportRoute & { schoolId: number; sessionId: number }): Promise<TransportRoute> {
-    const [created] = await db.insert(transportRoutes).values(input).returning();
-    return created;
-  }
-
-  async updateTransportRoute(id: number, schoolId: number, sessionId: number, updates: Partial<InsertTransportRoute>): Promise<TransportRoute | undefined> {
-    const [updated] = await db.update(transportRoutes).set(updates).where(and(eq(transportRoutes.id, id), eq(transportRoutes.schoolId, schoolId), eq(transportRoutes.sessionId, sessionId))).returning();
-    return updated;
-  }
-
+  // === Student Transport Allocations ===
   async getStudentTransportAllocations(schoolId: number, sessionId: number, routeId?: number): Promise<StudentTransportAllocation[]> {
     const conditions = [eq(studentTransportAllocations.schoolId, schoolId), eq(studentTransportAllocations.sessionId, sessionId), eq(studentTransportAllocations.isActive, true)];
     if (routeId !== undefined) conditions.push(eq(studentTransportAllocations.routeId, routeId));
     return db.select().from(studentTransportAllocations).where(and(...conditions));
   }
 
-  async assignStudentTransport(input: InsertStudentTransportAllocation & { schoolId: number; sessionId: number }): Promise<StudentTransportAllocation> {
+  async createStudentTransportAllocation(input: InsertStudentTransportAllocation & { schoolId: number; sessionId: number }): Promise<StudentTransportAllocation> {
     const student = await this.getStudent(input.studentId, input.schoolId);
     if (!student || student.sessionId !== input.sessionId) throw new Error("Student not found in active session");
-    const [route] = await db.select().from(transportRoutes).where(and(eq(transportRoutes.id, input.routeId), eq(transportRoutes.schoolId, input.schoolId), eq(transportRoutes.sessionId, input.sessionId)));
-    if (!route) throw new Error("Transport route not found");
+    const route = await this.getTransportRoute(input.routeId, input.schoolId);
+    if (!route || !route.isActive) throw new Error("Transport route not found");
+    await this.assignStudentTransport(input.studentId, input.schoolId, input.routeId);
     const existing = await db.select().from(studentTransportAllocations).where(and(eq(studentTransportAllocations.schoolId, input.schoolId), eq(studentTransportAllocations.sessionId, input.sessionId), eq(studentTransportAllocations.studentId, input.studentId))).limit(1);
     if (existing.length > 0) {
       const [updated] = await db.update(studentTransportAllocations).set({ routeId: input.routeId, stopName: input.stopName, monthlyFee: input.monthlyFee, isActive: true }).where(eq(studentTransportAllocations.id, existing[0].id)).returning();
@@ -1043,6 +1116,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async removeStudentTransport(id: number, schoolId: number, sessionId: number): Promise<boolean> {
+    const [existing] = await db.select().from(studentTransportAllocations).where(and(eq(studentTransportAllocations.id, id), eq(studentTransportAllocations.schoolId, schoolId), eq(studentTransportAllocations.sessionId, sessionId))).limit(1);
+    if (existing) {
+      await this.assignStudentTransport(existing.studentId, schoolId, null);
+    }
     const deleted = await db.delete(studentTransportAllocations).where(and(eq(studentTransportAllocations.id, id), eq(studentTransportAllocations.schoolId, schoolId), eq(studentTransportAllocations.sessionId, sessionId))).returning({ id: studentTransportAllocations.id });
     return deleted.length > 0;
   }

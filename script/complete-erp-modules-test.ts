@@ -137,8 +137,8 @@ const fakeStorage = {
     certsList.push(created);
     return created;
   },
-  getTransportRoutes: async (schoolId: number, sessionId: number) =>
-    routesList.filter((r) => r.schoolId === schoolId && r.sessionId === sessionId),
+  getTransportRoutes: async (schoolId: number) =>
+    routesList.filter((r) => r.schoolId === schoolId),
   createTransportRoute: async (input: any) => {
     const created = { id: routesList.length + 1, ...input, createdAt: new Date() };
     routesList.push(created);
@@ -146,7 +146,7 @@ const fakeStorage = {
   },
   getStudentTransportAllocations: async (schoolId: number, sessionId: number) =>
     allocationsList.filter((a) => a.schoolId === schoolId && a.sessionId === sessionId),
-  assignStudentTransport: async (input: any) => {
+  createStudentTransportAllocation: async (input: any) => {
     const created = { id: allocationsList.length + 1, ...input, createdAt: new Date() };
     allocationsList.push(created);
     return created;

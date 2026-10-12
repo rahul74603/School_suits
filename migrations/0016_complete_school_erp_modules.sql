@@ -1,4 +1,4 @@
--- Step 16: Complete School ERP Modules (Notices, Homework, Timetable, Leave Requests, Certificates, Transport)
+-- Step 17: Complete School ERP Modules (Notices, Homework, Timetable, Leave Requests, Certificates, Extended Transport)
 
 CREATE TABLE IF NOT EXISTS "notices" (
   "id" serial PRIMARY KEY,
@@ -127,28 +127,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS "certificates_school_cert_no_unique"
 CREATE INDEX IF NOT EXISTS "certificates_school_student_idx"
   ON "certificates" ("school_id", "session_id", "student_id");
 
-CREATE TABLE IF NOT EXISTS "transport_routes" (
-  "id" serial PRIMARY KEY,
-  "school_id" integer NOT NULL REFERENCES "schools"("id") ON DELETE RESTRICT,
-  "session_id" integer NOT NULL REFERENCES "academic_sessions"("id") ON DELETE RESTRICT,
-  "route_name" text NOT NULL,
-  "vehicle_no" text NOT NULL,
-  "driver_name" text NOT NULL,
-  "driver_contact" text NOT NULL,
-  "stops" text NOT NULL,
-  "monthly_fee" integer NOT NULL DEFAULT 0,
-  "capacity" integer NOT NULL DEFAULT 40,
-  "is_active" boolean NOT NULL DEFAULT true,
-  "created_at" timestamp NOT NULL DEFAULT now(),
-  CONSTRAINT "transport_routes_fee_nonnegative" CHECK ("monthly_fee" >= 0 AND "capacity" > 0),
-  CONSTRAINT "transport_routes_session_school_fk" FOREIGN KEY ("session_id", "school_id") REFERENCES "academic_sessions"("id", "school_id") ON DELETE RESTRICT
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS "transport_routes_id_scope_unique"
-  ON "transport_routes" ("id", "school_id", "session_id");
-
-CREATE UNIQUE INDEX IF NOT EXISTS "transport_routes_school_session_name_unique"
-  ON "transport_routes" ("school_id", "session_id", "route_name");
+ALTER TABLE "transport_routes"
+  ADD COLUMN IF NOT EXISTS "vehicle_no" text,
+  ADD COLUMN IF NOT EXISTS "driver_name" text,
+  ADD COLUMN IF NOT EXISTS "driver_contact" text,
+  ADD COLUMN IF NOT EXISTS "stops" text,
+  ADD COLUMN IF NOT EXISTS "capacity" integer DEFAULT 40;
 
 CREATE TABLE IF NOT EXISTS "student_transport_allocations" (
   "id" serial PRIMARY KEY,
@@ -160,7 +144,7 @@ CREATE TABLE IF NOT EXISTS "student_transport_allocations" (
   "monthly_fee" integer NOT NULL,
   "is_active" boolean NOT NULL DEFAULT true,
   "created_at" timestamp NOT NULL DEFAULT now(),
-  CONSTRAINT "student_transport_route_scope_fk" FOREIGN KEY ("route_id", "school_id", "session_id") REFERENCES "transport_routes"("id", "school_id", "session_id") ON DELETE RESTRICT,
+  CONSTRAINT "student_transport_route_school_fk" FOREIGN KEY ("route_id", "school_id") REFERENCES "transport_routes"("id", "school_id") ON DELETE RESTRICT,
   CONSTRAINT "student_transport_student_school_fk" FOREIGN KEY ("student_id", "school_id") REFERENCES "students"("id", "school_id") ON DELETE RESTRICT,
   CONSTRAINT "student_transport_session_school_fk" FOREIGN KEY ("session_id", "school_id") REFERENCES "academic_sessions"("id", "school_id") ON DELETE RESTRICT
 );

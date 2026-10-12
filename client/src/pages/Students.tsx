@@ -1,4 +1,6 @@
 import { useState, useRef } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { useStudents, usePromoteStudents } from "@/hooks/use-students";
 import { Sidebar } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
@@ -18,7 +20,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Search, Plus, Printer, ArrowUpRight } from "lucide-react";
+import { Search, Plus, Printer, ArrowUpRight, Bus } from "lucide-react";
 import { useReactToPrint } from "react-to-print";
 import { StudentIdCard } from "@/components/StudentIdCard";
 import { type Student } from "@shared/schema";
@@ -47,6 +49,35 @@ export default function Students() {
   const schoolQuery = useSchool(auth.data?.schoolId);
   const sessionQuery = useActiveSession();
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [transportStudent, setTransportStudent] = useState<Student | null>(null);
+  const [transportId, setTransportId] = useState<string>("");
+  const queryClient = useQueryClient();
+
+  type TransportRoute = {
+    id: number;
+    routeName: string;
+    amount: number;
+    isActive: boolean;
+  };
+
+  const transportRoutes = useQuery<TransportRoute[]>({
+    queryKey: ["/api/transport-routes"],
+    queryFn: async () => {
+      const response = await fetch("/api/transport-routes", { credentials: "include" });
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
+    },
+    enabled: !!auth.data,
+  });
+
+  const assignTransport = useMutation({
+    mutationFn: ({ studentId, routeId }: { studentId: number; routeId: number | null }) =>
+      apiRequest("PUT", `/api/students/${studentId}/transport`, { transportId: routeId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/students"] });
+      setTransportStudent(null);
+    },
+  });
 
   const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({
@@ -193,13 +224,14 @@ export default function Students() {
                 <TableHead>Class</TableHead>
                 <TableHead>Father&apos;s Name</TableHead>
                 <TableHead>Contact</TableHead>
+                <TableHead>Transport</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isError ? (
                 <TableRow>
-                  <TableCell colSpan={7}>
+                  <TableCell colSpan={8}>
                     <QueryError
                       message={
                         error instanceof Error ? error.message : "Unable to load students."
@@ -210,13 +242,13 @@ export default function Students() {
                 </TableRow>
               ) : isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                     Loading students...
                   </TableCell>
                 </TableRow>
               ) : students?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                     No students found matching your search.
                   </TableCell>
                 </TableRow>
@@ -243,6 +275,22 @@ export default function Students() {
                     </TableCell>
                     <TableCell>{student.fatherName}</TableCell>
                     <TableCell>{student.contact}</TableCell>
+                    <TableCell>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-slate-600"
+                        onClick={() => {
+                          setTransportStudent(student);
+                          setTransportId(student.transportId ? String(student.transportId) : "");
+                        }}
+                      >
+                        <Bus className="w-4 h-4 mr-1" />
+                        {student.transportId
+                          ? (transportRoutes.data?.find(r => r.id === student.transportId)?.routeName ?? `Route #${student.transportId}`)
+                          : "No Transport"}
+                      </Button>
+                    </TableCell>
                     <TableCell className="text-right space-x-2">
                       <Link href={`/students/${student.id}`}>
                         <Button variant="ghost" size="sm">
@@ -289,6 +337,54 @@ export default function Students() {
             </TableBody>
           </Table>
         </div>
+
+        <Dialog open={!!transportStudent} onOpenChange={(open) => !open && setTransportStudent(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Student Transport</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-slate-600">
+                {transportStudent?.name} · Admission {transportStudent?.admissionNo}
+              </p>
+              <div>
+                <label className="text-sm font-medium">Bus route</label>
+                <select
+                  className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2"
+                  value={transportId}
+                  onChange={(e) => setTransportId(e.target.value)}
+                >
+                  <option value="">No Transport</option>
+                  {transportRoutes.data?.map(route => (
+                    <option key={route.id} value={route.id}>
+                      {route.routeName} — ₹{route.amount.toLocaleString()}/month
+                    </option>
+                  ))}
+                </select>
+                {transportRoutes.isLoading && <p className="mt-2 text-sm text-slate-500">Loading routes...</p>}
+                {!transportRoutes.isLoading && transportRoutes.data?.length === 0 && (
+                  <p className="mt-2 text-sm text-slate-500">No active bus routes are configured.</p>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={() => setTransportStudent(null)}>Cancel</Button>
+                <Button
+                  className="flex-1"
+                  disabled={assignTransport.isPending}
+                  onClick={() => {
+                    if (!transportStudent) return;
+                    assignTransport.mutate({
+                      studentId: transportStudent.id,
+                      routeId: transportId ? Number(transportId) : null,
+                    });
+                  }}
+                >
+                  {assignTransport.isPending ? "Saving..." : "Save Transport"}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );

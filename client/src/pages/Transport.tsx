@@ -194,13 +194,14 @@ export default function Transport() {
                   onChange={(e) => {
                     setRouteId(e.target.value);
                     const r = routeById.get(Number(e.target.value));
-                    if (r) setAllocFee(String(r.monthlyFee));
+                    if (r) setAllocFee(String((r as any).monthlyFee ?? r.amount ?? 500));
                   }}
                 >
                   <option value="">Select Bus Route...</option>
                   {(routes.data ?? []).map((r) => (
                     <option key={r.id} value={r.id}>
-                      {r.routeName} ({r.vehicleNo}) — ₹{r.monthlyFee}/mo
+                      {r.routeName} {r.vehicleNo ? `(${r.vehicleNo})` : ""} — ₹
+                      {(r as any).monthlyFee ?? r.amount}/mo
                     </option>
                   ))}
                 </select>
@@ -250,9 +251,9 @@ export default function Transport() {
                     <b>Stops:</b> {r.stops}
                   </p>
                   <div className="pt-2 border-t flex justify-between text-xs text-slate-500">
-                    <span>Fee: ₹{r.monthlyFee}/month</span>
+                    <span>Fee: ₹{(r as any).monthlyFee ?? r.amount}/month</span>
                     <span>
-                      Occupancy: {count} / {r.capacity} seats
+                      Occupancy: {count} / {r.capacity ?? 40} seats
                     </span>
                   </div>
                 </CardContent>

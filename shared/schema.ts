@@ -94,6 +94,27 @@ export const subjects = pgTable("subjects", {
   }),
 }));
 
+// === Transport / Bus Routes ===
+export const transportRoutes = pgTable("transport_routes", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  routeName: text("route_name").notNull(),
+  amount: integer("amount").notNull(),
+  vehicleNo: text("vehicle_no"),
+  driverName: text("driver_name"),
+  driverContact: text("driver_contact"),
+  stops: text("stops"),
+  capacity: integer("capacity").default(40),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  schoolNameUnique: uniqueIndex("transport_routes_school_name_unique").on(table.schoolId, table.routeName),
+  idSchoolUnique: uniqueIndex("transport_routes_id_school_unique").on(table.id, table.schoolId),
+  schoolActiveIndex: index("transport_routes_school_active_idx").on(table.schoolId, table.isActive),
+  amountCheck: check("transport_routes_amount_positive", sql`${table.amount} > 0`),
+}));
+
 // === Students Master ===
 export const students = pgTable("students", {
   id: serial("id").primaryKey(),
@@ -120,6 +141,7 @@ export const students = pgTable("students", {
   isActive: boolean("is_active").default(true).notNull(),
   isPromoted: boolean("is_promoted").default(false).notNull(),
   schoolId: integer("school_id").references(() => schools.id, { onDelete: "restrict" }).notNull(),
+  transportId: integer("transport_id"),
   sessionId: integer("session_id").references(() => academicSessions.id, { onDelete: "restrict" }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -706,27 +728,7 @@ export const certificates = pgTable("certificates", {
   issuerSchoolForeignKey: foreignKey({ columns: [table.issuedByUserId, table.schoolId], foreignColumns: [users.id, users.schoolId], name: "certificates_issuer_school_fk" }),
 }));
 
-// === Transport Management ===
-export const transportRoutes = pgTable("transport_routes", {
-  id: serial("id").primaryKey(),
-  schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
-  sessionId: integer("session_id").notNull().references(() => academicSessions.id, { onDelete: "restrict" }),
-  routeName: text("route_name").notNull(),
-  vehicleNo: text("vehicle_no").notNull(),
-  driverName: text("driver_name").notNull(),
-  driverContact: text("driver_contact").notNull(),
-  stops: text("stops").notNull(),
-  monthlyFee: integer("monthly_fee").notNull().default(0),
-  capacity: integer("capacity").notNull().default(40),
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => ({
-  idScopeUnique: uniqueIndex("transport_routes_id_scope_unique").on(table.id, table.schoolId, table.sessionId),
-  routeNameUnique: uniqueIndex("transport_routes_school_session_name_unique").on(table.schoolId, table.sessionId, table.routeName),
-  feeCheck: check("transport_routes_fee_nonnegative", sql`${table.monthlyFee} >= 0 AND ${table.capacity} > 0`),
-  sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "transport_routes_session_school_fk" }),
-}));
-
+// === Student Transport Allocations ===
 export const studentTransportAllocations = pgTable("student_transport_allocations", {
   id: serial("id").primaryKey(),
   schoolId: integer("school_id").notNull().references(() => schools.id, { onDelete: "restrict" }),
@@ -739,7 +741,7 @@ export const studentTransportAllocations = pgTable("student_transport_allocation
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   studentActiveUnique: uniqueIndex("student_transport_student_session_unique").on(table.schoolId, table.sessionId, table.studentId),
-  routeForeignKey: foreignKey({ columns: [table.routeId, table.schoolId, table.sessionId], foreignColumns: [transportRoutes.id, transportRoutes.schoolId, transportRoutes.sessionId], name: "student_transport_route_scope_fk" }),
+  routeForeignKey: foreignKey({ columns: [table.routeId, table.schoolId], foreignColumns: [transportRoutes.id, transportRoutes.schoolId], name: "student_transport_route_school_fk" }),
   studentSchoolForeignKey: foreignKey({ columns: [table.studentId, table.schoolId], foreignColumns: [students.id, students.schoolId], name: "student_transport_student_school_fk" }),
   sessionSchoolForeignKey: foreignKey({ columns: [table.sessionId, table.schoolId], foreignColumns: [academicSessions.id, academicSessions.schoolId], name: "student_transport_session_school_fk" }),
 }));
@@ -762,7 +764,13 @@ export const academicSessionsRelations = relations(academicSessions, ({ one, man
 export const studentsRelations = relations(students, ({ one, many }) => ({
   school: one(schools, { fields: [students.schoolId], references: [schools.id] }),
   session: one(academicSessions, { fields: [students.sessionId], references: [academicSessions.id] }),
+  transport: one(transportRoutes, { fields: [students.transportId, students.schoolId], references: [transportRoutes.id, transportRoutes.schoolId] }),
   payments: many(feePayments),
+}));
+
+export const transportRoutesRelations = relations(transportRoutes, ({ one, many }) => ({
+  school: one(schools, { fields: [transportRoutes.schoolId], references: [schools.id] }),
+  students: many(students),
 }));
 
 export const feeStructuresRelations = relations(feeStructures, ({ one }) => ({
@@ -789,6 +797,23 @@ export const insertStudentSchema = createInsertSchema(students).omit({ id: true,
   name: z.string().trim().min(1),
   fatherName: z.string().trim().min(1),
 });
+export const insertTransportRouteSchema = createInsertSchema(transportRoutes).omit({
+  id: true,
+  schoolId: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  routeName: z.string().trim().min(1).max(150),
+  amount: z.number().int().positive().optional(),
+  monthlyFee: z.number().int().nonnegative().optional(),
+  vehicleNo: z.string().trim().max(50).nullable().optional(),
+  driverName: z.string().trim().max(120).nullable().optional(),
+  driverContact: z.string().trim().max(30).nullable().optional(),
+  stops: z.string().trim().max(1000).nullable().optional(),
+  capacity: z.number().int().positive().optional(),
+  isActive: z.boolean().optional(),
+});
+
 export const insertFeeStructureSchema = createInsertSchema(feeStructures).omit({ id: true, schoolId: true, sessionId: true, createdAt: true, updatedAt: true }).extend({
   monthlyFee: z.number().int().nonnegative(),
   admissionFee: z.number().int().nonnegative().optional(),
@@ -906,16 +931,6 @@ export const insertCertificateSchema = createInsertSchema(certificates).omit({ i
   remarks: z.string().max(500).nullable().optional(),
 });
 
-export const insertTransportRouteSchema = createInsertSchema(transportRoutes).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({
-  routeName: z.string().trim().min(1).max(120),
-  vehicleNo: z.string().trim().min(1).max(50),
-  driverName: z.string().trim().min(1).max(120),
-  driverContact: z.string().trim().min(1).max(30),
-  stops: z.string().trim().min(1).max(1000),
-  monthlyFee: z.number().int().nonnegative(),
-  capacity: z.number().int().positive().optional(),
-});
-
 export const insertStudentTransportAllocationSchema = createInsertSchema(studentTransportAllocations).omit({ id: true, schoolId: true, sessionId: true, createdAt: true }).extend({
   studentId: z.number().int().positive(),
   routeId: z.number().int().positive(),
@@ -929,7 +944,6 @@ export type HomeworkAssignment = typeof homeworkAssignments.$inferSelect;
 export type TimetableEntry = typeof timetableEntries.$inferSelect;
 export type LeaveRequest = typeof leaveRequests.$inferSelect;
 export type Certificate = typeof certificates.$inferSelect;
-export type TransportRoute = typeof transportRoutes.$inferSelect;
 export type StudentTransportAllocation = typeof studentTransportAllocations.$inferSelect;
 export type Document = typeof documents.$inferSelect;
 export type BackupRecord = typeof backupRecords.$inferSelect;
@@ -940,6 +954,7 @@ export type School = typeof schools.$inferSelect;
 export type AcademicSession = typeof academicSessions.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Student = typeof students.$inferSelect;
+export type TransportRoute = typeof transportRoutes.$inferSelect;
 export type FeeStructure = typeof feeStructures.$inferSelect;
 export type FeePayment = typeof feePayments.$inferSelect;
 export type StudentDue = typeof studentDues.$inferSelect;
@@ -965,6 +980,7 @@ export type InsertSchool = z.infer<typeof insertSchoolSchema>;
 export type InsertAcademicSession = z.infer<typeof insertAcademicSessionSchema>;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type InsertStudent = z.infer<typeof insertStudentSchema>;
+export type InsertTransportRoute = z.infer<typeof insertTransportRouteSchema>;
 export type InsertFeeStructure = z.infer<typeof insertFeeStructureSchema>;
 export type InsertFeePayment = z.infer<typeof insertFeePaymentSchema>;
 export type InsertStaff = z.infer<typeof insertStaffSchema>;
@@ -987,11 +1003,11 @@ export type InsertHomework = z.infer<typeof insertHomeworkSchema>;
 export type InsertTimetableEntry = z.infer<typeof insertTimetableEntrySchema>;
 export type InsertLeaveRequest = z.infer<typeof insertLeaveRequestSchema>;
 export type InsertCertificate = z.infer<typeof insertCertificateSchema>;
-export type InsertTransportRoute = z.infer<typeof insertTransportRouteSchema>;
 export type InsertStudentTransportAllocation = z.infer<typeof insertStudentTransportAllocationSchema>;
 
 // Server-side insert types retain tenant columns; client input schemas intentionally omit them.
 export type StoredStudentInsert = typeof students.$inferInsert;
+export type StoredTransportRouteInsert = typeof transportRoutes.$inferInsert;
 export type StoredFeeStructureInsert = typeof feeStructures.$inferInsert;
 export type StoredFeePaymentInsert = typeof feePayments.$inferInsert;
 export type StoredStaffInsert = typeof staff.$inferInsert;
