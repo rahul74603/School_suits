@@ -133,10 +133,10 @@ export async function registerRoutes(
   app.post("/api/school-users", requireRole("admin", "principal"), async (req, res) => {
     const actor = currentUser(req);
     const input = z.object({
-      username: z.string().trim().min(3).max(120).regex(/^[a-zA-Z0-9._@-]+$/, "Login ID / Email may only contain letters, numbers, @, dots, underscores, and hyphens"),
-      name: z.string().trim().min(1).max(120),
+      username: z.string().trim().min(2, "Login ID / Email must be at least 2 characters").max(120),
+      name: z.string().trim().min(1, "Name is required").max(120),
       role: z.enum(["admin", "principal", "accountant", "teacher", "staff", "student"]),
-      password: z.string().min(6).max(200),
+      password: z.string().min(6, "Password must be at least 6 characters").max(200),
       staffId: z.number().int().positive().nullable().optional(),
       studentId: z.number().int().positive().nullable().optional(),
     }).parse(req.body);
@@ -144,7 +144,7 @@ export async function registerRoutes(
       return res.status(403).json({ message: "Principals cannot create administrator accounts" });
     }
     const existing = await dataStore.getUserByUsername(input.username);
-    if (existing) return res.status(409).json({ message: "Login ID / Email already exists" });
+    if (existing) return res.status(409).json({ message: `Login ID / Email "${input.username}" already exists` });
     const created = await dataStore.createUser({
       username: input.username,
       name: input.name,
@@ -152,7 +152,7 @@ export async function registerRoutes(
       passwordHash: await hashPassword(input.password),
       schoolId: actor.schoolId,
     });
-    if (input.staffId && (input.role === "teacher" || input.role === "staff")) {
+    if (input.staffId && ["teacher", "staff", "principal", "accountant"].includes(input.role)) {
       try {
         await dataStore.createStaffUserLink({
           staffId: input.staffId,

@@ -868,7 +868,7 @@ export class DatabaseStorage implements IStorage {
   async createStaffUserLink(insertLink: InsertStaffUserLink & { schoolId: number }): Promise<StaffUserLink | undefined> {
     const [staffMember] = await db.select({ id: staff.id }).from(staff).where(and(eq(staff.id, insertLink.staffId), eq(staff.schoolId, insertLink.schoolId)));
     const [user] = await db.select({ id: users.id, role: users.role }).from(users).where(and(eq(users.id, insertLink.userId), eq(users.schoolId, insertLink.schoolId)));
-    if (!staffMember || !user || !["staff", "teacher"].includes(user.role)) return undefined;
+    if (!staffMember || !user || !["staff", "teacher", "principal", "accountant"].includes(user.role)) return undefined;
     const [link] = await db.insert(staffUserLinks).values(insertLink).returning();
     return link;
   }

@@ -113,7 +113,8 @@ app.use((req, res, next) => {
     if (res.headersSent) return next(err);
 
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: "Invalid request" });
+      const detail = err.issues.map((i) => i.message).join(", ");
+      return res.status(400).json({ message: detail || "Invalid request" });
     }
 
     if (typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "23505") {

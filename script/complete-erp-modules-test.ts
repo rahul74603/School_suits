@@ -179,17 +179,18 @@ try {
   assert.equal(adminLogin.status, 200);
   const adminCookie = adminLogin.headers.get("set-cookie")?.split(";")[0]!;
 
-  // 2. Create a Teacher user via /api/school-users
+  // 2. Create a Teacher user via /api/school-users (including email username and staffId)
   const createTeacher = await req(
     "/api/school-users",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        username: "teacher.verma",
-        name: "Neha Verma",
+        username: "pankajsharma@school.com",
+        name: "Pankaj Sharma",
         role: "teacher",
-        password: "TeacherPassword123!",
+        password: "Teacher123",
+        staffId: 1,
       }),
     },
     adminCookie,
