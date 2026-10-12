@@ -10,7 +10,7 @@ import {
   type StoredStudentInsert, type StoredFeeStructureInsert, type StoredFeePaymentInsert, type StoredStaffInsert
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, ilike, and, or, sql } from "drizzle-orm";
+import { eq, ilike, and, or, sql, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Users & Schools
@@ -711,7 +711,7 @@ export class DatabaseStorage implements IStorage {
     if (studentIds.length === 0) return;
     await db.update(students)
       .set({ class: targetClass, isPromoted: true, updatedAt: new Date() })
-      .where(and(eq(students.schoolId, schoolId), sql`${students.id} IN ${studentIds}`));
+      .where(and(eq(students.schoolId, schoolId), inArray(students.id, studentIds)));
   }
 
   // === Transport / Bus Routes ===

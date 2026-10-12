@@ -214,6 +214,66 @@ export async function registerRoutes(
     if (!session || typeof (dataStore as any).getStudentUserLinks !== "function") return res.json([]);
     res.json(await (dataStore as any).getStudentUserLinks(user.schoolId, session.id));
   });
+  app.post("/api/school-users/bulk-student-accounts", requireRole("admin", "principal"), async (req, res) => {
+    const actor = currentUser(req);
+    const session = await dataStore.getActiveSession(actor.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const input = z.object({
+      className: z.string().optional(),
+      defaultPassword: z.string().min(6).max(200).optional(),
+    }).parse(req.body ?? {});
+
+    const allStudents = await dataStore.getStudents(
+      actor.schoolId,
+      input.className && input.className !== "all" ? { class: input.className } : {},
+      session.id,
+    );
+    const existingLinks: any[] =
+      typeof (dataStore as any).getStudentUserLinks === "function"
+        ? await (dataStore as any).getStudentUserLinks(actor.schoolId, session.id)
+        : [];
+    const linkedStudentIds = new Set(existingLinks.map((l) => l.studentId));
+
+    let createdCount = 0;
+    let skippedCount = 0;
+    for (const stu of allStudents) {
+      if (linkedStudentIds.has(stu.id)) {
+        skippedCount++;
+        continue;
+      }
+      const cleanAdm = stu.admissionNo
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9._@-]/g, "-");
+      const candidateUsername = cleanAdm.length >= 3 ? cleanAdm : `stu-${stu.id}-${actor.schoolId}`;
+      let userRecord = await dataStore.getUserByUsername(candidateUsername);
+      if (!userRecord) {
+        const rawPwd =
+          input.defaultPassword ||
+          (stu.contact && stu.contact.trim().length >= 6 ? stu.contact.trim() : "Student@123");
+        const passwordHash = await hashPassword(rawPwd);
+        userRecord = await (dataStore as any).createUser({
+          username: candidateUsername,
+          password: passwordHash,
+          role: "student",
+          name: stu.name,
+          schoolId: actor.schoolId,
+        });
+      }
+      if (userRecord && userRecord.role === "student") {
+        await dataStore
+          .createStudentUserLink({
+            studentId: stu.id,
+            userId: userRecord.id,
+            schoolId: actor.schoolId,
+            sessionId: session.id,
+          })
+          .catch(() => undefined);
+        createdCount++;
+      }
+    }
+    res.status(201).json({ createdCount, skippedCount });
+  });
   app.get("/api/payroll/staff-links", requireRole("admin", "principal", "accountant"), async (req, res) => {
     const user = currentUser(req);
     if (typeof (dataStore as any).getStaffUserLinks !== "function") return res.json([]);
@@ -569,14 +629,19 @@ export async function registerRoutes(
     if (user.role === "teacher") { const session = sessionId ? (await dataStore.getAcademicSessions(user.schoolId)).find((value) => value.id === sessionId) : await dataStore.getActiveSession(user.schoolId); if (!session) return res.json([]); const assignments = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id); const allowed = new Set((await Promise.all(assignments.map((assignment) => dataStore.getStudents(user.schoolId, { class: assignment.className, section: assignment.section }, session.id)))).flat().map((student) => student.id)); return res.json(docs.filter((document) => document.ownerType !== "student" || allowed.has(document.ownerId ?? -1))); }
     res.json(docs);
   });
-  app.post("/api/documents/metadata", management, async (req, res) => {
-    const input = z.object({ sessionId: z.number().int().positive().nullable().optional(), ownerType: z.enum(["student", "staff", "school"]), ownerId: z.number().int().positive().nullable().optional(), documentType: z.string().trim().min(1).max(60), filename: z.string().trim().regex(/^[^\\/\\\\]{1,180}$/), mimeType: z.enum(["application/pdf", "image/jpeg", "image/png"]), sizeBytes: z.number().int().positive().max(10 * 1024 * 1024) }).parse(req.body); const user = currentUser(req);
+  const createDocumentHandler = async (req: any, res: any) => {
+    const input = z.object({ sessionId: z.number().int().positive().nullable().optional(), ownerType: z.enum(["student", "staff", "school"]), ownerId: z.number().int().positive().nullable().optional(), documentType: z.string().trim().min(1).max(60), filename: z.string().trim().regex(/^[^\\/\\\\]{1,180}$/), mimeType: z.enum(["application/pdf", "image/jpeg", "image/png"]), sizeBytes: z.number().int().positive().max(10 * 1024 * 1024) }).parse(req.body);
+    const user = currentUser(req);
+    const activeSession = await dataStore.getActiveSession(user.schoolId);
+    const targetSessionId = input.sessionId ?? activeSession?.id ?? null;
     if (input.ownerType === "student") { const owner = await dataStore.getStudent(input.ownerId!, user.schoolId); if (!owner || (input.sessionId && owner.sessionId !== input.sessionId)) return res.status(404).json({ message: "Document owner not found" }); }
     if (input.ownerType === "staff") { const owner = (await dataStore.getStaff(user.schoolId)).find((value) => value.id === input.ownerId); if (!owner) return res.status(404).json({ message: "Document owner not found" }); }
     if (input.sessionId && !(await dataStore.getAcademicSessions(user.schoolId)).some((session) => session.id === input.sessionId)) return res.status(404).json({ message: "Session not found" });
-    const document = await dataStore.createDocument({ ...input, schoolId: user.schoolId, ownerId: input.ownerId ?? null, sessionId: input.sessionId ?? null, storageKey: `metadata-only/${user.schoolId}/${randomUUID()}`, uploadedByUserId: user.id, isActive: true });
+    const document = await dataStore.createDocument({ ...input, schoolId: user.schoolId, ownerId: input.ownerId ?? null, sessionId: targetSessionId, storageKey: `metadata-only/${user.schoolId}/${randomUUID()}`, uploadedByUserId: user.id, isActive: true });
     res.status(201).json({ id: document.id, schoolId: document.schoolId, sessionId: document.sessionId, ownerType: document.ownerType, ownerId: document.ownerId, documentType: document.documentType, filename: document.filename, mimeType: document.mimeType, sizeBytes: document.sizeBytes, isActive: document.isActive, uploadedAt: document.uploadedAt });
-  });
+  };
+  app.post("/api/documents/metadata", management, createDocumentHandler);
+  app.post("/api/documents", management, createDocumentHandler);
   app.delete("/api/documents/:id", management, async (req, res) => { const value=await dataStore.deactivateDocument(routeId(req.params.id),currentUser(req).schoolId); if(!value)return res.status(404).json({message:"Document not found"}); res.json({id:value.id,isActive:value.isActive}); });
   const importCsv = async (req: any, res: any, kind: "students" | "staff") => { try { const user=currentUser(req); const parsed=parseCsv(typeof req.body === "string" ? req.body : ""); if (kind === "students") { const session=await dataStore.getActiveSession(user.schoolId); if(!session)return res.status(409).json({message:"No active session"}); const result=await dataStore.importStudents(user.schoolId,session.id,parsed.rows); return res.status(201).json({created:result.created.length,errors:result.errors}); } const result=await dataStore.importStaff(user.schoolId,parsed.rows); return res.status(201).json({created:result.created.length,errors:result.errors}); } catch (error) { const message=error instanceof Error ? error.message : "Import failed"; try { const parsed=JSON.parse(message); if(parsed.importErrors)return res.status(422).json(parsed); } catch {} return res.status(400).json({message}); } };
   app.post("/api/import/students", requireRole("admin", "principal", "accountant"), (req,res)=>importCsv(req,res,"students"));

@@ -428,6 +428,21 @@ export default function Settings() {
   const [routeAmount, setRouteAmount] = useState("");
   const [editingRouteId, setEditingRouteId] = useState<number | null>(null);
 
+  const bulkCreateStudentLogins = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/school-users/bulk-student-accounts", {
+        defaultPassword: "Student@123",
+      }),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/school-users"] });
+      setMessage(
+        `Bulk Student Portal Setup Complete! Created & linked ${res?.createdCount ?? 0} new student/parent login accounts (${res?.skippedCount ?? 0} already had accounts). Default Password: Student's Contact No (or Student@123).`,
+      );
+    },
+    onError: (err) =>
+      setMessage(err instanceof Error ? err.message : "Bulk student account generation failed"),
+  });
+
   const changePassword = useMutation({
     mutationFn: () =>
       apiRequest("POST", "/api/auth/change-password", {
@@ -1133,6 +1148,33 @@ export default function Settings() {
                       {createUserAccount.isPending ? "Creating..." : "Create Login Account"}
                     </Button>
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-emerald-200 bg-emerald-50/40">
+                <CardHeader className="pb-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base text-emerald-950">
+                        Student / Parent Self-Service Portal Accounts (Read-Only View for Parents & Students)
+                      </CardTitle>
+                      <p className="text-xs text-slate-600 mt-1">
+                        <b>Note:</b> School operations (Fees, Results, Attendance, ID Cards, TC) work directly from <b>Student Records</b> without needing login accounts. Student Login Accounts are <b>optional Read-Only Portal accounts</b> so Parents/Students can view their own Report Card, Fee Receipts, Attendance, Homework, Timetable & Notices on their phone.
+                      </p>
+                    </div>
+                    <Button
+                      onClick={() => bulkCreateStudentLogins.mutate()}
+                      disabled={bulkCreateStudentLogins.isPending}
+                      className="bg-emerald-600 hover:bg-emerald-700"
+                    >
+                      {bulkCreateStudentLogins.isPending
+                        ? "Generating Accounts..."
+                        : "1-Click Auto-Create All Student Portal Logins"}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="text-xs text-emerald-900">
+                  Clicking <b>&ldquo;1-Click Auto-Create All Student Portal Logins&rdquo;</b> automatically creates &amp; links a Read-Only Portal Login for every admitted student (<b>Login ID = Admission No</b> in lowercase, <b>Password = Student@123</b>) — no need to create or link 1,000 students manually!
                 </CardContent>
               </Card>
 
