@@ -1,4 +1,6 @@
-if (process.env.NODE_ENV !== "development") {
+import "dotenv/config";
+
+if ((process.env.NODE_ENV ?? "development") !== "development") {
   throw new Error("The database seed can only run with NODE_ENV=development");
 }
 

@@ -4,9 +4,9 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "NODE_ENV=development tsx server/index.ts",
+    "dev": "tsx server/index.ts",
     "build": "tsx script/build.ts",
-    "start": "NODE_ENV=production node dist/index.cjs",
+    "start": "node dist/index.cjs",
     "check": "tsc",
     "test": "npm run test:complete-erp-modules && npm run test:security-hardening && npm run test:backup-security && npm run test:documents-import-export-foundation && npm run test:security && npm run test:security:integration && npm run test:database-foundation && npm run test:attendance-foundation && npm run test:attendance-security && npm run test:exam-foundation && npm run test:exam-security && npm run test:exam-results-foundation && npm run test:exam-results-security && npm run test:report-card-foundation && npm run test:student-id-card-foundation && npm run test:student-id-card-security && npm run test:payroll-foundation && npm run test:payroll-security && npm run test:financial-foundation && npm run test:financial-security",
     "test:complete-erp-modules": "tsx script/complete-erp-modules-test.ts",
@@ -31,7 +31,7 @@
     "test:database-foundation": "tsx script/database-foundation-test.ts",
     "db:push": "drizzle-kit push",
     "db:migrate": "tsx script/migrate.ts",
-    "db:seed": "NODE_ENV=development tsx script/seed.ts"
+    "db:seed": "tsx script/seed.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
