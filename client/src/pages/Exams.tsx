@@ -29,10 +29,10 @@ type Detail = {
 
 const EXAM_TYPES = [
   { value: "unit-test", label: "Unit Test / Periodic Test" },
-  { value: "quarterly", label: "Quarterly Exam (Timahi)" },
-  { value: "half-yearly", label: "Half-Yearly Exam (Ardhvarshik)" },
-  { value: "pre-board", label: "Pre-Board Exam" },
-  { value: "annual", label: "Annual / Final Exam (Varshik)" },
+  { value: "quarterly", label: "Quarterly Exam (तिमाही परीक्षा)" },
+  { value: "half-yearly", label: "Half-Yearly Exam (अर्धवार्षिक परीक्षा)" },
+  { value: "pre-board", label: "Pre-Board Exam (प्री-बोर्ड)" },
+  { value: "annual", label: "Annual / Final Exam (वार्षिक परीक्षा)" },
   { value: "general", label: "General Exam" },
 ];
 
@@ -121,9 +121,9 @@ export default function Exams() {
       <Sidebar />
       <main className="flex-1 ml-64 p-8 space-y-6">
         <div>
-          <h1 className="text-3xl font-bold">Exams & Schedules</h1>
+          <h1 className="text-3xl font-bold">Exams & Time Table Schedule</h1>
           <p className="mt-1 text-slate-500">
-            Create exams and subject schedules using connected Class, Section, and Subject dropdowns.
+            Step 1: Create an Exam · Step 2: Click the Exam below to add Subject Papers, Max Marks & Passing Marks.
           </p>
         </div>
         {error && (
@@ -134,75 +134,123 @@ export default function Exams() {
         {manager && (
           <Card>
             <CardHeader>
-              <CardTitle>Create New Exam (Connected Dropdowns)</CardTitle>
+              <CardTitle>Step 1: Create New Exam (नई परीक्षा बनाएं)</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-4">
-              <Input
-                placeholder="Exam Name (e.g., Half-Yearly Exam 2026)"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-              <select
-                className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
-                value={examType}
-                onChange={(e) => setExamType(e.target.value)}
-              >
-                {EXAM_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
-              <Input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
-              <select
-                className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
-                value={className}
-                onChange={(e) => setClassName(e.target.value)}
-              >
-                <option value="">Select Class...</option>
-                {classOptions.map((c) => (
-                  <option key={c} value={c}>
-                    Class {c}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
-                value={section}
-                onChange={(e) => setSection(e.target.value)}
-              >
-                <option value="">Select Section...</option>
-                <option value="ALL">All Sections ({sectionOptions.join(", ")})</option>
-                {sectionOptions.map((sec) => (
-                  <option key={sec} value={sec}>
-                    Section {sec}
-                  </option>
-                ))}
-              </select>
-              <Button
-                onClick={() => create.mutate()}
-                disabled={
-                  create.isPending || !name || !startDate || !endDate || !className || !section
-                }
-              >
-                {create.isPending ? "Creating..." : "Create Exam"}
-              </Button>
+            <CardContent className="grid gap-3 md:grid-cols-4 items-end">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  1. Exam Name (परीक्षा का नाम) *
+                </label>
+                <Input
+                  placeholder="e.g., Half-Yearly Exam 2026"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  2. Exam Type (परीक्षा का प्रकार) *
+                </label>
+                <select
+                  className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                  value={examType}
+                  onChange={(e) => setExamType(e.target.value)}
+                >
+                  {EXAM_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  3. Exam Start Date (शुरू होने की तारीख) *
+                </label>
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  4. Exam End Date (समाप्ति की तारीख) *
+                </label>
+                <Input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  5. Select Class (क्लास चुनें) *
+                </label>
+                <select
+                  className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                  value={className}
+                  onChange={(e) => setClassName(e.target.value)}
+                >
+                  <option value="">-- Select Class --</option>
+                  {classOptions.map((c) => (
+                    <option key={c} value={c}>
+                      Class {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  6. Select Section (सेक्शन चुनें) *
+                </label>
+                <select
+                  className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                  value={section}
+                  onChange={(e) => setSection(e.target.value)}
+                >
+                  <option value="">-- Select Section --</option>
+                  <option value="ALL">All Sections ({sectionOptions.join(", ")})</option>
+                  {sectionOptions.map((sec) => (
+                    <option key={sec} value={sec}>
+                      Section {sec}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <Button
+                  className="w-full h-10"
+                  onClick={() => create.mutate()}
+                  disabled={
+                    create.isPending ||
+                    !name ||
+                    !startDate ||
+                    !endDate ||
+                    !className ||
+                    !section
+                  }
+                >
+                  {create.isPending ? "Creating..." : "Create Exam"}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
 
         <Card>
           <CardHeader>
-            <CardTitle>{manager ? "Exam Management" : "Available Exams"}</CardTitle>
+            <CardTitle>
+              {manager
+                ? "Step 2: Click an Exam Below to Add Subject Papers & Publish"
+                : "Available Exams"}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid gap-3 md:grid-cols-2">
@@ -212,22 +260,24 @@ export default function Exams() {
                 exams.data.map((exam) => (
                   <button
                     key={exam.id}
-                    className={`rounded-lg border p-4 text-left ${
-                      selectedId === exam.id ? "border-primary bg-primary/5" : "bg-white"
+                    className={`rounded-lg border p-4 text-left transition ${
+                      selectedId === exam.id
+                        ? "border-indigo-600 bg-indigo-50/70 ring-1 ring-indigo-600"
+                        : "bg-white hover:bg-slate-50"
                     }`}
                     onClick={() => setSelectedId(exam.id)}
                   >
-                    <div className="font-semibold">{exam.name}</div>
+                    <div className="font-semibold text-slate-900">{exam.name}</div>
                     <div className="text-sm text-slate-500">
                       {exam.examType} · {exam.startDate} to {exam.endDate}
                     </div>
-                    <span className="mt-2 inline-block rounded bg-slate-100 px-2 py-1 text-xs capitalize">
-                      {exam.status}
+                    <span className="mt-2 inline-block rounded bg-slate-100 px-2 py-1 text-xs font-semibold capitalize">
+                      Status: {exam.status}
                     </span>
                   </button>
                 ))
               ) : (
-                <p className="text-slate-500">No exams are visible for this account.</p>
+                <p className="text-slate-500">No exams created yet.</p>
               )}
             </div>
           </CardContent>
@@ -236,7 +286,7 @@ export default function Exams() {
         {detail.data && (
           <Card>
             <CardHeader>
-              <CardTitle>{detail.data.exam.name} — Subject Schedule</CardTitle>
+              <CardTitle>{detail.data.exam.name} — Subject Papers & Marks Schedule</CardTitle>
               <p className="text-sm text-slate-500">
                 Authorized Classes:{" "}
                 {detail.data.scopes.map((s) => `Class ${s.className}-${s.section}`).join(", ")}
@@ -254,80 +304,115 @@ export default function Exams() {
                     disabled={setStatus.isPending}
                   >
                     {detail.data.exam.status === "draft"
-                      ? "Publish Exam"
+                      ? "Publish Exam (Open for Marks Entry)"
                       : detail.data.exam.status === "published"
-                        ? "Mark Completed"
+                        ? "Mark Exam Completed"
                         : "Status Locked"}
                   </Button>
                   {detail.data.exam.status === "published" && (
                     <Button variant="outline" onClick={() => setStatus.mutate("draft")}>
-                      Unpublish (Back to Draft)
+                      Unpublish (Back to Draft to Add More Subjects)
                     </Button>
                   )}
                 </div>
               )}
 
               {manager && detail.data.exam.status === "draft" && (
-                <div className="grid gap-2 rounded border p-3 md:grid-cols-6 bg-slate-50">
-                  <select
-                    className="h-10 rounded border bg-white px-2 text-sm"
-                    value={subjectId}
-                    onChange={(e) => setSubjectId(e.target.value)}
-                  >
-                    <option value="">Select Subject...</option>
-                    {subjects.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="h-10 rounded border bg-white px-2 text-sm"
-                    value={className}
-                    onChange={(e) => setClassName(e.target.value)}
-                  >
-                    <option value="">Select Class...</option>
-                    {Array.from(new Set(detail.data.scopes.map((s) => s.className))).map((c) => (
-                      <option key={c} value={c}>
-                        Class {c}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="h-10 rounded border bg-white px-2 text-sm"
-                    value={section}
-                    onChange={(e) => setSection(e.target.value)}
-                  >
-                    <option value="">Select Section...</option>
-                    {Array.from(new Set(detail.data.scopes.map((s) => s.section))).map((sec) => (
-                      <option key={sec} value={sec}>
-                        Section {sec}
-                      </option>
-                    ))}
-                  </select>
-                  <Input
-                    type="date"
-                    className="bg-white"
-                    value={examDate}
-                    onChange={(e) => setExamDate(e.target.value)}
-                  />
-                  <div className="grid grid-cols-2 gap-1">
+                <div className="grid gap-3 rounded-lg border p-4 md:grid-cols-6 bg-slate-50 items-end">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      1. Subject (विषय) *
+                    </label>
+                    <select
+                      className="h-10 w-full rounded border bg-white px-2 text-sm"
+                      value={subjectId}
+                      onChange={(e) => setSubjectId(e.target.value)}
+                    >
+                      <option value="">-- Select Subject --</option>
+                      {subjects.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      2. Class (क्लास) *
+                    </label>
+                    <select
+                      className="h-10 w-full rounded border bg-white px-2 text-sm"
+                      value={className}
+                      onChange={(e) => setClassName(e.target.value)}
+                    >
+                      <option value="">-- Select Class --</option>
+                      {Array.from(new Set(detail.data.scopes.map((s) => s.className))).map(
+                        (c) => (
+                          <option key={c} value={c}>
+                            Class {c}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      3. Section (सेक्शन) *
+                    </label>
+                    <select
+                      className="h-10 w-full rounded border bg-white px-2 text-sm"
+                      value={section}
+                      onChange={(e) => setSection(e.target.value)}
+                    >
+                      <option value="">-- Select Section --</option>
+                      {Array.from(new Set(detail.data.scopes.map((s) => s.section))).map(
+                        (sec) => (
+                          <option key={sec} value={sec}>
+                            Section {sec}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      4. Paper Date (पेपर तारीख) *
+                    </label>
                     <Input
-                      type="number"
+                      type="date"
                       className="bg-white"
-                      placeholder="Max"
-                      value={maxMarks}
-                      onChange={(e) => setMaxMarks(e.target.value)}
-                    />
-                    <Input
-                      type="number"
-                      className="bg-white"
-                      placeholder="Pass"
-                      value={passingMarks}
-                      onChange={(e) => setPassingMarks(e.target.value)}
+                      value={examDate}
+                      onChange={(e) => setExamDate(e.target.value)}
                     />
                   </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Max Marks (पूर्णांक)
+                      </label>
+                      <Input
+                        type="number"
+                        className="bg-white"
+                        placeholder="100"
+                        value={maxMarks}
+                        onChange={(e) => setMaxMarks(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Pass Marks (उत्तीर्णांक)
+                      </label>
+                      <Input
+                        type="number"
+                        className="bg-white"
+                        placeholder="33"
+                        value={passingMarks}
+                        onChange={(e) => setPassingMarks(e.target.value)}
+                      />
+                    </div>
+                  </div>
                   <Button
+                    className="h-10"
                     onClick={() => addSchedule.mutate()}
                     disabled={
                       addSchedule.isPending ||
@@ -348,8 +433,8 @@ export default function Exams() {
                     <tr>
                       <th className="p-3 text-left">Class & Section</th>
                       <th className="p-3 text-left">Subject</th>
-                      <th className="p-3 text-left">Exam Date</th>
-                      <th className="p-3 text-left">Passing / Max Marks</th>
+                      <th className="p-3 text-left">Paper Date</th>
+                      <th className="p-3 text-left">Pass Marks / Max Marks</th>
                     </tr>
                   </thead>
                   <tbody>

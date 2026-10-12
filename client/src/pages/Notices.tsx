@@ -111,75 +111,104 @@ export default function Notices() {
         {canPost && (
           <Card>
             <CardHeader>
-              <CardTitle>Publish New Notice / Circular</CardTitle>
+              <CardTitle>Publish New Notice / Circular (नई सूचना जारी करें)</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-3 md:grid-cols-4">
-                <Input
-                  className="md:col-span-2"
-                  placeholder="Notice title (e.g., Annual Sports Day / Winter Vacation Circular)"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                >
-                  {categories.map((c) => (
-                    <option key={c} value={c}>
-                      Category: {c.toUpperCase()}
-                    </option>
-                  ))}
-                </select>
-                <Input
-                  type="date"
-                  value={publishDate}
-                  onChange={(e) => setPublishDate(e.target.value)}
-                />
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    1. Notice Title (सूचना का शीर्षक) *
+                  </label>
+                  <Input
+                    placeholder="e.g., Annual Sports Day / Winter Vacation Circular"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    2. Notice Category (प्रकार) *
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                  >
+                    {categories.map((c) => (
+                      <option key={c} value={c}>
+                        {c.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    3. Publish Date (जारी करने की तारीख) *
+                  </label>
+                  <Input
+                    type="date"
+                    value={publishDate}
+                    onChange={(e) => setPublishDate(e.target.value)}
+                  />
+                </div>
               </div>
 
-              <div className="grid gap-3 md:grid-cols-4 items-center">
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm"
-                  value={targetAudience}
-                  onChange={(e) => setTargetAudience(e.target.value)}
-                >
-                  {audiences.map((a) => (
-                    <option key={a} value={a}>
-                      Audience: {a.toUpperCase()}
-                    </option>
-                  ))}
-                </select>
+              <div className="grid gap-3 md:grid-cols-4 items-end">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    4. Target Audience (किसके लिए है) *
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                    value={targetAudience}
+                    onChange={(e) => setTargetAudience(e.target.value)}
+                  >
+                    {audiences.map((a) => (
+                      <option key={a} value={a}>
+                        {a.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 {targetAudience === "class" && (
                   <>
-                    <select
-                      className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
-                      value={targetClass}
-                      onChange={(e) => setTargetClass(e.target.value)}
-                    >
-                      <option value="">Select Target Class...</option>
-                      {classOptions.map((c) => (
-                        <option key={c} value={c}>
-                          Class {c}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
-                      value={targetSection}
-                      onChange={(e) => setTargetSection(e.target.value)}
-                    >
-                      <option value="">All Sections</option>
-                      {sectionOptions.map((sec) => (
-                        <option key={sec} value={sec}>
-                          Section {sec}
-                        </option>
-                      ))}
-                    </select>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Target Class (क्लास) *
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                        value={targetClass}
+                        onChange={(e) => setTargetClass(e.target.value)}
+                      >
+                        <option value="">-- Select Class --</option>
+                        {classOptions.map((c) => (
+                          <option key={c} value={c}>
+                            Class {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Target Section (सेक्शन)
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                        value={targetSection}
+                        onChange={(e) => setTargetSection(e.target.value)}
+                      >
+                        <option value="">All Sections</option>
+                        {sectionOptions.map((sec) => (
+                          <option key={sec} value={sec}>
+                            Section {sec}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </>
                 )}
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <label className="flex items-center gap-2 text-sm font-medium text-slate-700 h-10">
                   <input
                     type="checkbox"
                     checked={isPinned}
@@ -189,12 +218,17 @@ export default function Notices() {
                 </label>
               </div>
 
-              <textarea
-                className="w-full min-h-[100px] rounded-md border p-3 text-sm"
-                placeholder="Write complete circular or announcement details..."
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-              />
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  5. Full Notice / Circular Message (पूरी जानकारी लिखें) *
+                </label>
+                <textarea
+                  className="w-full min-h-[100px] rounded-md border p-3 text-sm"
+                  placeholder="Write complete circular or announcement details..."
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                />
+              </div>
 
               <Button
                 onClick={() => createNotice.mutate()}

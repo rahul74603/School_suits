@@ -610,26 +610,42 @@ export default function Settings() {
 
               <Card>
                 <CardHeader>
-                  <CardTitle>Academic Sessions</CardTitle>
+                  <CardTitle>Academic Sessions (शैक्षणिक सत्र)</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid gap-3 md:grid-cols-4">
-                    <Input
-                      placeholder="Session Name (e.g., 2026-27)"
-                      value={newSessionName}
-                      onChange={(e) => setNewSessionName(e.target.value)}
-                    />
-                    <Input
-                      type="date"
-                      value={sessionStart}
-                      onChange={(e) => setSessionStart(e.target.value)}
-                    />
-                    <Input
-                      type="date"
-                      value={sessionEnd}
-                      onChange={(e) => setSessionEnd(e.target.value)}
-                    />
+                  <div className="grid gap-3 md:grid-cols-4 items-end">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        1. Session Name (सत्र का नाम) *
+                      </label>
+                      <Input
+                        placeholder="e.g., 2026-27"
+                        value={newSessionName}
+                        onChange={(e) => setNewSessionName(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        2. Session Start Date (प्रारंभ तिथि)
+                      </label>
+                      <Input
+                        type="date"
+                        value={sessionStart}
+                        onChange={(e) => setSessionStart(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        3. Session End Date (समाप्ति तिथि)
+                      </label>
+                      <Input
+                        type="date"
+                        value={sessionEnd}
+                        onChange={(e) => setSessionEnd(e.target.value)}
+                      />
+                    </div>
                     <Button
+                      className="h-10"
                       onClick={() => createSession.mutate()}
                       disabled={createSession.isPending || !newSessionName.trim()}
                     >
@@ -847,42 +863,73 @@ export default function Settings() {
                     <div className="text-xs font-semibold uppercase text-slate-500">
                       Add / Customize Stream Combination (Class 11–12)
                     </div>
-                    <div className="grid gap-3 md:grid-cols-3">
-                      <Input
-                        placeholder="Stream Name (e.g., Science - PCM)"
-                        value={streamName}
-                        onChange={(e) => setStreamName(e.target.value)}
-                      />
-                      <Input
-                        placeholder="Stream Code (e.g., PCM, PCB, COMMERCE, ARTS)"
-                        value={streamCode}
-                        onChange={(e) => setStreamCode(e.target.value)}
-                      />
-                      <Input
-                        placeholder="Compulsory Languages (e.g., Hindi, English)"
-                        value={streamCompulsory}
-                        onChange={(e) => setStreamCompulsory(e.target.value)}
-                      />
-                      <Input
-                        placeholder="Core Stream Subjects (e.g., Physics, Chemistry, Mathematics)"
-                        value={streamCore}
-                        onChange={(e) => setStreamCore(e.target.value)}
-                      />
-                      <Input
-                        placeholder="Optional / Elective Pool (e.g., Computer Science, IP, PE)"
-                        value={streamElectives}
-                        onChange={(e) => setStreamElectives(e.target.value)}
-                      />
-                      <div className="flex gap-2">
+                    <div className="grid gap-3 md:grid-cols-3 items-end">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          1. Stream Name (स्ट्रीम का नाम) *
+                        </label>
                         <Input
-                          type="number"
-                          min="0"
-                          max="5"
-                          placeholder="Max Electives"
-                          value={streamMaxElectives}
-                          onChange={(e) => setStreamMaxElectives(e.target.value)}
+                          placeholder="e.g., Science - PCM"
+                          value={streamName}
+                          onChange={(e) => setStreamName(e.target.value)}
                         />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          2. Stream Code (शॉर्ट कोड) *
+                        </label>
+                        <Input
+                          placeholder="e.g., PCM, PCB, COMMERCE, ARTS"
+                          value={streamCode}
+                          onChange={(e) => setStreamCode(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          3. Compulsory Languages (अनिवार्य भाषा विषय)
+                        </label>
+                        <Input
+                          placeholder="e.g., Hindi, English"
+                          value={streamCompulsory}
+                          onChange={(e) => setStreamCompulsory(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          4. Core Stream Subjects (मुख्य विषय — कॉमा से अलग) *
+                        </label>
+                        <Input
+                          placeholder="e.g., Physics, Chemistry, Mathematics"
+                          value={streamCore}
+                          onChange={(e) => setStreamCore(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          5. Optional / Elective Subjects (ऐच्छिक विषय)
+                        </label>
+                        <Input
+                          placeholder="e.g., Computer Science, IP, PE"
+                          value={streamElectives}
+                          onChange={(e) => setStreamElectives(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex gap-2 items-end">
+                        <div className="flex-1">
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            6. Max Electives Allowed (कितने ऐच्छिक विषय चुन सकते हैं)
+                          </label>
+                          <Input
+                            type="number"
+                            min="0"
+                            max="5"
+                            placeholder="1"
+                            value={streamMaxElectives}
+                            onChange={(e) => setStreamMaxElectives(e.target.value)}
+                          />
+                        </div>
                         <Button
+                          className="h-10"
                           onClick={() => createStream.mutate()}
                           disabled={
                             createStream.isPending || !streamName.trim() || !streamCode.trim()
@@ -943,43 +990,64 @@ export default function Settings() {
 
               <Card>
                 <CardHeader>
-                  <CardTitle>Subjects Master</CardTitle>
+                  <CardTitle>Subjects Master (विषय सूची)</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid gap-3 md:grid-cols-5">
-                    <Input
-                      placeholder="Subject Name (e.g., Mathematics)"
-                      value={subjectName}
-                      onChange={(e) => setSubjectName(e.target.value)}
-                    />
-                    <Input
-                      placeholder="Subject Code (optional, e.g., MATH-101)"
-                      value={subjectCode}
-                      onChange={(e) => setSubjectCode(e.target.value)}
-                    />
-                    <select
-                      className="h-10 rounded-md border bg-background px-3 text-sm"
-                      value={subjectStream}
-                      onChange={(e) => setSubjectStream(e.target.value)}
-                    >
-                      <option value="All">All Classes (1st–10th Common)</option>
-                      <option value="PCM">11th–12th Science (PCM)</option>
-                      <option value="PCB">11th–12th Science (PCB)</option>
-                      <option value="COMMERCE">11th–12th Commerce</option>
-                      <option value="ARTS">11th–12th Arts / Humanities</option>
-                      <option value="AGRICULTURE">11th–12th Agriculture</option>
-                    </select>
-                    <select
-                      className="h-10 rounded-md border bg-background px-3 text-sm"
-                      value={subjectType}
-                      onChange={(e) => setSubjectType(e.target.value)}
-                    >
-                      <option value="core">Core / Main Subject</option>
-                      <option value="compulsory_language">Compulsory Language</option>
-                      <option value="elective">Optional / Elective</option>
-                      <option value="vocational">Vocational / Additional</option>
-                    </select>
+                  <div className="grid gap-3 md:grid-cols-5 items-end">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        1. Subject Name (विषय का नाम) *
+                      </label>
+                      <Input
+                        placeholder="e.g., Mathematics"
+                        value={subjectName}
+                        onChange={(e) => setSubjectName(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        2. Subject Code (विषय कोड - वैकल्पिक)
+                      </label>
+                      <Input
+                        placeholder="e.g., MATH-101"
+                        value={subjectCode}
+                        onChange={(e) => setSubjectCode(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        3. Target Class / Stream (किस क्लास/स्ट्रीम के लिए)
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                        value={subjectStream}
+                        onChange={(e) => setSubjectStream(e.target.value)}
+                      >
+                        <option value="All">All Classes (1st–10th Common)</option>
+                        <option value="PCM">11th–12th Science (PCM)</option>
+                        <option value="PCB">11th–12th Science (PCB)</option>
+                        <option value="COMMERCE">11th–12th Commerce</option>
+                        <option value="ARTS">11th–12th Arts / Humanities</option>
+                        <option value="AGRICULTURE">11th–12th Agriculture</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        4. Subject Type (विषय का प्रकार)
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                        value={subjectType}
+                        onChange={(e) => setSubjectType(e.target.value)}
+                      >
+                        <option value="core">Core / Main Subject</option>
+                        <option value="compulsory_language">Compulsory Language</option>
+                        <option value="elective">Optional / Elective</option>
+                        <option value="vocational">Vocational / Additional</option>
+                      </select>
+                    </div>
                     <Button
+                      className="h-10"
                       onClick={() => createSubject.mutate()}
                       disabled={createSubject.isPending || !subjectName.trim()}
                     >
@@ -1104,39 +1172,60 @@ export default function Settings() {
                     </select>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-5">
-                    <Input
-                      className="bg-white"
-                      placeholder="Full Name (e.g., Rajesh Sharma)"
-                      value={newFullName}
-                      onChange={(e) => setNewFullName(e.target.value)}
-                    />
-                    <Input
-                      className="bg-white"
-                      placeholder="Login ID or Email (e.g., sharma@school.com)"
-                      value={newUsername}
-                      onChange={(e) => setNewUsername(e.target.value)}
-                    />
-                    <select
-                      className="h-10 rounded-md border bg-white px-3 text-sm"
-                      value={newRole}
-                      onChange={(e) => setNewRole(e.target.value)}
-                    >
-                      {isAdmin && <option value="admin">Admin</option>}
-                      <option value="principal">Principal</option>
-                      <option value="accountant">Accountant</option>
-                      <option value="teacher">Teacher</option>
-                      <option value="staff">Staff</option>
-                      <option value="student">Student / Parent</option>
-                    </select>
-                    <Input
-                      type="password"
-                      className="bg-white"
-                      placeholder="Password (min 6 chars)"
-                      value={newUserPassword}
-                      onChange={(e) => setNewUserPassword(e.target.value)}
-                    />
+                  <div className="grid gap-3 md:grid-cols-5 items-end">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        1. Full Name (पूरा नाम) *
+                      </label>
+                      <Input
+                        className="bg-white"
+                        placeholder="e.g., Rajesh Sharma"
+                        value={newFullName}
+                        onChange={(e) => setNewFullName(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        2. Login ID or Email (लॉगिन आईडी) *
+                      </label>
+                      <Input
+                        className="bg-white"
+                        placeholder="e.g., sharma@school.com"
+                        value={newUsername}
+                        onChange={(e) => setNewUsername(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        3. Account Role (भूमिका) *
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border bg-white px-3 text-sm"
+                        value={newRole}
+                        onChange={(e) => setNewRole(e.target.value)}
+                      >
+                        {isAdmin && <option value="admin">Admin</option>}
+                        <option value="principal">Principal</option>
+                        <option value="accountant">Accountant</option>
+                        <option value="teacher">Teacher</option>
+                        <option value="staff">Staff</option>
+                        <option value="student">Student / Parent</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        4. Password (कम से कम 6 अक्षर) *
+                      </label>
+                      <Input
+                        type="password"
+                        className="bg-white"
+                        placeholder="Min 6 characters"
+                        value={newUserPassword}
+                        onChange={(e) => setNewUserPassword(e.target.value)}
+                      />
+                    </div>
                     <Button
+                      className="h-10"
                       onClick={() => createUserAccount.mutate()}
                       disabled={
                         createUserAccount.isPending ||

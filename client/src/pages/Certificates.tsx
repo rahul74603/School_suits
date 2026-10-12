@@ -148,21 +148,36 @@ export default function Certificates() {
               </div>
 
               <div className="grid gap-3 md:grid-cols-3">
-                <Input
-                  placeholder="Purpose / Reason"
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                />
-                <Input
-                  placeholder="Character & Conduct (e.g., Excellent)"
-                  value={conduct}
-                  onChange={(e) => setConduct(e.target.value)}
-                />
-                <Input
-                  placeholder="Remarks"
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
-                />
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    4. Purpose / Reason (प्रमाण पत्र लेने का कारण)
+                  </label>
+                  <Input
+                    placeholder="e.g., Higher Studies / Parent Request"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    5. Character & Conduct (चरित्र और आचरण)
+                  </label>
+                  <Input
+                    placeholder="e.g., Excellent / Good"
+                    value={conduct}
+                    onChange={(e) => setConduct(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    6. Remarks / Fee Status (अन्य टिप्पणी)
+                  </label>
+                  <Input
+                    placeholder="e.g., No dues pending against the student."
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                  />
+                </div>
               </div>
 
               <Button

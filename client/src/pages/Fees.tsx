@@ -466,36 +466,57 @@ export default function Fees() {
                 <CardHeader>
                   <CardTitle>Record New Student Due / Fine / Obligation</CardTitle>
                 </CardHeader>
-                <CardContent className="grid gap-3 md:grid-cols-5">
-                  <select
-                    className="h-10 rounded-md border bg-background px-3 text-sm"
-                    value={dueStudentId}
-                    onChange={(e) => setDueStudentId(e.target.value)}
-                  >
-                    <option value="">Select Student...</option>
-                    {(students.data ?? []).map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.class}-{s.section})
-                      </option>
-                    ))}
-                  </select>
-                  <Input
-                    placeholder="Description (e.g., Lab Fee / Book Due)"
-                    value={dueDescription}
-                    onChange={(e) => setDueDescription(e.target.value)}
-                  />
-                  <Input
-                    type="number"
-                    placeholder="Amount (₹)"
-                    value={dueAmount}
-                    onChange={(e) => setDueAmount(e.target.value)}
-                  />
-                  <Input
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                  />
+                <CardContent className="grid gap-3 md:grid-cols-5 items-end">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      1. Select Student (छात्र चुनें) *
+                    </label>
+                    <select
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                      value={dueStudentId}
+                      onChange={(e) => setDueStudentId(e.target.value)}
+                    >
+                      <option value="">-- Select Student --</option>
+                      {(students.data ?? []).map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.class}-{s.section})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      2. Due / Fine Reason (किस चीज़ का बकाया) *
+                    </label>
+                    <Input
+                      placeholder="e.g., Lab Fee / Library Book Fine"
+                      value={dueDescription}
+                      onChange={(e) => setDueDescription(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      3. Due Amount (बकाया राशि ₹) *
+                    </label>
+                    <Input
+                      type="number"
+                      placeholder="e.g., 500"
+                      value={dueAmount}
+                      onChange={(e) => setDueAmount(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      4. Due Date (अंतिम तिथि)
+                    </label>
+                    <Input
+                      type="date"
+                      value={dueDate}
+                      onChange={(e) => setDueDate(e.target.value)}
+                    />
+                  </div>
                   <Button
+                    className="h-10"
                     onClick={() => createDue.mutate()}
                     disabled={
                       createDue.isPending ||
@@ -624,13 +645,13 @@ export default function Fees() {
                     className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6 items-end"
                     onSubmit={structureForm.handleSubmit(submitStructure)}
                   >
-                    <label className="text-sm font-medium">
-                      Class (Dropdown)
+                    <label className="text-xs font-semibold text-slate-700">
+                      1. Select Class (क्लास चुनें) *
                       <select
                         className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm"
                         {...structureForm.register("class")}
                       >
-                        <option value="">Select Class...</option>
+                        <option value="">-- Select Class --</option>
                         {classOptions.map((c) => (
                           <option key={c} value={c}>
                             Class {c}
@@ -639,10 +660,15 @@ export default function Fees() {
                       </select>
                     </label>
                     {(
-                      ["monthlyFee", "admissionFee", "examFee", "otherFee"] as const
-                    ).map((field) => (
-                      <label key={field} className="text-sm font-medium capitalize">
-                        {field}
+                      [
+                        { field: "monthlyFee", label: "2. Monthly Tuition Fee (मासिक शुल्क ₹)" },
+                        { field: "admissionFee", label: "3. Admission Fee (प्रवेश शुल्क ₹)" },
+                        { field: "examFee", label: "4. Annual Exam Fee (परीक्षा शुल्क ₹)" },
+                        { field: "otherFee", label: "5. Other / Activity Fee (अन्य शुल्क ₹)" },
+                      ] as const
+                    ).map(({ field, label }) => (
+                      <label key={field} className="text-xs font-semibold text-slate-700">
+                        {label}
                         <Input
                           className="mt-1"
                           type="number"

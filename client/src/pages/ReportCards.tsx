@@ -6,19 +6,180 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
 import type { Exam, Student } from "@shared/schema";
 
-type ReportRow = { subjectName: string; examDate: string; maxMarks: number; passingMarks: number; obtainedMarks: number | null; absent: boolean; subjectResult: string; remarks: string | null };
-type Report = { school: { name: string; address: string; contact: string } | undefined; student: Student; session: { name: string }; exam: { name: string; examType: string; status: string }; rows: ReportRow[]; totalObtained: number; totalMaximum: number; percentage: number; overallResult: string; grade: string; calculationNote: string };
-async function getJson<T>(url: string): Promise<T> { const response = await fetch(url, { credentials: "include" }); if (!response.ok) throw new Error((await response.json().catch(() => null))?.message ?? "Unable to load report card"); return response.json(); }
+async function api<T>(url: string): Promise<T> {
+  const response = await fetch(url, { credentials: "include" });
+  if (!response.ok)
+    throw new Error(
+      (await response.json().catch(() => null))?.message ?? "Report card request failed",
+    );
+  return response.json();
+}
+
 export default function ReportCards() {
-  const { data: user } = useAuth(); const studentRole = user?.role === "student"; const [studentId, setStudentId] = useState(""); const [examId, setExamId] = useState("");
-  const exams = useQuery<Exam[]>({ queryKey: ["/api/exams"], queryFn: () => getJson("/api/exams"), enabled: !!user });
-  const students = useQuery<Student[]>({ queryKey: ["/api/students"], queryFn: () => getJson("/api/students"), enabled: !!user && !studentRole });
-  const ownStudents = useQuery<Student[]>({ queryKey: ["/api/students", "own"], queryFn: () => getJson("/api/students"), enabled: studentRole });
-  const effectiveStudentId = studentRole ? ownStudents.data?.[0]?.id : Number(studentId);
-  const report = useQuery<{ report: Report }>({ queryKey: ["/api/report-cards", effectiveStudentId, examId], queryFn: () => getJson(`/api/report-cards/${effectiveStudentId}/${examId}`), enabled: !!effectiveStudentId && !!examId });
-  const error = exams.error ?? students.error ?? ownStudents.error ?? report.error;
-  return <div className="flex min-h-screen bg-slate-50"><Sidebar /><main className="flex-1 ml-64 p-8"><div className="mb-6 flex items-center justify-between"><div><h1 className="text-3xl font-bold">Marksheet / Report Card</h1><p className="mt-1 text-slate-500">Published results only are shown to students. Grade rule: A+ 90, A 80, B+ 70, B 60, C 50, D 40, F below 40.</p></div>{report.data && <Button onClick={() => window.print()}>Print report</Button>}</div>{error && <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-red-700">{(error as Error).message}</div>}
-    <Card className="mb-6 print:hidden"><CardHeader><CardTitle>Select report</CardTitle></CardHeader><CardContent className="flex flex-wrap gap-3">{!studentRole && <select className="h-10 min-w-56 rounded border bg-background px-3" value={studentId} onChange={e => setStudentId(e.target.value)}><option value="">Student</option>{(students.data ?? []).map(student => <option key={student.id} value={student.id}>{student.name} — {student.class}/{student.section}</option>)}</select>}<select className="h-10 min-w-56 rounded border bg-background px-3" value={examId} onChange={e => setExamId(e.target.value)}><option value="">Exam</option>{(exams.data ?? []).map(exam => <option key={exam.id} value={exam.id}>{exam.name} ({exam.status})</option>)}</select></CardContent></Card>
-    {report.isLoading && <div>Loading report card...</div>}{report.data && <div className="report-card space-y-6 bg-white p-8 shadow-sm print:shadow-none"><header className="border-b pb-4 text-center"><h2 className="text-2xl font-bold">{report.data.report.school?.name ?? "School"}</h2><p>{report.data.report.school?.address}</p><p>{report.data.report.school?.contact}</p><h3 className="mt-4 text-xl font-semibold">{report.data.report.exam.name} Report Card</h3></header><div className="grid gap-2 text-sm md:grid-cols-3"><div><b>Student:</b> {report.data.report.student.name}</div><div><b>Admission No:</b> {report.data.report.student.admissionNo}</div><div><b>Class/Section:</b> {report.data.report.student.class} / {report.data.report.student.section}</div><div><b>Roll No:</b> {report.data.report.student.rollNo ?? "—"}</div><div><b>Academic Session:</b> {report.data.report.session.name}</div><div><b>Exam Type:</b> {report.data.report.exam.examType}</div></div><table className="w-full border-collapse text-sm"><thead><tr className="border-b bg-slate-50"><th className="p-3 text-left">Subject</th><th className="p-3 text-left">Exam Date</th><th className="p-3 text-right">Maximum</th><th className="p-3 text-right">Passing</th><th className="p-3 text-right">Obtained</th><th className="p-3 text-left">Result</th></tr></thead><tbody>{report.data.report.rows.map(row => <tr className="border-b" key={`${row.subjectName}-${row.examDate}`}><td className="p-3">{row.subjectName}</td><td className="p-3">{row.examDate}</td><td className="p-3 text-right">{row.maxMarks}</td><td className="p-3 text-right">{row.passingMarks}</td><td className="p-3 text-right">{row.absent ? "Absent" : row.obtainedMarks ?? "—"}</td><td className="p-3">{row.subjectResult}{row.remarks ? ` — ${row.remarks}` : ""}</td></tr>)}</tbody></table><div className="grid grid-cols-2 gap-3 md:grid-cols-5">{([['Total Obtained', report.data.report.totalObtained], ['Total Maximum', report.data.report.totalMaximum], ['Percentage', `${report.data.report.percentage}%`], ['Grade', report.data.report.grade], ['Overall', report.data.report.overallResult]] as const).map(([label, value]) => <div className="rounded bg-slate-100 p-3" key={label}><div className="text-xs text-slate-500">{label}</div><div className="text-lg font-semibold">{value}</div></div>)}</div><p className="text-xs text-slate-500">{report.data.report.calculationNote}</p></div>}
-  </main></div>;
+  const { data: user } = useAuth();
+  const [studentId, setStudentId] = useState<number>();
+  const [examId, setExamId] = useState<number>();
+
+  const students = useQuery<Student[]>({
+    queryKey: ["/api/students"],
+    queryFn: () => api("/api/students"),
+  });
+  const exams = useQuery<Exam[]>({
+    queryKey: ["/api/exams"],
+    queryFn: () => api("/api/exams"),
+  });
+  const report = useQuery<any>({
+    queryKey: ["/api/report-cards", studentId, examId],
+    queryFn: () => api(`/api/report-cards/student/${studentId}?examId=${examId}`),
+    enabled: !!studentId && !!examId,
+  });
+
+  const activeStudentId = studentId ?? (students.data?.[0]?.id as number | undefined);
+  const activeExamId = examId ?? (exams.data?.[0]?.id as number | undefined);
+  const activeReport = useQuery<any>({
+    queryKey: ["/api/report-cards", activeStudentId, activeExamId],
+    queryFn: () =>
+      api(`/api/report-cards/student/${activeStudentId}?examId=${activeExamId}`),
+    enabled: !!activeStudentId && !!activeExamId,
+  });
+
+  const data = report.data ?? activeReport.data;
+  const error = students.error ?? exams.error ?? report.error ?? activeReport.error;
+
+  return (
+    <div className="flex min-h-screen bg-slate-50">
+      <Sidebar />
+      <main className="flex-1 ml-64 p-8 space-y-6">
+        <div className="flex items-center justify-between print:hidden">
+          <div>
+            <h1 className="text-3xl font-bold">Student Report Cards (प्रगति पत्र)</h1>
+            <p className="mt-1 text-slate-500">
+              Select a student and published exam to view and print their report card.
+            </p>
+          </div>
+          <Button onClick={() => window.print()} disabled={!data}>
+            Print Report Card
+          </Button>
+        </div>
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 p-3 text-red-700 print:hidden">
+            {(error as Error).message}
+          </div>
+        )}
+        <Card className="print:hidden">
+          <CardHeader>
+            <CardTitle>Select Student & Exam (छात्र और परीक्षा चुनें)</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            {user?.role !== "student" && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  1. Select Student (छात्र चुनें) *
+                </label>
+                <select
+                  className="h-10 w-full rounded border bg-background px-3 text-sm font-medium"
+                  value={activeStudentId ?? ""}
+                  onChange={(e) => setStudentId(Number(e.target.value))}
+                >
+                  {(students.data ?? []).map((student) => (
+                    <option key={student.id} value={student.id}>
+                      {student.name} ({student.admissionNo}) — Class {student.class}-
+                      {student.section}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                2. Select Exam (परीक्षा चुनें) *
+              </label>
+              <select
+                className="h-10 w-full rounded border bg-background px-3 text-sm font-medium"
+                value={activeExamId ?? ""}
+                onChange={(e) => setExamId(Number(e.target.value))}
+              >
+                {(exams.data ?? []).map((exam) => (
+                  <option key={exam.id} value={exam.id}>
+                    {exam.name} ({exam.status})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </CardContent>
+        </Card>
+
+        {data && (
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                {data.student.name} — {data.exam.name}
+              </CardTitle>
+              <p className="text-sm text-slate-500">
+                Admission No: {data.student.admissionNo} · Class {data.student.class}-
+                {data.student.section}
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="overflow-x-auto rounded border bg-white">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="p-3 text-left">Subject</th>
+                      <th className="p-3 text-left">Exam Date</th>
+                      <th className="p-3 text-left">Marks Obtained</th>
+                      <th className="p-3 text-left">Passing Marks</th>
+                      <th className="p-3 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.subjects.map((row: any) => (
+                      <tr className="border-t" key={row.scheduleId}>
+                        <td className="p-3 font-medium">
+                          {row.subjectName} ({row.subjectCode})
+                        </td>
+                        <td className="p-3">{row.examDate}</td>
+                        <td className="p-3 font-semibold">
+                          {row.isAbsent ? "Absent" : `${row.marksObtained} / ${row.maxMarks}`}
+                        </td>
+                        <td className="p-3">{row.passingMarks}</td>
+                        <td className="p-3 capitalize">{row.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                <div className="rounded border p-3 bg-white">
+                  <small className="text-slate-500">Total Marks</small>
+                  <div className="font-bold">
+                    {data.totals.obtainedMarks} / {data.totals.maxMarks}
+                  </div>
+                </div>
+                <div className="rounded border p-3 bg-white">
+                  <small className="text-slate-500">Percentage</small>
+                  <div className="font-bold">{data.totals.percentage}%</div>
+                </div>
+                <div className="rounded border p-3 bg-white">
+                  <small className="text-slate-500">Grade</small>
+                  <div className="font-bold">{data.totals.grade}</div>
+                </div>
+                <div className="rounded border p-3 bg-white">
+                  <small className="text-slate-500">Result</small>
+                  <div className="font-bold">{data.totals.passed ? "PASS" : "FAIL"}</div>
+                </div>
+                <div className="rounded border p-3 bg-white">
+                  <small className="text-slate-500">Attendance</small>
+                  <div className="font-bold">
+                    {data.attendance.present}/{data.attendance.total} (
+                    {data.attendance.percentage}%)
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </main>
+    </div>
+  );
 }

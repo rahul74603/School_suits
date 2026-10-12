@@ -118,44 +118,79 @@ export default function Transport() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Route Name (रूट का नाम) *
+                    </label>
+                    <Input
+                      placeholder="e.g., Route 1 - MP Nagar"
+                      value={routeName}
+                      onChange={(e) => setRouteName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Bus / Vehicle Number (गाड़ी नंबर) *
+                    </label>
+                    <Input
+                      placeholder="e.g., MP-04-PA-1234"
+                      value={vehicleNo}
+                      onChange={(e) => setVehicleNo(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Driver Name (ड्राइवर का नाम) *
+                    </label>
+                    <Input
+                      placeholder="e.g., Ramesh Kumar"
+                      value={driverName}
+                      onChange={(e) => setDriverName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Driver Mobile Number (ड्राइवर का नंबर) *
+                    </label>
+                    <Input
+                      placeholder="10-digit mobile"
+                      value={driverContact}
+                      onChange={(e) => setDriverContact(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Monthly Bus Fee (मासिक बस शुल्क ₹) *
+                    </label>
+                    <Input
+                      type="number"
+                      placeholder="e.g., 1200"
+                      value={monthlyFee}
+                      onChange={(e) => setMonthlyFee(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Total Bus Seats (कुल सीट क्षमता) *
+                    </label>
+                    <Input
+                      type="number"
+                      placeholder="e.g., 40"
+                      value={capacity}
+                      onChange={(e) => setCapacity(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Bus Stops List (प्रमुख बस स्टॉप — कॉमा से अलग लिखें) *
+                  </label>
                   <Input
-                    placeholder="Route Name (e.g., Route 1 - MP Nagar)"
-                    value={routeName}
-                    onChange={(e) => setRouteName(e.target.value)}
-                  />
-                  <Input
-                    placeholder="Vehicle No (e.g., MP-04-PA-1234)"
-                    value={vehicleNo}
-                    onChange={(e) => setVehicleNo(e.target.value)}
-                  />
-                  <Input
-                    placeholder="Driver Name"
-                    value={driverName}
-                    onChange={(e) => setDriverName(e.target.value)}
-                  />
-                  <Input
-                    placeholder="Driver Contact"
-                    value={driverContact}
-                    onChange={(e) => setDriverContact(e.target.value)}
-                  />
-                  <Input
-                    type="number"
-                    placeholder="Monthly Fee (₹)"
-                    value={monthlyFee}
-                    onChange={(e) => setMonthlyFee(e.target.value)}
-                  />
-                  <Input
-                    type="number"
-                    placeholder="Seat Capacity"
-                    value={capacity}
-                    onChange={(e) => setCapacity(e.target.value)}
+                    placeholder="e.g., New Market, Roshanpura, Board Office"
+                    value={stops}
+                    onChange={(e) => setStops(e.target.value)}
                   />
                 </div>
-                <Input
-                  placeholder="Major Stops (comma separated, e.g., New Market, Roshanpura, Board Office)"
-                  value={stops}
-                  onChange={(e) => setStops(e.target.value)}
-                />
                 <Button
                   onClick={() => createRoute.mutate()}
                   disabled={
@@ -166,7 +201,7 @@ export default function Transport() {
                     !stops.trim()
                   }
                 >
-                  {createRoute.isPending ? "Saving..." : "Add Route"}
+                  {createRoute.isPending ? "Saving..." : "Add Bus Route"}
                 </Button>
               </CardContent>
             </Card>
@@ -176,47 +211,69 @@ export default function Transport() {
                 <CardTitle>Assign Student to Bus Route</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <select
-                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                  value={studentId}
-                  onChange={(e) => setStudentId(e.target.value)}
-                >
-                  <option value="">Select Student...</option>
-                  {(students.data ?? []).map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.admissionNo}) — Class {s.class}-{s.section}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-                  value={routeId}
-                  onChange={(e) => {
-                    setRouteId(e.target.value);
-                    const r = routeById.get(Number(e.target.value));
-                    if (r) setAllocFee(String((r as any).monthlyFee ?? r.amount ?? 500));
-                  }}
-                >
-                  <option value="">Select Bus Route...</option>
-                  {(routes.data ?? []).map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.routeName} {r.vehicleNo ? `(${r.vehicleNo})` : ""} — ₹
-                      {(r as any).monthlyFee ?? r.amount}/mo
-                    </option>
-                  ))}
-                </select>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    1. Select Student (छात्र चुनें) *
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                    value={studentId}
+                    onChange={(e) => setStudentId(e.target.value)}
+                  >
+                    <option value="">-- Select Student --</option>
+                    {(students.data ?? []).map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.admissionNo}) — Class {s.class}-{s.section}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    2. Select Bus Route (बस रूट चुनें) *
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                    value={routeId}
+                    onChange={(e) => {
+                      setRouteId(e.target.value);
+                      const r = routeById.get(Number(e.target.value));
+                      if (r) setAllocFee(String((r as any).monthlyFee ?? r.amount ?? 500));
+                    }}
+                  >
+                    <option value="">-- Select Bus Route --</option>
+                    {(routes.data ?? []).map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.routeName} {r.vehicleNo ? `(${r.vehicleNo})` : ""} — ₹
+                        {(r as any).monthlyFee ?? r.amount}/mo
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="grid gap-3 md:grid-cols-2">
-                  <Input
-                    placeholder="Pickup / Drop Stop Name"
-                    value={stopName}
-                    onChange={(e) => setStopName(e.target.value)}
-                  />
-                  <Input
-                    type="number"
-                    placeholder="Monthly Transport Fee (₹)"
-                    value={allocFee}
-                    onChange={(e) => setAllocFee(e.target.value)}
-                  />
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      3. Pickup / Drop Stop Name (किस स्टॉप से बैठेगा) *
+                    </label>
+                    <Input
+                      placeholder="e.g., MP Nagar Stop"
+                      value={stopName}
+                      onChange={(e) => setStopName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      4. Student Monthly Bus Fee (मासिक बस शुल्क ₹) *
+                    </label>
+                    <Input
+                      type="number"
+                      placeholder="e.g., 1200"
+                      value={allocFee}
+                      onChange={(e) => setAllocFee(e.target.value)}
+                    />
+                  </div>
                 </div>
                 <Button
                   onClick={() => allocateStudent.mutate()}
@@ -250,10 +307,12 @@ export default function Transport() {
                   <p className="text-xs text-slate-600">
                     <b>Stops:</b> {r.stops}
                   </p>
-                  <div className="pt-2 border-t flex justify-between text-xs text-slate-500">
-                    <span>Fee: ₹{(r as any).monthlyFee ?? r.amount}/month</span>
-                    <span>
-                      Occupancy: {count} / {r.capacity ?? 40} seats
+                  <div className="flex items-center justify-between pt-2 border-t text-xs">
+                    <span className="font-semibold text-emerald-700">
+                      ₹{(r as any).monthlyFee ?? r.amount}/month
+                    </span>
+                    <span className="text-slate-500">
+                      Seats: {count} / {r.capacity}
                     </span>
                   </div>
                 </CardContent>
@@ -265,7 +324,7 @@ export default function Transport() {
         <Card>
           <CardHeader>
             <CardTitle>
-              {isStudent ? "My Transport Allocation" : "Student Transport Allocations"}
+              {isStudent ? "My Bus Allocation" : "Student Bus Allocation Register"}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -275,7 +334,7 @@ export default function Transport() {
                   <tr>
                     <th className="p-3 text-left">Student</th>
                     <th className="p-3 text-left">Route & Vehicle</th>
-                    <th className="p-3 text-left">Stop Name</th>
+                    <th className="p-3 text-left">Pickup/Drop Stop</th>
                     <th className="p-3 text-left">Monthly Fee</th>
                     {canManage && <th className="p-3 text-left">Action</th>}
                   </tr>
@@ -284,23 +343,25 @@ export default function Transport() {
                   {!allocations.data?.length ? (
                     <tr>
                       <td className="p-6 text-center text-slate-500" colSpan={5}>
-                        No student transport allocations recorded.
+                        No student transport allocations recorded yet.
                       </td>
                     </tr>
                   ) : (
                     allocations.data.map((a) => {
-                      const st = studentById.get(a.studentId);
+                      const stu = studentById.get(a.studentId);
                       const rt = routeById.get(a.routeId);
                       return (
                         <tr key={a.id} className="border-t">
                           <td className="p-3 font-medium">
-                            {st ? `${st.name} (${st.class}-${st.section})` : `Student #${a.studentId}`}
+                            {stu
+                              ? `${stu.name} (${stu.class}-${stu.section})`
+                              : `Student #${a.studentId}`}
                           </td>
                           <td className="p-3">
                             {rt ? `${rt.routeName} (${rt.vehicleNo})` : `Route #${a.routeId}`}
                           </td>
                           <td className="p-3">{a.stopName}</td>
-                          <td className="p-3 font-semibold">₹{a.monthlyFee}</td>
+                          <td className="p-3 font-semibold">₹{a.monthlyFee.toLocaleString()}</td>
                           {canManage && (
                             <td className="p-3">
                               <Button

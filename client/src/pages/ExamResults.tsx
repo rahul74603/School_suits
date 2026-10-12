@@ -1,32 +1,328 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Sidebar } from "@/components/Sidebar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
-import type { Exam, ExamResult, ExamSchedule, Student } from "@shared/schema";
+import { useSchoolCatalog } from "@/hooks/use-school-catalog";
+import type { Exam, ExamSchedule, Student } from "@shared/schema";
 
-async function api<T>(url: string, init?: RequestInit): Promise<T> { const response = await fetch(url, { credentials: "include", ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) } }); if (!response.ok) throw new Error((await response.json().catch(() => null))?.message ?? "Results request failed"); return response.json(); }
-function qs(values: Record<string, string | undefined>) { const search = new URLSearchParams(); Object.entries(values).forEach(([key, value]) => value && search.set(key, value)); return search.toString() ? `?${search}` : ""; }
-type Detail = { exam: Exam; scopes: { className: string; section: string }[]; schedules: ExamSchedule[] };
-type Summary = { totalObtained: number; totalMaximum: number; percentage: number; passed: number; failed: number; absent: number };
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "include",
+    ...init,
+    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (!response.ok)
+    throw new Error(
+      (await response.json().catch(() => null))?.message ?? "Result request failed",
+    );
+  return response.json();
+}
 
 export default function ExamResults() {
-  const { data: user } = useAuth(); const qc = useQueryClient(); const manager = user?.role === "admin" || user?.role === "principal"; const canEnter = manager || user?.role === "teacher";
-  const [examId, setExamId] = useState(""); const [scheduleId, setScheduleId] = useState(""); const [marks, setMarks] = useState<Record<number, string>>({}); const [absent, setAbsent] = useState<Record<number, boolean>>({}); const [message, setMessage] = useState("");
-  const exams = useQuery<Exam[]>({ queryKey: ["/api/exams"], queryFn: () => api("/api/exams"), enabled: !!user });
-  const detail = useQuery<Detail>({ queryKey: ["/api/exams", examId], queryFn: () => api(`/api/exams/${examId}`), enabled: !!examId });
-  const schedule = detail.data?.schedules.find(item => item.id === Number(scheduleId));
-  const students = useQuery<Student[]>({ queryKey: ["/api/students", schedule?.className, schedule?.section], queryFn: () => api(`/api/students${qs({ class: schedule?.className, section: schedule?.section })}`), enabled: canEnter && !!schedule });
-  const results = useQuery<ExamResult[]>({ queryKey: ["/api/exam-results", examId, scheduleId], queryFn: () => api(`/api/exam-results${qs({ examId, scheduleId })}`), enabled: !!user });
-  const summary = useQuery<Summary>({ queryKey: ["/api/exam-results/summary", examId], queryFn: () => api(`/api/exam-results/summary${qs({ examId })}`), enabled: !!user });
-  const existing = useMemo(() => new Map((results.data ?? []).map(result => [result.studentId, result])), [results.data]);
-  const save = useMutation({ mutationFn: async () => { const records = (students.data ?? []).map(student => ({ studentId: student.id, obtainedMarks: absent[student.id] ? null : Number(marks[student.id] ?? existing.get(student.id)?.obtainedMarks ?? 0), isAbsent: !!absent[student.id], remarks: null })); const newRecords = records.filter(record => !existing.has(record.studentId)); const existingRecords = records.filter(record => existing.has(record.studentId)); if (newRecords.length) await api("/api/exam-results/bulk", { method: "POST", body: JSON.stringify({ examId: Number(examId), scheduleId: Number(scheduleId), className: schedule!.className, section: schedule!.section, records: newRecords }) }); await Promise.all(existingRecords.map(record => api(`/api/exam-results/${existing.get(record.studentId)!.id}`, { method: "PATCH", body: JSON.stringify({ obtainedMarks: record.obtainedMarks, isAbsent: record.isAbsent, remarks: record.remarks }) }))); }, onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/exam-results"] }); setMessage("Marks saved as draft."); } });
-  const error = exams.error ?? detail.error ?? students.error ?? results.error ?? summary.error ?? save.error;
-  return <div className="flex min-h-screen bg-slate-50"><Sidebar /><main className="flex-1 ml-64 p-8 space-y-6"><div><h1 className="text-3xl font-bold">Exam Results</h1><p className="mt-1 text-slate-500">Enter marks securely within assigned exam schedules. Mark sheets are intentionally deferred.</p></div>{error && <div className="rounded border border-red-200 bg-red-50 p-3 text-red-700">{(error as Error).message}</div>}{message && <div className="rounded border border-green-200 bg-green-50 p-3 text-green-700">{message}</div>}
-    <Card><CardHeader><CardTitle>{canEnter ? "Select exam schedule" : "My published results"}</CardTitle></CardHeader><CardContent className="space-y-4"><div className="grid gap-3 md:grid-cols-3"><select className="h-10 rounded border bg-background px-3" value={examId} onChange={e => { setExamId(e.target.value); setScheduleId(""); }}><option value="">Exam</option>{(exams.data ?? []).map(exam => <option key={exam.id} value={exam.id}>{exam.name} ({exam.status})</option>)}</select>{canEnter && <select className="h-10 rounded border bg-background px-3" value={scheduleId} onChange={e => setScheduleId(e.target.value)}><option value="">Subject / class schedule</option>{(detail.data?.schedules ?? []).map(item => <option key={item.id} value={item.id}>{item.className}/{item.section} · Subject {item.subjectId} · max {item.maxMarks}</option>)}</select>}</div>{summary.data && <div className="grid grid-cols-2 gap-3 md:grid-cols-6">{([['Obtained', summary.data.totalObtained], ['Maximum', summary.data.totalMaximum], ['Percentage', `${summary.data.percentage}%`], ['Passed', summary.data.passed], ['Failed', summary.data.failed], ['Absent', summary.data.absent]] as const).map(([label, value]) => <div className="rounded bg-slate-100 p-3" key={label}><div className="text-xs text-slate-500">{label}</div><div className="text-xl font-semibold">{value}</div></div>)}</div>}</CardContent></Card>
-    {canEnter && schedule && <Card><CardHeader><CardTitle>Marks: {schedule.className}/{schedule.section} · maximum {schedule.maxMarks}</CardTitle></CardHeader><CardContent className="space-y-3"><div className="flex justify-end"><Button onClick={() => save.mutate()} disabled={save.isPending || !students.data?.length}>{save.isPending ? "Saving..." : "Save marks"}</Button></div><div className="overflow-x-auto rounded border"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Student</th><th className="p-3 text-left">Marks</th><th className="p-3 text-left">Absent</th></tr></thead><tbody>{(students.data ?? []).map(student => <tr className="border-t" key={student.id}><td className="p-3">{student.name}</td><td className="p-3"><Input className="w-28" type="number" min="0" max={schedule.maxMarks} disabled={!!absent[student.id]} value={marks[student.id] ?? (existing.get(student.id)?.obtainedMarks ?? "")} onChange={e => setMarks(current => ({ ...current, [student.id]: e.target.value }))} /></td><td className="p-3"><input type="checkbox" checked={!!absent[student.id]} onChange={e => setAbsent(current => ({ ...current, [student.id]: e.target.checked }))} /></td></tr>)}</tbody></table></div></CardContent></Card>}
-    {!canEnter && examId && <Card><CardHeader><CardTitle>Subject-wise published marks</CardTitle></CardHeader><CardContent><div className="overflow-x-auto rounded border"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Subject</th><th className="p-3 text-left">Obtained</th><th className="p-3 text-left">Status</th></tr></thead><tbody>{(results.data ?? []).map(result => <tr className="border-t" key={result.id}><td className="p-3">Subject {result.scheduleId}</td><td className="p-3">{result.isAbsent ? "Absent" : result.obtainedMarks}</td><td className="p-3 capitalize">{result.isAbsent ? "absent" : "recorded"}</td></tr>)}</tbody></table></div></CardContent></Card>}
-  </main></div>;
+  const { data: user } = useAuth();
+  const { subjectMap } = useSchoolCatalog();
+  const qc = useQueryClient();
+  const [examId, setExamId] = useState<number>();
+  const [scheduleId, setScheduleId] = useState<number>();
+  const [drafts, setDrafts] = useState<
+    Record<number, { marksObtained: string; isAbsent: boolean; remarks: string }>
+  >({});
+  const [message, setMessage] = useState("");
+
+  const exams = useQuery<Exam[]>({
+    queryKey: ["/api/exams"],
+    queryFn: () => api("/api/exams"),
+  });
+  const detail = useQuery<{ exam: Exam; schedules: ExamSchedule[] }>({
+    queryKey: ["/api/exams", examId],
+    queryFn: () => api(`/api/exams/${examId}`),
+    enabled: !!examId,
+  });
+  const schedule = detail.data?.schedules.find((row) => row.id === scheduleId);
+  const students = useQuery<Student[]>({
+    queryKey: ["/api/students", schedule?.className, schedule?.section],
+    queryFn: () =>
+      api(`/api/students?class=${schedule?.className}&section=${schedule?.section}`),
+    enabled: !!schedule,
+  });
+  const marks = useQuery<any[]>({
+    queryKey: ["/api/exams", examId, "marks", scheduleId],
+    queryFn: () => api(`/api/exams/${examId}/marks?examScheduleId=${scheduleId}`),
+    enabled: !!examId && !!scheduleId,
+  });
+
+  useEffect(() => {
+    const next: Record<
+      number,
+      { marksObtained: string; isAbsent: boolean; remarks: string }
+    > = {};
+    for (const mark of marks.data ?? []) {
+      next[mark.studentId] = {
+        marksObtained: String(mark.marksObtained ?? 0),
+        isAbsent: Boolean(mark.isAbsent),
+        remarks: mark.remarks ?? "",
+      };
+    }
+    setDrafts(next);
+  }, [marks.data]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/exams/${examId}/marks`, {
+        method: "POST",
+        body: JSON.stringify({
+          examScheduleId: scheduleId,
+          entries: (students.data ?? []).map((student) => ({
+            studentId: student.id,
+            marksObtained: drafts[student.id]?.isAbsent
+              ? null
+              : Number(drafts[student.id]?.marksObtained ?? 0),
+            isAbsent: Boolean(drafts[student.id]?.isAbsent),
+            remarks: drafts[student.id]?.remarks || null,
+          })),
+        }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/exams", examId, "marks", scheduleId] });
+      setMessage("Student marks saved as draft.");
+    },
+  });
+
+  const publish = useMutation({
+    mutationFn: (published: boolean) =>
+      api(`/api/exams/${examId}/results/publish`, {
+        method: "POST",
+        body: JSON.stringify({ examScheduleId: scheduleId, published }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/exams", examId, "marks", scheduleId] });
+      setMessage("Result publication status updated.");
+    },
+  });
+
+  const error =
+    exams.error ??
+    detail.error ??
+    students.error ??
+    marks.error ??
+    save.error ??
+    publish.error;
+
+  return (
+    <div className="flex min-h-screen bg-slate-50">
+      <Sidebar />
+      <main className="flex-1 ml-64 p-8 space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold">Exam Marks Entry & Results</h1>
+          <p className="mt-1 text-slate-500">
+            Select an Exam and Subject Paper below to enter student marks and publish results.
+          </p>
+        </div>
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 p-3 text-red-700">
+            {(error as Error).message}
+          </div>
+        )}
+        {message && (
+          <div className="rounded border border-green-200 bg-green-50 p-3 text-green-700">
+            {message}
+          </div>
+        )}
+        <Card>
+          <CardHeader>
+            <CardTitle>Select Exam & Subject Paper (परीक्षा और विषय चुनें)</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-3 items-end">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                1. Select Exam (परीक्षा चुनें) *
+              </label>
+              <select
+                className="h-10 w-full rounded border bg-background px-3 text-sm font-medium"
+                value={examId ?? ""}
+                onChange={(e) => {
+                  setExamId(Number(e.target.value) || undefined);
+                  setScheduleId(undefined);
+                }}
+              >
+                <option value="">-- Select Exam --</option>
+                {(exams.data ?? []).map((exam) => (
+                  <option key={exam.id} value={exam.id}>
+                    {exam.name} ({exam.status})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                2. Select Class & Subject Paper (विषय चुनें) *
+              </label>
+              <select
+                className="h-10 w-full rounded border bg-background px-3 text-sm font-medium"
+                value={scheduleId ?? ""}
+                onChange={(e) => setScheduleId(Number(e.target.value) || undefined)}
+                disabled={!examId}
+              >
+                <option value="">-- Select Subject Paper --</option>
+                {(detail.data?.schedules ?? []).map((row) => (
+                  <option key={row.id} value={row.id}>
+                    Class {row.className}-{row.section} ·{" "}
+                    {subjectMap.get(row.subjectId)?.name ?? `Subject #${row.subjectId}`} (Max:{" "}
+                    {row.maxMarks})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {(user?.role === "admin" || user?.role === "principal") && scheduleId && (
+              <div className="flex gap-2">
+                <Button className="h-10" onClick={() => publish.mutate(true)}>
+                  Publish Results
+                </Button>
+                <Button
+                  className="h-10"
+                  variant="outline"
+                  onClick={() => publish.mutate(false)}
+                >
+                  Unpublish
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {schedule && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle>
+                  Class {schedule.className}-{schedule.section} ·{" "}
+                  {subjectMap.get(schedule.subjectId)?.name ?? `Subject #${schedule.subjectId}`}
+                </CardTitle>
+                <p className="text-xs text-slate-500 mt-1">
+                  Maximum Marks (पूर्णांक): <b>{schedule.maxMarks}</b> · Passing Marks (उत्तीर्णांक):{" "}
+                  <b>{schedule.passingMarks}</b>
+                </p>
+              </div>
+              {user?.role !== "student" && (
+                <Button onClick={() => save.mutate()} disabled={save.isPending}>
+                  {save.isPending ? "Saving..." : "Save Marks"}
+                </Button>
+              )}
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="overflow-x-auto rounded border bg-white">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="p-3 text-left">Student Name</th>
+                      <th className="p-3 text-left">
+                        Marks Obtained (प्राप्तांक out of {schedule.maxMarks})
+                      </th>
+                      <th className="p-3 text-left">Absent? (अनुपस्थित)</th>
+                      <th className="p-3 text-left">Teacher Remarks (टिप्पणी)</th>
+                      <th className="p-3 text-left">Result Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(students.data ?? []).map((student) => {
+                      const existing = marks.data?.find(
+                        (mark) => mark.studentId === student.id,
+                      );
+                      const draft = drafts[student.id] ?? {
+                        marksObtained: "0",
+                        isAbsent: false,
+                        remarks: "",
+                      };
+                      return (
+                        <tr className="border-t" key={student.id}>
+                          <td className="p-3 font-medium">
+                            {student.name}{" "}
+                            <span className="text-xs text-slate-500">
+                              ({student.admissionNo})
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            {user?.role === "student" ? (
+                              <b>{existing?.marksObtained ?? "-"}</b>
+                            ) : (
+                              <Input
+                                type="number"
+                                min="0"
+                                max={schedule.maxMarks}
+                                disabled={draft.isAbsent}
+                                value={draft.marksObtained}
+                                onChange={(e) =>
+                                  setDrafts({
+                                    ...drafts,
+                                    [student.id]: { ...draft, marksObtained: e.target.value },
+                                  })
+                                }
+                              />
+                            )}
+                          </td>
+                          <td className="p-3">
+                            {user?.role === "student" ? (
+                              existing?.isAbsent ? (
+                                "Yes"
+                              ) : (
+                                "No"
+                              )
+                            ) : (
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4"
+                                checked={draft.isAbsent}
+                                onChange={(e) =>
+                                  setDrafts({
+                                    ...drafts,
+                                    [student.id]: { ...draft, isAbsent: e.target.checked },
+                                  })
+                                }
+                              />
+                            )}
+                          </td>
+                          <td className="p-3">
+                            {user?.role === "student" ? (
+                              existing?.remarks ?? "-"
+                            ) : (
+                              <Input
+                                placeholder="e.g., Good performance"
+                                value={draft.remarks}
+                                onChange={(e) =>
+                                  setDrafts({
+                                    ...drafts,
+                                    [student.id]: { ...draft, remarks: e.target.value },
+                                  })
+                                }
+                              />
+                            )}
+                          </td>
+                          <td className="p-3">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${
+                                existing?.status === "published"
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-slate-100 text-slate-700"
+                              }`}
+                            >
+                              {existing?.status ?? "draft"}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </main>
+    </div>
+  );
 }

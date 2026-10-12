@@ -76,70 +76,99 @@ export default function Documents() {
         {isManager && (
           <Card>
             <CardHeader>
-              <CardTitle>Register Verified Document Record</CardTitle>
+              <CardTitle>Register Verified Document Record (दस्तावेज़ दर्ज करें)</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-6">
-              <select
-                className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
-                value={ownerType}
-                onChange={(e) => {
-                  setOwnerType(e.target.value as "student" | "staff" | "school");
-                  setOwnerId("");
-                }}
-              >
-                <option value="student">Student Document</option>
-                <option value="staff">Staff Document</option>
-                <option value="school">School Document</option>
-              </select>
+            <CardContent className="grid gap-3 md:grid-cols-6 items-end">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  1. Document For (किसका दस्तावेज़) *
+                </label>
+                <select
+                  className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                  value={ownerType}
+                  onChange={(e) => {
+                    setOwnerType(e.target.value as "student" | "staff" | "school");
+                    setOwnerId("");
+                  }}
+                >
+                  <option value="student">Student Document</option>
+                  <option value="staff">Staff Document</option>
+                  <option value="school">School Document</option>
+                </select>
+              </div>
 
               {ownerType === "student" && (
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm md:col-span-2"
-                  value={ownerId}
-                  onChange={(e) => setOwnerId(e.target.value)}
-                >
-                  <option value="">Select Student...</option>
-                  {(students ?? []).map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} (Class {s.class}-{s.section} · Father: {s.fatherName} · {s.admissionNo})
-                    </option>
-                  ))}
-                </select>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    2. Select Student (छात्र चुनें) *
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                    value={ownerId}
+                    onChange={(e) => setOwnerId(e.target.value)}
+                  >
+                    <option value="">-- Select Student --</option>
+                    {(students ?? []).map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} (Class {s.class}-{s.section} · Father: {s.fatherName} ·{" "}
+                        {s.admissionNo})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
 
               {ownerType === "staff" && (
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm md:col-span-2"
-                  value={ownerId}
-                  onChange={(e) => setOwnerId(e.target.value)}
-                >
-                  <option value="">Select Staff / Teacher...</option>
-                  {(staffList ?? []).map((st) => (
-                    <option key={st.id} value={st.id}>
-                      {st.name} ({st.designation} · {st.contact})
-                    </option>
-                  ))}
-                </select>
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    2. Select Staff / Teacher (स्टाफ चुनें) *
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                    value={ownerId}
+                    onChange={(e) => setOwnerId(e.target.value)}
+                  >
+                    <option value="">-- Select Staff / Teacher --</option>
+                    {(staffList ?? []).map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.name} ({st.designation} · {st.contact})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
 
-              <select
-                className="h-10 rounded-md border bg-background px-3 text-sm"
-                value={documentType}
-                onChange={(e) => setDocumentType(e.target.value)}
-              >
-                <option value="birth-certificate">Birth Certificate</option>
-                <option value="transfer-certificate">Transfer Certificate (TC)</option>
-                <option value="report-card">Previous Report Card</option>
-                <option value="id-proof">ID / Address Proof</option>
-                <option value="qualification">Staff Qualification</option>
-                <option value="affiliation">School Affiliation</option>
-              </select>
-              <Input
-                placeholder="File Name (e.g., tc-scan.pdf)"
-                value={filename}
-                onChange={(e) => setFilename(e.target.value)}
-              />
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  3. Document Type (प्रकार) *
+                </label>
+                <select
+                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                  value={documentType}
+                  onChange={(e) => setDocumentType(e.target.value)}
+                >
+                  <option value="birth-certificate">Birth Certificate</option>
+                  <option value="transfer-certificate">Transfer Certificate (TC)</option>
+                  <option value="report-card">Previous Report Card</option>
+                  <option value="id-proof">ID / Address Proof</option>
+                  <option value="qualification">Staff Qualification</option>
+                  <option value="affiliation">School Affiliation</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  4. File / Document Name (फ़ाइल का नाम) *
+                </label>
+                <Input
+                  placeholder="e.g., tc-scan.pdf / aadhar.pdf"
+                  value={filename}
+                  onChange={(e) => setFilename(e.target.value)}
+                />
+              </div>
+
               <Button
+                className="h-10"
                 onClick={() => createDoc.mutate()}
                 disabled={
                   createDoc.isPending ||

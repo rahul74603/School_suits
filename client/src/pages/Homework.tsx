@@ -198,18 +198,28 @@ export default function Homework() {
                 </div>
               </div>
 
-              <Input
-                placeholder="Topic / Homework Title (e.g., Chapter 4 Fractions Exercise 4.2)"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Topic / Homework Title (होमवर्क का विषय) *
+                </label>
+                <Input
+                  placeholder="e.g., Chapter 4 Fractions Exercise 4.2"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                />
+              </div>
 
-              <textarea
-                className="w-full min-h-[90px] rounded-md border p-3 text-sm"
-                placeholder="Detailed instructions, questions, or page numbers..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Homework Details / Instructions (पूरा होमवर्क लिखें) *
+                </label>
+                <textarea
+                  className="w-full min-h-[90px] rounded-md border p-3 text-sm"
+                  placeholder="Detailed instructions, questions, or page numbers..."
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </div>
 
               <Button
                 onClick={() => createHomework.mutate()}

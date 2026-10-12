@@ -7,6 +7,21 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Trash2 } from "lucide-react";
 
+const MONTHS = [
+  { value: "1", label: "January (01)" },
+  { value: "2", label: "February (02)" },
+  { value: "3", label: "March (03)" },
+  { value: "4", label: "April (04)" },
+  { value: "5", label: "May (05)" },
+  { value: "6", label: "June (06)" },
+  { value: "7", label: "July (07)" },
+  { value: "8", label: "August (08)" },
+  { value: "9", label: "September (09)" },
+  { value: "10", label: "October (10)" },
+  { value: "11", label: "November (11)" },
+  { value: "12", label: "December (12)" },
+];
+
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     credentials: "include",
@@ -122,11 +137,43 @@ export default function Financial() {
     <div className="flex min-h-screen bg-slate-50">
       <Sidebar />
       <main className="flex-1 ml-64 p-8 space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold">Financial Dashboard & Expense Ledger</h1>
-          <p className="mt-1 text-slate-500">
-            Net balance = fee income − finalized expenses − paid payroll.
-          </p>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold">Financial Dashboard & Expense Ledger</h1>
+            <p className="mt-1 text-slate-500">
+              Net balance = Fee Income − Finalized School Expenses − Paid Staff Payroll.
+            </p>
+          </div>
+
+          <div className="flex gap-3 bg-white p-3 rounded-xl border shadow-sm">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Filter Month (महीना)
+              </label>
+              <select
+                className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
+              >
+                {MONTHS.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Filter Year (वर्ष)
+              </label>
+              <Input
+                type="number"
+                value={year}
+                onChange={(e) => setYear(e.target.value)}
+                className="w-32 bg-white"
+              />
+            </div>
+          </div>
         </div>
 
         {error && (
@@ -140,45 +187,28 @@ export default function Financial() {
           </div>
         )}
 
-        <div className="flex gap-3">
-          <Input
-            type="number"
-            min="1"
-            max="12"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            className="w-32 bg-white"
-          />
-          <Input
-            type="number"
-            value={year}
-            onChange={(e) => setYear(e.target.value)}
-            className="w-36 bg-white"
-          />
-        </div>
-
         {summary.data && (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <div className="rounded-xl border bg-white p-4 shadow-sm">
-              <small className="text-slate-500">Fee Income</small>
+              <small className="text-slate-500">Fee Income (+ कुल फीस आय)</small>
               <div className="text-xl font-bold text-green-700">
                 ₹{(summary.data.feeIncome ?? 0).toLocaleString()}
               </div>
             </div>
             <div className="rounded-xl border bg-white p-4 shadow-sm">
-              <small className="text-slate-500">Finalized Expenses</small>
+              <small className="text-slate-500">Finalized Expenses (− स्कूल खर्च)</small>
               <div className="text-xl font-bold text-amber-700">
                 ₹{(summary.data.expenses ?? 0).toLocaleString()}
               </div>
             </div>
             <div className="rounded-xl border bg-white p-4 shadow-sm">
-              <small className="text-slate-500">Paid Payroll</small>
+              <small className="text-slate-500">Paid Payroll (− स्टाफ सैलरी)</small>
               <div className="text-xl font-bold text-purple-700">
                 ₹{(summary.data.paidPayroll ?? 0).toLocaleString()}
               </div>
             </div>
             <div className="rounded-xl border bg-white p-4 shadow-sm">
-              <small className="text-slate-500">Net Balance</small>
+              <small className="text-slate-500">Net Balance (शुद्ध बचत)</small>
               <div className="text-xl font-bold text-slate-900">
                 ₹{(summary.data.netBalance ?? 0).toLocaleString()}
               </div>
@@ -190,14 +220,19 @@ export default function Financial() {
           <div className="grid gap-6 lg:grid-cols-3">
             <Card>
               <CardHeader>
-                <CardTitle>Add Expense Category</CardTitle>
+                <CardTitle>Step 1: Add Expense Category</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <Input
-                  placeholder="Category (e.g., Electricity / Lab / Maintenance)"
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                />
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Category Name (खर्च का प्रकार) *
+                  </label>
+                  <Input
+                    placeholder="e.g., Electricity / Lab / Maintenance"
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                  />
+                </div>
                 <Button
                   onClick={() => createCategory.mutate()}
                   disabled={createCategory.isPending || !newCategoryName.trim()}
@@ -209,43 +244,64 @@ export default function Financial() {
 
             <Card className="lg:col-span-2">
               <CardHeader>
-                <CardTitle>Record School Expense</CardTitle>
+                <CardTitle>Step 2: Record School Expense (स्कूल खर्च दर्ज करें)</CardTitle>
               </CardHeader>
-              <CardContent className="grid gap-3 md:grid-cols-5">
-                <select
-                  className="h-10 rounded border bg-background px-3 text-sm"
-                  value={categoryId}
-                  onChange={(e) => setCategoryId(e.target.value)}
-                >
-                  <option value="">Category</option>
-                  {(categories.data ?? []).map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-                <Input
-                  placeholder="Description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-                <Input
-                  type="number"
-                  min="1"
-                  placeholder="Amount (₹)"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                />
-                <Input
-                  type="date"
-                  value={expenseDate}
-                  onChange={(e) => setExpenseDate(e.target.value)}
-                />
+              <CardContent className="grid gap-3 md:grid-cols-5 items-end">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Expense Category (प्रकार) *
+                  </label>
+                  <select
+                    className="h-10 w-full rounded border bg-background px-3 text-sm"
+                    value={categoryId}
+                    onChange={(e) => setCategoryId(e.target.value)}
+                  >
+                    <option value="">-- Select Category --</option>
+                    {(categories.data ?? []).map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Expense Details (विवरण) *
+                  </label>
+                  <Input
+                    placeholder="e.g., October Electricity Bill"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Amount (राशि ₹) *
+                  </label>
+                  <Input
+                    type="number"
+                    min="1"
+                    placeholder="e.g., 4500"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Expense Date (तारीख) *
+                  </label>
+                  <Input
+                    type="date"
+                    value={expenseDate}
+                    onChange={(e) => setExpenseDate(e.target.value)}
+                  />
+                </div>
                 <Button
+                  className="h-10"
                   onClick={() => createExpense.mutate()}
                   disabled={!categoryId || !description || !amount}
                 >
-                  Save Draft
+                  Save Expense
                 </Button>
               </CardContent>
             </Card>
@@ -254,7 +310,7 @@ export default function Financial() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Expenses Ledger</CardTitle>
+            <CardTitle>School Expense Register</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto rounded border bg-white">
@@ -265,25 +321,47 @@ export default function Financial() {
                     <th className="p-3 text-left">Category</th>
                     <th className="p-3 text-left">Description</th>
                     <th className="p-3 text-left">Amount</th>
-                    <th className="p-3 text-left">Status</th>
-                    {manager && <th className="p-3 text-left">Action</th>}
+                    <th className="p-3 text-left">Status & Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(expenses.data ?? []).map((expense) => (
-                    <tr className="border-t" key={expense.id}>
-                      <td className="p-3">{expense.expenseDate}</td>
-                      <td className="p-3">{categoryById.get(expense.categoryId) || "General"}</td>
-                      <td className="p-3">{expense.description}</td>
-                      <td className="p-3 font-semibold">₹{expense.amount.toLocaleString()}</td>
-                      <td className="p-3 capitalize">{expense.status}</td>
-                      {manager && (
-                        <td className="p-3 flex gap-2">
-                          {expense.status === "draft" && (
+                  {expenses.isLoading ? (
+                    <tr>
+                      <td className="p-3" colSpan={5}>
+                        Loading expenses...
+                      </td>
+                    </tr>
+                  ) : !expenses.data?.length ? (
+                    <tr>
+                      <td className="p-6 text-center text-slate-500" colSpan={5}>
+                        No expenses recorded for this month.
+                      </td>
+                    </tr>
+                  ) : (
+                    (expenses.data ?? []).map((row) => (
+                      <tr className="border-t" key={row.id}>
+                        <td className="p-3">{row.expenseDate}</td>
+                        <td className="p-3 font-medium">
+                          {categoryById.get(row.categoryId) || `Category #${row.categoryId}`}
+                        </td>
+                        <td className="p-3">{row.description}</td>
+                        <td className="p-3 font-semibold">₹{row.amount.toLocaleString()}</td>
+                        <td className="p-3 flex items-center gap-2">
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${
+                              row.status === "finalized"
+                                ? "bg-green-100 text-green-800"
+                                : "bg-amber-100 text-amber-800"
+                            }`}
+                          >
+                            {row.status}
+                          </span>
+                          {manager && row.status === "draft" && (
                             <>
                               <Button
                                 size="sm"
-                                onClick={() => finalizeExpense.mutate(expense.id)}
+                                variant="outline"
+                                onClick={() => finalizeExpense.mutate(row.id)}
                               >
                                 Finalize
                               </Button>
@@ -291,16 +369,16 @@ export default function Financial() {
                                 size="sm"
                                 variant="ghost"
                                 className="text-red-600"
-                                onClick={() => deleteExpense.mutate(expense.id)}
+                                onClick={() => deleteExpense.mutate(row.id)}
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </>
                           )}
                         </td>
-                      )}
-                    </tr>
-                  ))}
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
