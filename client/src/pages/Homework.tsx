@@ -5,12 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
+import { useSchoolCatalog } from "@/hooks/use-school-catalog";
 import { apiRequest } from "@/lib/queryClient";
 import { BookOpen, Trash2 } from "lucide-react";
-import type { HomeworkAssignment, Subject } from "@shared/schema";
+import type { HomeworkAssignment } from "@shared/schema";
 
 export default function Homework() {
   const { data: user } = useAuth();
+  const { classOptions, sectionOptions, subjects, subjectMap } = useSchoolCatalog();
   const qc = useQueryClient();
   const canAssign = ["admin", "principal", "teacher"].includes(user?.role ?? "");
   const isStudent = user?.role === "student";
@@ -23,29 +25,22 @@ export default function Homework() {
   const [description, setDescription] = useState("");
   const [assignedDate, setAssignedDate] = useState(today);
   const [dueDate, setDueDate] = useState(today);
-  const [filterClass, setFilterClass] = useState("");
-  const [filterSection, setFilterSection] = useState("");
+  const [filterClass, setFilterClass] = useState("all");
+  const [filterSection, setFilterSection] = useState("all");
   const [message, setMessage] = useState("");
-
-  const subjects = useQuery<Subject[]>({
-    queryKey: ["/api/subjects"],
-    queryFn: async () => (await fetch("/api/subjects", { credentials: "include" })).json(),
-    enabled: canAssign,
-  });
 
   const homework = useQuery<HomeworkAssignment[]>({
     queryKey: ["/api/homework", filterClass, filterSection],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (filterClass) params.set("class", filterClass);
-      if (filterSection) params.set("section", filterSection);
+      if (filterClass && filterClass !== "all") params.set("class", filterClass);
+      if (filterSection && filterSection !== "all") params.set("section", filterSection);
       const qs = params.toString() ? `?${params.toString()}` : "";
-      return (await fetch(`/api/homework${qs}`, { credentials: "include" })).json();
+      const res = await fetch(`/api/homework${qs}`, { credentials: "include" });
+      return res.ok ? res.json() : [];
     },
     enabled: !!user,
   });
-
-  const subjectById = new Map((subjects.data ?? []).map((s) => [s.id, s.name]));
 
   const createHomework = useMutation({
     mutationFn: () =>
@@ -81,23 +76,35 @@ export default function Homework() {
             <p className="text-slate-500 mt-1">
               {isStudent
                 ? "Daily homework and classwork assigned to your class."
-                : "Assign daily homework, project work, and class diary notes by class and subject."}
+                : "Select Class, Section, and Subject from connected dropdowns to assign daily homework."}
             </p>
           </div>
           {!isStudent && (
             <div className="flex gap-2">
-              <Input
-                className="w-36 bg-white"
-                placeholder="Filter Class"
+              <select
+                className="h-10 rounded-md border bg-white px-3 text-sm font-medium"
                 value={filterClass}
                 onChange={(e) => setFilterClass(e.target.value)}
-              />
-              <Input
-                className="w-36 bg-white"
-                placeholder="Filter Section"
+              >
+                <option value="all">Filter: All Classes</option>
+                {classOptions.map((c) => (
+                  <option key={c} value={c}>
+                    Class {c}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="h-10 rounded-md border bg-white px-3 text-sm font-medium"
                 value={filterSection}
                 onChange={(e) => setFilterSection(e.target.value)}
-              />
+              >
+                <option value="all">Filter: All Sections</option>
+                {sectionOptions.map((sec) => (
+                  <option key={sec} value={sec}>
+                    Section {sec}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
         </div>
@@ -111,34 +118,68 @@ export default function Homework() {
         {canAssign && (
           <Card>
             <CardHeader>
-              <CardTitle>Assign New Homework</CardTitle>
+              <CardTitle>Assign New Homework (Connected Class, Section & Subject Dropdowns)</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-3 md:grid-cols-5">
-                <Input
-                  placeholder="Class (e.g., 5)"
-                  value={className}
-                  onChange={(e) => setClassName(e.target.value)}
-                />
-                <Input
-                  placeholder="Section (e.g., A)"
-                  value={section}
-                  onChange={(e) => setSection(e.target.value)}
-                />
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm"
-                  value={subjectId}
-                  onChange={(e) => setSubjectId(e.target.value)}
-                >
-                  <option value="">Select Subject</option>
-                  {(subjects.data ?? []).map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} {s.code ? `(${s.code})` : ""}
-                    </option>
-                  ))}
-                </select>
                 <div>
-                  <label className="block text-[11px] text-slate-500">Assigned Date</label>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Class (Dropdown)
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                    value={className}
+                    onChange={(e) => setClassName(e.target.value)}
+                  >
+                    <option value="">Select Class...</option>
+                    {classOptions.map((c) => (
+                      <option key={c} value={c}>
+                        Class {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Section (Dropdown)
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                    value={section}
+                    onChange={(e) => setSection(e.target.value)}
+                  >
+                    <option value="">Select Section...</option>
+                    {sectionOptions.map((sec) => (
+                      <option key={sec} value={sec}>
+                        Section {sec}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Subject (Dropdown)
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
+                    value={subjectId}
+                    onChange={(e) => setSubjectId(e.target.value)}
+                  >
+                    <option value="">Select Subject...</option>
+                    {subjects.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} {s.code ? `(${s.code})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Assigned Date
+                  </label>
                   <Input
                     type="date"
                     value={assignedDate}
@@ -146,7 +187,9 @@ export default function Homework() {
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] text-slate-500">Submission Due Date</label>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Submission Due Date
+                  </label>
                   <Input
                     type="date"
                     value={dueDate}
@@ -198,36 +241,36 @@ export default function Homework() {
               </CardContent>
             </Card>
           ) : (
-            homework.data.map((item) => (
-              <Card key={item.id}>
-                <CardContent className="p-5 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
+            homework.data.map((hw) => (
+              <Card key={hw.id} className="bg-white">
+                <CardContent className="p-5 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-800">
-                          Class {item.className}-{item.section}
+                        <span className="rounded-md bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700">
+                          Class {hw.className}-{hw.section}
                         </span>
-                        <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-                          {subjectById.get(item.subjectId) || `Subject #${item.subjectId}`}
+                        <span className="rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
+                          {subjectMap.get(hw.subjectId)?.name || `Subject #${hw.subjectId}`}
                         </span>
                       </div>
-                      <h3 className="text-base font-bold text-slate-900 mt-2">{item.title}</h3>
+                      <h3 className="text-lg font-bold text-slate-900 mt-2">{hw.title}</h3>
                     </div>
                     {canAssign && (
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="text-red-600 hover:text-red-700"
-                        onClick={() => removeHomework.mutate(item.id)}
+                        className="text-red-600"
+                        onClick={() => removeHomework.mutate(hw.id)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     )}
                   </div>
-                  <p className="text-sm text-slate-700 whitespace-pre-wrap">{item.description}</p>
-                  <div className="pt-2 border-t flex justify-between text-xs text-slate-500">
-                    <span>Assigned: {item.assignedDate}</span>
-                    <span className="font-semibold text-amber-700">Due: {item.dueDate}</span>
+                  <p className="text-sm text-slate-700 whitespace-pre-wrap">{hw.description}</p>
+                  <div className="flex items-center justify-between pt-2 border-t text-xs text-slate-500">
+                    <span>Assigned: {hw.assignedDate}</span>
+                    <span className="font-semibold text-amber-700">Due Date: {hw.dueDate}</span>
                   </div>
                 </CardContent>
               </Card>

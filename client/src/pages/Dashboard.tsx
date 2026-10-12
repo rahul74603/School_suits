@@ -99,11 +99,21 @@ export default function Dashboard() {
   const subjectMap = new Map((subjects.data ?? []).map((s) => [s.id, s]));
   const teacherMap = new Map((schoolUsers.data ?? []).map((u) => [u.id, u.name]));
 
-  const liveClassesNow = (timetable.data ?? []).filter((t) => {
+  const rawLiveClasses = (timetable.data ?? []).filter((t) => {
     if (t.dayOfWeek !== currentDayName) return false;
     const st = timeToMinutes(t.startTime);
     const et = timeToMinutes(t.endTime);
     return st !== -1 && et !== -1 && currentMinutes >= st && currentMinutes <= et;
+  });
+  const seenDashboardTeachers = new Set<number>();
+  const seenDashboardRooms = new Set<string>();
+  const liveClassesNow = rawLiveClasses.filter((item) => {
+    const roomKey = `${item.className}-${item.section}`;
+    if (seenDashboardRooms.has(roomKey)) return false;
+    if (item.teacherUserId && seenDashboardTeachers.has(item.teacherUserId)) return false;
+    seenDashboardRooms.add(roomKey);
+    if (item.teacherUserId) seenDashboardTeachers.add(item.teacherUserId);
+    return true;
   });
 
   const today = new Date().toDateString();

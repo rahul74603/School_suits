@@ -27,6 +27,7 @@ import { type Student } from "@shared/schema";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useSchool, useActiveSession } from "@/hooks/use-core";
+import { useSchoolCatalog } from "@/hooks/use-school-catalog";
 import { useToast } from "@/hooks/use-toast";
 import { QueryError } from "@/components/QueryState";
 
@@ -88,6 +89,7 @@ const DEFAULT_STREAMS = [
 ];
 
 export default function Students() {
+  const { classOptions, sectionOptions } = useSchoolCatalog();
   const [search, setSearch] = useState("");
   const [selectedClass, setSelectedClass] = useState("all");
   const [selectedSection, setSelectedSection] = useState("all");
@@ -273,23 +275,7 @@ export default function Students() {
               onChange={(e) => setSelectedClass(e.target.value)}
             >
               <option value="all">All Classes</option>
-              {[
-                "Nursery",
-                "LKG",
-                "UKG",
-                "1",
-                "2",
-                "3",
-                "4",
-                "5",
-                "6",
-                "7",
-                "8",
-                "9",
-                "10",
-                "11",
-                "12",
-              ].map((cls) => (
+              {classOptions.map((cls) => (
                 <option key={cls} value={cls}>
                   Class {cls}
                 </option>
@@ -301,10 +287,11 @@ export default function Students() {
               onChange={(e) => setSelectedSection(e.target.value)}
             >
               <option value="all">All Sections</option>
-              <option value="A">Section A</option>
-              <option value="B">Section B</option>
-              <option value="C">Section C</option>
-              <option value="D">Section D</option>
+              {sectionOptions.map((sec) => (
+                <option key={sec} value={sec}>
+                  Section {sec}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -313,12 +300,18 @@ export default function Students() {
               <span className="text-sm font-medium text-indigo-700">
                 {selectedIds.length} student(s) selected for promotion:
               </span>
-              <Input
-                className="w-44"
-                placeholder="Target Class (e.g., 11)"
+              <select
+                className="h-9 rounded-md border bg-background px-3 text-sm font-medium"
                 value={targetClass}
                 onChange={(e) => setTargetClass(e.target.value)}
-              />
+              >
+                <option value="">Select Target Class...</option>
+                {classOptions.map((cls) => (
+                  <option key={cls} value={cls}>
+                    Promote to Class {cls}
+                  </option>
+                ))}
+              </select>
               <Button
                 size="sm"
                 onClick={handlePromote}

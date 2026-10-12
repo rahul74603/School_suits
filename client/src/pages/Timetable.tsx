@@ -5,10 +5,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/use-auth";
-import { useActiveSession } from "@/hooks/use-core";
+import { useSchoolCatalog } from "@/hooks/use-school-catalog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { Calendar, Clock, Plus, Radio, Trash2, UserCheck, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  Plus,
+  Radio,
+  Trash2,
+  UserCheck,
+  Users,
+} from "lucide-react";
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 
@@ -42,9 +52,28 @@ function timeToMinutes(t: string): number {
   return h * 60 + m;
 }
 
+function slotsOverlap(
+  s1: string,
+  e1: string,
+  p1: number,
+  s2: string,
+  e2: string,
+  p2: number,
+): boolean {
+  if (p1 === p2) return true;
+  const m1s = timeToMinutes(s1);
+  const m1e = timeToMinutes(e1);
+  const m2s = timeToMinutes(s2);
+  const m2e = timeToMinutes(e2);
+  if (m1s !== -1 && m1e !== -1 && m2s !== -1 && m2e !== -1) {
+    return m1s < m2e && m1e > m2s;
+  }
+  return false;
+}
+
 export default function Timetable() {
   const { data: user } = useAuth();
-  const activeSession = useActiveSession();
+  const { classOptions, sectionOptions, subjects, subjectMap } = useSchoolCatalog();
   const { toast } = useToast();
   const qc = useQueryClient();
   const canManage = user?.role === "admin" || user?.role === "principal";
@@ -78,9 +107,9 @@ export default function Timetable() {
   const [className, setClassName] = useState("all");
   const [section, setSection] = useState("all");
 
-  // Add Period Form state (all dropdowns)
+  // Add Period Form state (concrete section A/B/C/D — never ALL for a physical classroom)
   const [formClass, setFormClass] = useState("10");
-  const [formSection, setFormSection] = useState("ALL");
+  const [formSection, setFormSection] = useState("A");
   const [dayOfWeek, setDayOfWeek] = useState("ALL");
   const [periodNo, setPeriodNo] = useState("1");
   const [startTime, setStartTime] = useState("08:00");
@@ -88,30 +117,6 @@ export default function Timetable() {
   const [subjectId, setSubjectId] = useState("");
   const [teacherUserId, setTeacherUserId] = useState("");
   const [roomNo, setRoomNo] = useState("");
-
-  const dbClasses = useQuery<any[]>({
-    queryKey: ["/api/management/classes", activeSession.data?.id],
-    queryFn: async () => {
-      const res = await fetch(
-        `/api/management/classes?sessionId=${activeSession.data?.id}`,
-        { credentials: "include" },
-      );
-      return res.ok ? res.json() : [];
-    },
-    enabled: !!activeSession.data?.id,
-  });
-
-  const dbSections = useQuery<any[]>({
-    queryKey: ["/api/management/sections", activeSession.data?.id],
-    queryFn: async () => {
-      const res = await fetch(
-        `/api/management/sections?sessionId=${activeSession.data?.id}`,
-        { credentials: "include" },
-      );
-      return res.ok ? res.json() : [];
-    },
-    enabled: !!activeSession.data?.id,
-  });
 
   const allTimetable = useQuery<TimetableEntry[]>({
     queryKey: ["/api/timetable"],
@@ -124,13 +129,14 @@ export default function Timetable() {
     refetchInterval: 15000,
   });
 
-  const subjects = useQuery<{ id: number; name: string; code: string }[]>({
-    queryKey: ["/api/subjects"],
+  const conflicts = useQuery<any[]>({
+    queryKey: ["/api/timetable/conflicts"],
     queryFn: async () => {
-      const res = await fetch("/api/subjects", { credentials: "include" });
+      const res = await fetch("/api/timetable/conflicts", { credentials: "include" });
       return res.ok ? res.json() : [];
     },
     enabled: !!user,
+    refetchInterval: 15000,
   });
 
   const schoolUsers = useQuery<{ id: number; name: string; role: string; username: string }[]>({
@@ -142,30 +148,17 @@ export default function Timetable() {
     enabled: !!user && canManage,
   });
 
-  const classOrderWeight = (name: string) => {
-    const clean = name.trim().toLowerCase();
-    if (clean === "nursery") return -3;
-    if (clean === "lkg" || clean === "kg1") return -2;
-    if (clean === "ukg" || clean === "kg2") return -1;
-    const num = Number(clean);
-    if (!Number.isNaN(num)) return num;
-    return 100;
-  };
-
-  const classOptions: string[] =
-    dbClasses.data && dbClasses.data.length > 0
-      ? [...dbClasses.data]
-          .sort((a, b) => classOrderWeight(a.name) - classOrderWeight(b.name))
-          .map((c) => String(c.name))
-      : ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
-
-  const sectionSet = new Set<string>(["A", "B", "C", "D"]);
-  for (const sec of dbSections.data ?? []) {
-    if (sec.name && String(sec.name).trim().length <= 4) {
-      sectionSet.add(String(sec.name).trim());
-    }
-  }
-  const sectionOptions = Array.from(sectionSet).sort();
+  const resolveConflicts = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/timetable/resolve-conflicts", {}),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/timetable"] });
+      qc.invalidateQueries({ queryKey: ["/api/timetable/conflicts"] });
+      toast({
+        title: "All Clashes & Duplicates Resolved!",
+        description: `Cleaned ${res?.removed ?? 0} conflicting period entries. Every teacher and classroom is now clash-free.`,
+      });
+    },
+  });
 
   const createEntry = useMutation({
     mutationFn: () =>
@@ -183,48 +176,98 @@ export default function Timetable() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/timetable"] });
+      qc.invalidateQueries({ queryKey: ["/api/timetable/conflicts"] });
       qc.invalidateQueries({ queryKey: ["/api/teacher-assignments"] });
       toast({
-        title: "Period & Teacher Assigned!",
-        description: `Class ${formClass} (${
-          formSection === "ALL" ? "All Sections" : `Section ${formSection}`
-        }) · ${dayOfWeek === "ALL" ? "Mon–Sat" : dayOfWeek} · Period ${periodNo}`,
+        title: "Period Scheduled (No Clash)!",
+        description: `Class ${formClass}-${formSection} · ${
+          dayOfWeek === "ALL" ? "Mon–Sat" : dayOfWeek
+        } · Period ${periodNo} (${startTime}–${endTime})`,
       });
     },
     onError: (err: Error) =>
-      toast({ variant: "destructive", title: "Error", description: err.message }),
+      toast({
+        variant: "destructive",
+        title: "Schedule Clash Blocked!",
+        description: err.message,
+      }),
   });
 
   const deleteEntry = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/timetable/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/timetable"] });
+      qc.invalidateQueries({ queryKey: ["/api/timetable/conflicts"] });
       toast({ title: "Period removed" });
     },
   });
 
-  const subjectMap = new Map((subjects.data ?? []).map((s) => [s.id, s]));
   const teacherList = (schoolUsers.data ?? []).filter((u) => u.role === "teacher");
   const teacherMap = new Map(teacherList.map((u) => [u.id, u.name]));
 
-  // Live Active Periods right now
-  const liveEntriesNow = (allTimetable.data ?? []).filter((t) => {
+  // Live pre-save clash detector in the form
+  const targetDaysForForm = dayOfWeek === "ALL" ? [...DAYS] : [dayOfWeek];
+  const formTeacherClash = teacherUserId
+    ? (allTimetable.data ?? []).find(
+        (e) =>
+          targetDaysForForm.includes(e.dayOfWeek) &&
+          e.teacherUserId === Number(teacherUserId) &&
+          !(
+            e.className === formClass &&
+            e.section === formSection &&
+            e.periodNo === Number(periodNo)
+          ) &&
+          slotsOverlap(
+            startTime,
+            endTime,
+            Number(periodNo),
+            e.startTime,
+            e.endTime,
+            e.periodNo,
+          ),
+      )
+    : undefined;
+
+  const formRoomClash = (allTimetable.data ?? []).find(
+    (e) =>
+      targetDaysForForm.includes(e.dayOfWeek) &&
+      e.className === formClass &&
+      e.section === formSection &&
+      e.periodNo !== Number(periodNo) &&
+      slotsOverlap(
+        startTime,
+        endTime,
+        Number(periodNo),
+        e.startTime,
+        e.endTime,
+        e.periodNo,
+      ),
+  );
+
+  // Live Active Periods right now (deduplicated per classroom & teacher so 1 teacher never shows in 2 rooms)
+  const rawLiveEntries = (allTimetable.data ?? []).filter((t) => {
     if (t.dayOfWeek !== activeDayName) return false;
     const st = timeToMinutes(t.startTime);
     const et = timeToMinutes(t.endTime);
     return st !== -1 && et !== -1 && activeMinutes >= st && activeMinutes <= et;
   });
 
+  const seenTeachers = new Set<number>();
+  const seenClassrooms = new Set<string>();
+  const liveEntriesNow: TimetableEntry[] = [];
+  for (const item of rawLiveEntries) {
+    const roomKey = `${item.className}-${item.section}`;
+    if (seenClassrooms.has(roomKey)) continue;
+    if (item.teacherUserId && seenTeachers.has(item.teacherUserId)) continue;
+    seenClassrooms.add(roomKey);
+    if (item.teacherUserId) seenTeachers.add(item.teacherUserId);
+    liveEntriesNow.push(item);
+  }
+
   // Filtered timetable entries for the weekly grid
   const filteredEntries = (allTimetable.data ?? []).filter((t) => {
     if (className !== "all" && t.className !== className) return false;
-    if (
-      section !== "all" &&
-      t.section !== section &&
-      t.section !== "ALL"
-    ) {
-      return false;
-    }
+    if (section !== "all" && t.section !== section) return false;
     return true;
   });
 
@@ -236,10 +279,10 @@ export default function Timetable() {
           <div>
             <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
               <Calendar className="h-6 w-6 text-primary" />
-              Live Classroom Tracker & Class Timetable
+              Live Classroom Tracker & Clash-Free Timetable
             </h1>
             <p className="text-sm text-slate-500">
-              Real-time live view of which teacher is in which class teaching what subject right now
+              Automatic Clash Detector prevents 1 teacher in 2 classes or 2 teachers in 1 classroom at the same time
             </p>
           </div>
 
@@ -282,19 +325,60 @@ export default function Timetable() {
           </div>
         </div>
 
+        {/* CLASH / DUPLICATE DETECTOR CARD */}
+        {(conflicts.data ?? []).length > 0 ? (
+          <Card className="border-red-300 bg-red-50 shadow-sm">
+            <CardHeader className="pb-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <CardTitle className="text-base text-red-900 flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-red-600" />
+                  ⚠️ Duplicate / Same-Time Schedule Clashes Detected ({conflicts.data!.length})
+                </CardTitle>
+                {canManage && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={resolveConflicts.isPending}
+                    onClick={() => resolveConflicts.mutate()}
+                  >
+                    {resolveConflicts.isPending
+                      ? "Cleaning Clashes..."
+                      : "1-Click Auto-Fix & Remove Duplicate Clashes"}
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-1.5">
+              {conflicts.data!.slice(0, 6).map((c) => (
+                <div
+                  key={c.id}
+                  className="rounded border border-red-200 bg-white px-3 py-2 text-xs text-red-900 font-medium"
+                >
+                  • {c.message}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 px-4 py-2.5 text-xs font-semibold text-emerald-900 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            Clash Detector Active: Zero same-time teacher or classroom conflicts in the schedule!
+          </div>
+        )}
+
         {/* REAL-TIME LIVE RADAR FOR PRINCIPAL / ADMIN */}
         <Card className="border-emerald-200 bg-gradient-to-r from-emerald-50/70 via-white to-indigo-50/50 shadow-sm">
           <CardHeader className="pb-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-base flex items-center gap-2 text-slate-900">
                 <span className="h-3 w-3 rounded-full bg-emerald-500 animate-ping" />
-                Live Classes Running Right Now ({activeDayName} ·{" "}
+                Live Classrooms Running Right Now ({activeDayName} ·{" "}
                 {simTime ||
                   now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 )
               </CardTitle>
               <span className="rounded-full bg-emerald-100 px-3 py-0.5 text-xs font-bold text-emerald-800">
-                {liveEntriesNow.length} Active Class{liveEntriesNow.length === 1 ? "" : "es"} in Session
+                {liveEntriesNow.length} Active Classroom{liveEntriesNow.length === 1 ? "" : "s"} in Session
               </span>
             </div>
           </CardHeader>
@@ -307,7 +391,7 @@ export default function Timetable() {
                     {simTime ||
                       now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </b>
-                  . Tip: Use the <b>&ldquo;Check Period 1 (08:00 - 08:45)&rdquo;</b> dropdown at the top-right to preview any period, or add a period below!
+                  . Use the <b>&ldquo;Check Period 1 (08:00 - 08:45)&rdquo;</b> dropdown at the top-right to preview any period!
                 </span>
                 <Button
                   size="sm"
@@ -337,8 +421,7 @@ export default function Timetable() {
                         </span>
                       </div>
                       <div className="mt-2 text-lg font-bold text-slate-900">
-                        Class {entry.className} —{" "}
-                        {entry.section === "ALL" ? "All Sections" : `Section ${entry.section}`}
+                        Class {entry.className} — Section {entry.section}
                       </div>
                       <div className="text-sm font-semibold text-indigo-700">
                         Subject: {subjectMap.get(entry.subjectId)?.name ?? `Subject #${entry.subjectId}`}
@@ -365,7 +448,7 @@ export default function Timetable() {
               <div className="rounded-lg border bg-white p-3">
                 <div className="text-xs font-bold uppercase text-slate-500 mb-2 flex items-center gap-1.5">
                   <Users className="h-3.5 w-3.5" />
-                  All Teachers Live Status ({teacherList.length} Teachers)
+                  All Teachers Live Status (1 Teacher = Max 1 Classroom at a Time)
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {teacherList.map((t) => {
@@ -384,8 +467,7 @@ export default function Timetable() {
                         <span className="font-bold">{t.name}: </span>
                         {activeSlot ? (
                           <span className="font-semibold text-emerald-800">
-                            🟢 Teaching Class {activeSlot.className}-
-                            {activeSlot.section === "ALL" ? "All" : activeSlot.section} (
+                            🟢 Teaching Class {activeSlot.className}-{activeSlot.section} (
                             {subjectMap.get(activeSlot.subjectId)?.name ?? "Subject"})
                           </span>
                         ) : (
@@ -400,13 +482,13 @@ export default function Timetable() {
           </CardContent>
         </Card>
 
-        {/* ADD / UPDATE PERIOD SCHEDULE (ALL DROPDOWNS) */}
+        {/* ADD / UPDATE PERIOD SCHEDULE (ALL DROPDOWNS + LIVE CLASH WARNING) */}
         {canManage && (
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
                 <Plus className="h-4 w-4" />
-                Assign Class + Section + Subject + Teacher + Period Time (All Dropdowns)
+                Schedule Classroom Period (All Dropdowns + Automatic Clash Protection)
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -430,14 +512,13 @@ export default function Timetable() {
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    2. Section (Dropdown)
+                    2. Classroom Section (Dropdown)
                   </label>
                   <select
                     className="h-10 w-full rounded-md border bg-background px-3 text-sm font-medium"
                     value={formSection}
                     onChange={(e) => setFormSection(e.target.value)}
                   >
-                    <option value="ALL">All Sections (A, B, C, D...)</option>
                     {sectionOptions.map((sec) => (
                       <option key={sec} value={sec}>
                         Section {sec}
@@ -523,7 +604,7 @@ export default function Timetable() {
                     onChange={(e) => setSubjectId(e.target.value)}
                   >
                     <option value="">Select Subject...</option>
-                    {(subjects.data ?? []).map((s) => (
+                    {subjects.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name} ({s.code})
                       </option>
@@ -551,12 +632,37 @@ export default function Timetable() {
                   <Button
                     className="w-full h-10"
                     onClick={() => createEntry.mutate()}
-                    disabled={createEntry.isPending || !subjectId}
+                    disabled={
+                      createEntry.isPending ||
+                      !subjectId ||
+                      !!formTeacherClash ||
+                      !!formRoomClash
+                    }
                   >
-                    {createEntry.isPending ? "Saving..." : "Save Period Slot"}
+                    {createEntry.isPending ? "Checking & Saving..." : "Save Period Slot"}
                   </Button>
                 </div>
               </div>
+
+              {(formTeacherClash || formRoomClash) && (
+                <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-800 flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-600 shrink-0" />
+                  {formTeacherClash ? (
+                    <span>
+                      ⚠️ <b>Teacher Clash Blocked:</b> Selected teacher is already scheduled in{" "}
+                      <b>
+                        Class {formTeacherClash.className}-{formTeacherClash.section}
+                      </b>{" "}
+                      during Period {formTeacherClash.periodNo} ({formTeacherClash.startTime}–
+                      {formTeacherClash.endTime}) on {formTeacherClash.dayOfWeek}. Please select a different Period or Teacher!
+                    </span>
+                  ) : (
+                    <span>
+                      ⚠️ <b>Classroom Clash Blocked:</b> Class {formClass}-{formSection} already has an overlapping period ({formRoomClash?.startTime}–{formRoomClash?.endTime}).
+                    </span>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -627,8 +733,7 @@ export default function Timetable() {
                               {subjectMap.get(item.subjectId)?.name ??
                                 `Subject #${item.subjectId}`}
                               <span className="ml-2 rounded bg-indigo-50 px-2 py-0.5 text-xs font-bold text-indigo-700">
-                                Class {item.className}-
-                                {item.section === "ALL" ? "All Sections" : item.section}
+                                Class {item.className}-Section {item.section}
                               </span>
                             </div>
                             <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">

@@ -215,31 +215,22 @@ export default function Payroll() {
               <CardTitle>Salary Structure and Payroll Generation</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-4">
-              {staff.data?.length ? (
-                <select
-                  className="h-10 rounded border bg-background px-3 text-sm"
-                  value={staffId}
-                  onChange={(e) => {
-                    setStaffId(e.target.value);
-                    const member = staffById.get(Number(e.target.value));
-                    if (member) setBasic(String(member.basicSalary));
-                  }}
-                >
-                  <option value="">Staff member</option>
-                  {(staff.data ?? []).map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name} — {member.designation} (₹{member.basicSalary})
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <Input
-                  type="number"
-                  placeholder="Staff ID"
-                  value={staffId}
-                  onChange={(e) => setStaffId(e.target.value)}
-                />
-              )}
+              <select
+                className="h-10 rounded border bg-background px-3 text-sm"
+                value={staffId}
+                onChange={(e) => {
+                  setStaffId(e.target.value);
+                  const member = staffById.get(Number(e.target.value));
+                  if (member) setBasic(String(member.basicSalary));
+                }}
+              >
+                <option value="">Select Staff Member...</option>
+                {(staff.data ?? []).map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name} — {member.designation} (₹{member.basicSalary})
+                  </option>
+                ))}
+              </select>
               <Input
                 type="number"
                 min="0"

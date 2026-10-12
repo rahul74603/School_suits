@@ -5,11 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
+import { useStudents } from "@/hooks/use-students";
+import { useStaff } from "@/hooks/use-staff";
 import { apiRequest } from "@/lib/queryClient";
 import { FolderOpen, Trash2 } from "lucide-react";
 
 export default function Documents() {
   const { data: user } = useAuth();
+  const { data: students } = useStudents();
+  const { data: staffList } = useStaff();
   const qc = useQueryClient();
   const isManager = ["admin", "principal"].includes(user?.role ?? "");
 
@@ -18,7 +22,7 @@ export default function Documents() {
   const [documentType, setDocumentType] = useState("birth-certificate");
   const [filename, setFilename] = useState("");
   const [mimeType, setMimeType] = useState("application/pdf");
-  const [sizeBytes, setSizeBytes] = useState("102400");
+  const [sizeBytes] = useState("102400");
   const [message, setMessage] = useState("");
 
   const docs = useQuery<any[]>({
@@ -26,6 +30,9 @@ export default function Documents() {
     queryFn: async () => (await fetch("/api/documents", { credentials: "include" })).json(),
     enabled: !!user,
   });
+
+  const studentById = new Map((students ?? []).map((s) => [s.id, s]));
+  const staffById = new Map((staffList ?? []).map((st) => [st.id, st]));
 
   const createDoc = useMutation({
     mutationFn: () =>
@@ -56,7 +63,7 @@ export default function Documents() {
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Documents & Verification Registry</h1>
           <p className="mt-1 text-slate-500">
-            Authorized school, student, and staff document metadata registry.
+            Select Student or Staff from connected dropdowns to register verified documents.
           </p>
         </div>
 
@@ -73,22 +80,48 @@ export default function Documents() {
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-6">
               <select
-                className="h-10 rounded-md border bg-background px-3 text-sm"
+                className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
                 value={ownerType}
-                onChange={(e) => setOwnerType(e.target.value as "student" | "staff" | "school")}
+                onChange={(e) => {
+                  setOwnerType(e.target.value as "student" | "staff" | "school");
+                  setOwnerId("");
+                }}
               >
                 <option value="student">Student Document</option>
                 <option value="staff">Staff Document</option>
                 <option value="school">School Document</option>
               </select>
-              {ownerType !== "school" && (
-                <Input
-                  type="number"
-                  placeholder={`${ownerType === "student" ? "Student" : "Staff"} ID`}
+
+              {ownerType === "student" && (
+                <select
+                  className="h-10 rounded-md border bg-background px-3 text-sm md:col-span-2"
                   value={ownerId}
                   onChange={(e) => setOwnerId(e.target.value)}
-                />
+                >
+                  <option value="">Select Student...</option>
+                  {(students ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} (Class {s.class}-{s.section} · Father: {s.fatherName} · {s.admissionNo})
+                    </option>
+                  ))}
+                </select>
               )}
+
+              {ownerType === "staff" && (
+                <select
+                  className="h-10 rounded-md border bg-background px-3 text-sm md:col-span-2"
+                  value={ownerId}
+                  onChange={(e) => setOwnerId(e.target.value)}
+                >
+                  <option value="">Select Staff / Teacher...</option>
+                  {(staffList ?? []).map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.name} ({st.designation} · {st.contact})
+                    </option>
+                  ))}
+                </select>
+              )}
+
               <select
                 className="h-10 rounded-md border bg-background px-3 text-sm"
                 value={documentType}
@@ -106,15 +139,6 @@ export default function Documents() {
                 value={filename}
                 onChange={(e) => setFilename(e.target.value)}
               />
-              <select
-                className="h-10 rounded-md border bg-background px-3 text-sm"
-                value={mimeType}
-                onChange={(e) => setMimeType(e.target.value)}
-              >
-                <option value="application/pdf">PDF (application/pdf)</option>
-                <option value="image/jpeg">JPEG (image/jpeg)</option>
-                <option value="image/png">PNG (image/png)</option>
-              </select>
               <Button
                 onClick={() => createDoc.mutate()}
                 disabled={
@@ -143,28 +167,36 @@ export default function Documents() {
               </div>
             ) : (
               <div className="divide-y rounded-lg border bg-white">
-                {docs.data.map((d) => (
-                  <div key={d.id} className="p-4 flex items-center justify-between">
-                    <div>
-                      <div className="font-semibold text-slate-900">{d.filename}</div>
-                      <div className="text-xs text-slate-500">
-                        {d.documentType} · Owner: {d.ownerType}
-                        {d.ownerId ? ` #${d.ownerId}` : ""} · {d.mimeType} ·{" "}
-                        {Math.round((d.sizeBytes || 0) / 1024)} KB
+                {docs.data.map((d) => {
+                  const stu = d.ownerType === "student" ? studentById.get(d.ownerId) : undefined;
+                  const stf = d.ownerType === "staff" ? staffById.get(d.ownerId) : undefined;
+                  return (
+                    <div key={d.id} className="p-4 flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold text-slate-900">{d.filename}</div>
+                        <div className="text-xs text-slate-500">
+                          {d.documentType} · Owner:{" "}
+                          {stu
+                            ? `${stu.name} (Class ${stu.class}-${stu.section} · ${stu.admissionNo})`
+                            : stf
+                              ? `${stf.name} (${stf.designation})`
+                              : `${d.ownerType}${d.ownerId ? ` #${d.ownerId}` : ""}`}{" "}
+                          · {d.mimeType} · {Math.round((d.sizeBytes || 0) / 1024)} KB
+                        </div>
                       </div>
+                      {isManager && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-red-600"
+                          onClick={() => deleteDoc.mutate(d.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
-                    {isManager && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-red-600"
-                        onClick={() => deleteDoc.mutate(d.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>

@@ -18,17 +18,33 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { UserPlus, Search, KeyRound, BookOpen, Trash2, Radio, Clock } from "lucide-react";
+import {
+  UserPlus,
+  Search,
+  KeyRound,
+  BookOpen,
+  Trash2,
+  Radio,
+  Clock,
+  AlertTriangle,
+} from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertStaffSchema, type Staff as StaffType } from "@shared/schema";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
-import { useActiveSession } from "@/hooks/use-core";
+import { useSchoolCatalog } from "@/hooks/use-school-catalog";
 import { z } from "zod";
 
 const PERIOD_PRESETS = [
@@ -52,7 +68,7 @@ function timeToMinutes(t: string): number {
 
 export default function Staff() {
   const { data: user } = useAuth();
-  const activeSession = useActiveSession();
+  const { classOptions, sectionOptions, subjects, subjectMap } = useSchoolCatalog();
   const isManager = user?.role === "admin" || user?.role === "principal";
   const qc = useQueryClient();
   const { data: staff, isLoading, isError, error, refetch } = useStaff();
@@ -103,6 +119,8 @@ export default function Staff() {
   const [selectedSectionName, setSelectedSectionName] = useState("ALL");
   const [selectedSubjectId, setSelectedSubjectId] = useState("");
   const [includeSchedule, setIncludeSchedule] = useState(true);
+  const [periodClass, setPeriodClass] = useState("1");
+  const [periodSection, setPeriodSection] = useState("A");
   const [selectedDays, setSelectedDays] = useState<string[]>([...ALL_DAYS]);
   const [periodNo, setPeriodNo] = useState("1");
   const [startTime, setStartTime] = useState("08:00");
@@ -126,39 +144,6 @@ export default function Staff() {
     enabled: !!user && isManager,
   });
 
-  const dbClasses = useQuery<any[]>({
-    queryKey: ["/api/management/classes", activeSession.data?.id],
-    queryFn: async () => {
-      const res = await fetch(
-        `/api/management/classes?sessionId=${activeSession.data?.id}`,
-        { credentials: "include" },
-      );
-      return res.ok ? res.json() : [];
-    },
-    enabled: !!activeSession.data?.id,
-  });
-
-  const dbSections = useQuery<any[]>({
-    queryKey: ["/api/management/sections", activeSession.data?.id],
-    queryFn: async () => {
-      const res = await fetch(
-        `/api/management/sections?sessionId=${activeSession.data?.id}`,
-        { credentials: "include" },
-      );
-      return res.ok ? res.json() : [];
-    },
-    enabled: !!activeSession.data?.id,
-  });
-
-  const subjects = useQuery<any[]>({
-    queryKey: ["/api/subjects"],
-    queryFn: async () => {
-      const res = await fetch("/api/subjects", { credentials: "include" });
-      return res.ok ? res.json() : [];
-    },
-    enabled: !!user,
-  });
-
   const assignments = useQuery<{ subjects: any[]; classes: any[] }>({
     queryKey: ["/api/teacher-assignments"],
     queryFn: async () => {
@@ -178,34 +163,28 @@ export default function Staff() {
     refetchInterval: 15000,
   });
 
-  const classOrderWeight = (name: string) => {
-    const clean = name.trim().toLowerCase();
-    if (clean === "nursery") return -3;
-    if (clean === "lkg" || clean === "kg1") return -2;
-    if (clean === "ukg" || clean === "kg2") return -1;
-    const num = Number(clean);
-    if (!Number.isNaN(num)) return num;
-    return 100;
-  };
+  const conflicts = useQuery<any[]>({
+    queryKey: ["/api/timetable/conflicts"],
+    queryFn: async () => {
+      const res = await fetch("/api/timetable/conflicts", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!user && isManager,
+  });
 
-  const classOptions: string[] =
-    dbClasses.data && dbClasses.data.length > 0
-      ? [...dbClasses.data]
-          .sort((a, b) => classOrderWeight(a.name) - classOrderWeight(b.name))
-          .map((c) => String(c.name))
-      : ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
-
-  // Build unique section names from DB sections (filtering out accidental long subject names) + standard A, B, C, D
-  const sectionSet = new Set<string>(["A", "B", "C", "D"]);
-  for (const sec of dbSections.data ?? []) {
-    if (sec.name && String(sec.name).trim().length <= 4) {
-      sectionSet.add(String(sec.name).trim());
-    }
-  }
-  const sectionOptions = Array.from(sectionSet).sort();
+  const resolveConflictsMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/timetable/resolve-conflicts", {}),
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/timetable"] });
+      qc.invalidateQueries({ queryKey: ["/api/timetable/conflicts"] });
+      toast({
+        title: "Duplicate & Clashing Periods Cleaned!",
+        description: `Removed ${res?.removed ?? 0} clashing entries so no teacher or classroom has a same-time conflict.`,
+      });
+    },
+  });
 
   const userById = new Map((schoolUsers.data ?? []).map((u) => [u.id, u]));
-  const subjectById = new Map((subjects.data ?? []).map((s) => [s.id, s]));
   const linkByStaffId = new Map((staffLinks.data ?? []).map((l) => [l.staffId, l]));
 
   const form = useForm({
@@ -259,23 +238,26 @@ export default function Staff() {
                 periodNo: Number(periodNo),
                 startTime,
                 endTime,
+                periodClass,
+                periodSection,
               }
             : null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/teacher-assignments"] });
       qc.invalidateQueries({ queryKey: ["/api/timetable"] });
+      qc.invalidateQueries({ queryKey: ["/api/timetable/conflicts"] });
       toast({
-        title: "Teacher classes, subject & period saved!",
-        description: `Assigned ${selectedClasses.map((c) => `Class ${c}`).join(", ")} (${
-          selectedSectionName === "ALL" ? "All Sections" : `Section ${selectedSectionName}`
-        }).`,
+        title: "Saved without any clash!",
+        description: includeSchedule
+          ? `Authorized classes saved & Period ${periodNo} (${startTime}–${endTime}) scheduled for Class ${periodClass}-${periodSection}.`
+          : `Assigned ${selectedClasses.map((c) => `Class ${c}`).join(", ")}.`,
       });
     },
     onError: (err: Error) =>
       toast({
         variant: "destructive",
-        title: "Assignment failed",
+        title: "Schedule Clash / Error",
         description: err.message,
       }),
   });
@@ -292,17 +274,26 @@ export default function Staff() {
 
   const removePeriodMutation = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/timetable/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/timetable"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/timetable"] });
+      qc.invalidateQueries({ queryKey: ["/api/timetable/conflicts"] });
+    },
   });
 
   const toggleClassSelection = (cls: string) => {
-    setSelectedClasses((prev) =>
-      prev.includes(cls) ? prev.filter((item) => item !== cls) : [...prev, cls],
-    );
+    setSelectedClasses((prev) => {
+      const next = prev.includes(cls) ? prev.filter((item) => item !== cls) : [...prev, cls];
+      if (next.length > 0 && !next.includes(periodClass)) {
+        setPeriodClass(next[0]);
+      }
+      return next;
+    });
   };
 
   const selectClassRange = (list: string[]) => {
-    setSelectedClasses(list.filter((c) => classOptions.includes(c)));
+    const filtered = list.filter((c) => classOptions.includes(c));
+    setSelectedClasses(filtered);
+    if (filtered.length > 0) setPeriodClass(filtered[0]);
   };
 
   const onSubmit = (data: z.infer<typeof insertStaffSchema>) => {
@@ -382,13 +373,13 @@ export default function Staff() {
     <div className="flex min-h-screen bg-slate-50">
       <Sidebar />
       <main className="flex-1 ml-64 p-8">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
           <div>
             <h1 className="text-3xl font-bold text-slate-900">
               Staff & Teachers Directory
             </h1>
             <p className="text-slate-500 mt-1">
-              Manage teachers, login ID/email, multi-class assignments (with All Sections), and live teaching periods
+              Manage teachers, login ID/email, class authorizations, and clash-free live periods
             </p>
           </div>
 
@@ -586,6 +577,31 @@ export default function Staff() {
           </div>
         </div>
 
+        {/* CLASH DETECTOR BANNER */}
+        {isManager && (conflicts.data ?? []).length > 0 && (
+          <div className="mb-6 rounded-xl border border-red-300 bg-red-50 p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-sm font-bold text-red-900">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+                ⚠️ Duplicate / Same-Time Period Clash Detected ({conflicts.data!.length} conflicts)
+              </div>
+              <p className="text-xs text-red-800">
+                {conflicts.data![0]?.message}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={resolveConflictsMutation.isPending}
+              onClick={() => resolveConflictsMutation.mutate()}
+            >
+              {resolveConflictsMutation.isPending
+                ? "Cleaning Clashes..."
+                : "1-Click Clean All Duplicate Clashes"}
+            </Button>
+          </div>
+        )}
+
         {/* Filter */}
         <div className="bg-white p-4 rounded-xl shadow-sm border border-border mb-6">
           <div className="relative max-w-md">
@@ -733,7 +749,7 @@ export default function Staff() {
                                   key={sa.id}
                                   className="rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700"
                                 >
-                                  {subjectById.get(sa.subjectId)?.name ?? `Subj #${sa.subjectId}`}
+                                  {subjectMap.get(sa.subjectId)?.name ?? `Subj #${sa.subjectId}`}
                                 </span>
                               ))}
                             </div>
@@ -766,12 +782,10 @@ export default function Staff() {
                             <div className="flex items-center gap-1.5 font-bold text-emerald-800">
                               <span className="h-2 w-2 rounded-full bg-emerald-600 animate-ping" />
                               LIVE: Class {livePeriodNow.className}-
-                              {livePeriodNow.section === "ALL"
-                                ? "All"
-                                : livePeriodNow.section}
+                              {livePeriodNow.section}
                             </div>
                             <div className="text-emerald-700 font-medium mt-0.5">
-                              {subjectById.get(livePeriodNow.subjectId)?.name ?? "Subject"} · P
+                              {subjectMap.get(livePeriodNow.subjectId)?.name ?? "Subject"} · P
                               {livePeriodNow.periodNo} ({livePeriodNow.startTime}–
                               {livePeriodNow.endTime})
                             </div>
@@ -893,7 +907,7 @@ export default function Staff() {
           </DialogContent>
         </Dialog>
 
-        {/* Unified Assign Classes, Sections, Subject & Live Period Modal */}
+        {/* Unified Assign Classes, Sections, Subject & Clash-Free Live Period Modal */}
         <Dialog
           open={!!assignTargetUser}
           onOpenChange={(openState) => !openState && setAssignTargetUser(null)}
@@ -901,15 +915,15 @@ export default function Staff() {
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
-                Assign Classes, Subject & Live Period — {assignTargetUser?.staffName}
+                Assign Classes, Subject & Clash-Free Period — {assignTargetUser?.staffName}
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-4">
-              {/* Step 1: Select 1 or Multiple Classes */}
+              {/* Step 1: Select 1 or Multiple Classes for Teacher Access */}
               <div className="rounded-lg border bg-slate-50/70 p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-semibold text-slate-900">
-                    1. Select Class(es) (Ek ya ek se zyada class chunein)
+                    1. Teacher Authorized Class(es) (Attendance / Homework / Marks Access)
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     <Button
@@ -974,15 +988,18 @@ export default function Staff() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      2. Select Section (Dropdown)
+                      2. Authorized Section Scope (Dropdown)
                     </label>
                     <select
                       className="h-10 w-full rounded-md border bg-white px-3 text-sm font-medium"
                       value={selectedSectionName}
-                      onChange={(e) => setSelectedSectionName(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedSectionName(e.target.value);
+                        if (e.target.value !== "ALL") setPeriodSection(e.target.value);
+                      }}
                     >
                       <option value="ALL">
-                        All Sections (A, B, C, D... Sabhi Sections)
+                        All Sections (A, B, C, D... Sabhi Sections ka Access)
                       </option>
                       {sectionOptions.map((sec) => (
                         <option key={sec} value={sec}>
@@ -994,7 +1011,7 @@ export default function Staff() {
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      3. Select Subject (Dropdown)
+                      3. Subject (Dropdown)
                     </label>
                     <select
                       className="h-10 w-full rounded-md border bg-white px-3 text-sm font-medium"
@@ -1002,7 +1019,7 @@ export default function Staff() {
                       onChange={(e) => setSelectedSubjectId(e.target.value)}
                     >
                       <option value="">Select Subject...</option>
-                      {(subjects.data ?? []).map((subj) => (
+                      {subjects.map((subj) => (
                         <option key={subj.id} value={subj.id}>
                           {subj.name} {subj.code ? `(${subj.code})` : ""}
                         </option>
@@ -1012,7 +1029,7 @@ export default function Staff() {
                 </div>
               </div>
 
-              {/* Step 2: Live Period & Bell Time Schedule */}
+              {/* Step 2: Live Classroom Period (1 Teacher = 1 Specific Class + 1 Specific Section per Period!) */}
               <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
                 <label className="flex items-center gap-2 text-sm font-semibold text-indigo-950 cursor-pointer">
                   <input
@@ -1021,15 +1038,50 @@ export default function Staff() {
                     onChange={(e) => setIncludeSchedule(e.target.checked)}
                   />
                   <Clock className="w-4 h-4 text-indigo-600" />
-                  4. Also set Period & Bell Time (Taaki Principal ko Live Status me dikhe)
+                  4. Schedule Live Classroom Period (1 Teacher = 1 Classroom at a Time)
                 </label>
 
                 {includeSchedule && (
                   <div className="space-y-3 pt-1">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <p className="text-xs text-indigo-900 bg-white/80 rounded p-2 border border-indigo-100">
+                      <b>Anti-Clash Rule:</b> Ek period/time par ek teacher sirf <b>1 specific Class + 1 specific Section</b> me live padha sakta hai. Niche chunein ki is Period me teacher kis classroom me jayega:
+                    </p>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                       <div>
                         <label className="block text-xs font-medium text-slate-700 mb-1">
-                          Select Period Preset
+                          Classroom (Class)
+                        </label>
+                        <select
+                          className="h-9 w-full rounded-md border bg-white px-2 text-xs font-semibold"
+                          value={periodClass}
+                          onChange={(e) => setPeriodClass(e.target.value)}
+                        >
+                          {classOptions.map((c) => (
+                            <option key={c} value={c}>
+                              Class {c}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">
+                          Section
+                        </label>
+                        <select
+                          className="h-9 w-full rounded-md border bg-white px-2 text-xs font-semibold"
+                          value={periodSection}
+                          onChange={(e) => setPeriodSection(e.target.value)}
+                        >
+                          {sectionOptions.map((sec) => (
+                            <option key={sec} value={sec}>
+                              Section {sec}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">
+                          Period Slot
                         </label>
                         <select
                           className="h-9 w-full rounded-md border bg-white px-2 text-xs font-medium"
@@ -1127,14 +1179,12 @@ export default function Staff() {
                 onClick={() => bulkAssignMutation.mutate()}
               >
                 {bulkAssignMutation.isPending
-                  ? "Saving..."
-                  : `Save Assignment (${selectedClasses.length} Class${
-                      selectedClasses.length > 1 ? "es" : ""
-                    } · ${
-                      selectedSectionName === "ALL"
-                        ? "All Sections"
-                        : `Section ${selectedSectionName}`
-                    })`}
+                  ? "Checking Clashes & Saving..."
+                  : includeSchedule && selectedSubjectId
+                    ? `Save Authorization & Assign Period ${periodNo} to Class ${periodClass}-${periodSection}`
+                    : `Save Class Authorization (${selectedClasses.length} Class${
+                        selectedClasses.length > 1 ? "es" : ""
+                      })`}
               </Button>
 
               {/* Current Assignments & Scheduled Periods for this Teacher */}
@@ -1168,7 +1218,7 @@ export default function Staff() {
                         key={sa.id}
                         className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800"
                       >
-                        {subjectById.get(sa.subjectId)?.name ?? `Subject #${sa.subjectId}`}
+                        {subjectMap.get(sa.subjectId)?.name ?? `Subject #${sa.subjectId}`}
                         <button
                           type="button"
                           className="text-red-500 hover:text-red-700"
@@ -1191,10 +1241,9 @@ export default function Staff() {
                         <span>
                           <b>{t.dayOfWeek}</b> · Period {t.periodNo} ({t.startTime}–{t.endTime}) ·{" "}
                           <b>
-                            Class {t.className}-
-                            {t.section === "ALL" ? "All Sections" : t.section}
+                            Class {t.className}-{t.section}
                           </b>{" "}
-                          · {subjectById.get(t.subjectId)?.name ?? `Subject #${t.subjectId}`}
+                          · {subjectMap.get(t.subjectId)?.name ?? `Subject #${t.subjectId}`}
                         </span>
                         <button
                           type="button"

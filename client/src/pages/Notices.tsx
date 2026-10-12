@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/use-auth";
+import { useSchoolCatalog } from "@/hooks/use-school-catalog";
 import { apiRequest } from "@/lib/queryClient";
 import { Bell, Pin, Trash2 } from "lucide-react";
 import type { Notice } from "@shared/schema";
@@ -14,6 +15,7 @@ const audiences = ["all", "students", "teachers", "staff", "class"] as const;
 
 export default function Notices() {
   const { data: user } = useAuth();
+  const { classOptions, sectionOptions } = useSchoolCatalog();
   const qc = useQueryClient();
   const canPost = ["admin", "principal", "teacher"].includes(user?.role ?? "");
   const isManager = ["admin", "principal"].includes(user?.role ?? "");
@@ -151,16 +153,30 @@ export default function Notices() {
                 </select>
                 {targetAudience === "class" && (
                   <>
-                    <Input
-                      placeholder="Target Class (e.g., 10)"
+                    <select
+                      className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
                       value={targetClass}
                       onChange={(e) => setTargetClass(e.target.value)}
-                    />
-                    <Input
-                      placeholder="Section (optional, e.g., A)"
+                    >
+                      <option value="">Select Target Class...</option>
+                      {classOptions.map((c) => (
+                        <option key={c} value={c}>
+                          Class {c}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="h-10 rounded-md border bg-background px-3 text-sm font-medium"
                       value={targetSection}
                       onChange={(e) => setTargetSection(e.target.value)}
-                    />
+                    >
+                      <option value="">All Sections</option>
+                      {sectionOptions.map((sec) => (
+                        <option key={sec} value={sec}>
+                          Section {sec}
+                        </option>
+                      ))}
+                    </select>
                   </>
                 )}
                 <label className="flex items-center gap-2 text-sm font-medium text-slate-700">

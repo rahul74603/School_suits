@@ -13,6 +13,7 @@ import { useActiveSession, useSchool } from "@/hooks/use-core";
 import { useUpdateFeeStructure, useDeleteFeeStructure } from "@/hooks/use-fees-admin";
 import { useStudents } from "@/hooks/use-students";
 import { useAuth } from "@/hooks/use-auth";
+import { useSchoolCatalog } from "@/hooks/use-school-catalog";
 import { QueryError } from "@/components/QueryState";
 import { format } from "date-fns";
 import { useForm } from "react-hook-form";
@@ -23,6 +24,7 @@ import { z } from "zod";
 
 export default function Fees() {
   const { data: user } = useAuth();
+  const { classOptions } = useSchoolCatalog();
   const isStudent = user?.role === "student";
   const canCollect = ["admin", "accountant"].includes(user?.role ?? "");
   const canManageDues = ["admin", "principal", "accountant", "staff"].includes(user?.role ?? "");
@@ -622,16 +624,30 @@ export default function Fees() {
                     className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6 items-end"
                     onSubmit={structureForm.handleSubmit(submitStructure)}
                   >
+                    <label className="text-sm font-medium">
+                      Class (Dropdown)
+                      <select
+                        className="mt-1 h-10 w-full rounded-md border bg-background px-3 text-sm"
+                        {...structureForm.register("class")}
+                      >
+                        <option value="">Select Class...</option>
+                        {classOptions.map((c) => (
+                          <option key={c} value={c}>
+                            Class {c}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     {(
-                      ["class", "monthlyFee", "admissionFee", "examFee", "otherFee"] as const
+                      ["monthlyFee", "admissionFee", "examFee", "otherFee"] as const
                     ).map((field) => (
                       <label key={field} className="text-sm font-medium capitalize">
                         {field}
                         <Input
                           className="mt-1"
-                          type={field === "class" ? "text" : "number"}
+                          type="number"
                           {...structureForm.register(field, {
-                            valueAsNumber: field !== "class",
+                            valueAsNumber: true,
                           })}
                         />
                       </label>

@@ -691,6 +691,9 @@ export async function registerRoutes(
         periodNo: z.number().int().min(1).max(12),
         startTime: z.string().trim().min(1),
         endTime: z.string().trim().min(1),
+        periodClass: z.string().trim().optional(),
+        periodSection: z.string().trim().optional(),
+        autoSequentialPeriods: z.boolean().optional(),
         roomNo: z.string().trim().nullable().optional(),
       }).nullable().optional(),
     }).parse(req.body);
@@ -716,25 +719,114 @@ export async function registerRoutes(
       });
     }
 
+    const STANDARD_SLOTS: Record<number, { start: string; end: string }> = {
+      1: { start: "08:00", end: "08:45" },
+      2: { start: "08:45", end: "09:30" },
+      3: { start: "09:30", end: "10:15" },
+      4: { start: "10:30", end: "11:15" },
+      5: { start: "11:15", end: "12:00" },
+      6: { start: "12:00", end: "12:45" },
+      7: { start: "13:15", end: "14:00" },
+      8: { start: "14:00", end: "14:45" },
+    };
+    const toMins = (t: string) => {
+      const [h, m] = t.split(":").map(Number);
+      return Number.isNaN(h) || Number.isNaN(m) ? -1 : h * 60 + m;
+    };
+    const hasOverlap = (s1: string, e1: string, p1: number, s2: string, e2: string, p2: number) => {
+      if (p1 === p2) return true;
+      const m1s = toMins(s1), m1e = toMins(e1), m2s = toMins(s2), m2e = toMins(e2);
+      if (m1s !== -1 && m1e !== -1 && m2s !== -1 && m2e !== -1) {
+        return m1s < m2e && m1e > m2s;
+      }
+      return false;
+    };
+
     const createdPeriods = [];
     if (input.schedule && input.subjectId && typeof (dataStore as any).createTimetableEntry === "function") {
-      for (const clsName of input.classes) {
-        const targetSection = input.section === "ALL" ? "ALL" : input.section;
+      const existingAll: any[] = typeof (dataStore as any).getTimetable === "function"
+        ? await (dataStore as any).getTimetable(user.schoolId, session.id, {})
+        : [];
+      const schoolUsersList = await dataStore.getUsersBySchool(user.schoolId);
+      const userMap = new Map(schoolUsersList.map((u) => [u.id, u.name]));
+      const subjectsList = await dataStore.getSubjects(user.schoolId, session.id);
+      const subjMap = new Map(subjectsList.map((s) => [s.id, s.name]));
+
+      // Determine which class(es) and concrete section get scheduled into periods
+      // NEVER put the same teacher into multiple classes at the SAME period/time!
+      const concreteSection =
+        input.schedule.periodSection && input.schedule.periodSection !== "ALL"
+          ? input.schedule.periodSection
+          : input.section !== "ALL"
+            ? input.section
+            : "A";
+
+      const targetClassesForSchedule =
+        input.schedule.periodClass && input.schedule.periodClass !== "ALL"
+          ? [input.schedule.periodClass]
+          : input.classes;
+
+      for (let idx = 0; idx < targetClassesForSchedule.length; idx++) {
+        const clsName = targetClassesForSchedule[idx];
+        // If multiple classes are scheduled at once, assign sequential periods (P1, P2, P3...) so the teacher never clashes with themselves!
+        const slotPeriodNo = targetClassesForSchedule.length > 1
+          ? Math.min(12, input.schedule.periodNo + idx)
+          : input.schedule.periodNo;
+        const slotStart =
+          targetClassesForSchedule.length > 1 && STANDARD_SLOTS[slotPeriodNo]
+            ? STANDARD_SLOTS[slotPeriodNo].start
+            : input.schedule.startTime;
+        const slotEnd =
+          targetClassesForSchedule.length > 1 && STANDARD_SLOTS[slotPeriodNo]
+            ? STANDARD_SLOTS[slotPeriodNo].end
+            : input.schedule.endTime;
+
         for (const day of input.schedule.days) {
+          // 1. Check Teacher Clash (Same teacher in another classroom at overlapping time)
+          const teacherClash = existingAll.find(
+            (e) =>
+              e.dayOfWeek === day &&
+              e.teacherUserId === input.teacherUserId &&
+              !(e.className === clsName && e.section === concreteSection) &&
+              hasOverlap(slotStart, slotEnd, slotPeriodNo, e.startTime, e.endTime, e.periodNo),
+          );
+          if (teacherClash) {
+            return res.status(409).json({
+              message: `⚠️ Clash Detected! Teacher ${userMap.get(input.teacherUserId) ?? ""} is already scheduled in Class ${teacherClash.className}-${teacherClash.section} (${subjMap.get(teacherClash.subjectId) ?? "Subject"}) on ${day} during Period ${teacherClash.periodNo} (${teacherClash.startTime}–${teacherClash.endTime}). Ek time par ek teacher 2 class me nahi padha sakta!`,
+            });
+          }
+
+          // 2. Check Classroom Clash (Another teacher in the same Class-Section at overlapping time)
+          const roomClash = existingAll.find(
+            (e) =>
+              e.dayOfWeek === day &&
+              e.className === clsName &&
+              e.section === concreteSection &&
+              e.teacherUserId !== null &&
+              e.teacherUserId !== input.teacherUserId &&
+              hasOverlap(slotStart, slotEnd, slotPeriodNo, e.startTime, e.endTime, e.periodNo),
+          );
+          if (roomClash) {
+            return res.status(409).json({
+              message: `⚠️ Classroom Clash! Class ${clsName}-${concreteSection} already has ${subjMap.get(roomClash.subjectId) ?? "Subject"} with Teacher ${userMap.get(roomClash.teacherUserId) ?? `#${roomClash.teacherUserId}`} on ${day} during Period ${roomClash.periodNo} (${roomClash.startTime}–${roomClash.endTime}). Same time par ek class me 2 teacher nahi ho sakte!`,
+            });
+          }
+
           const entry = await (dataStore as any).createTimetableEntry({
             schoolId: user.schoolId,
             sessionId: session.id,
             className: clsName,
-            section: targetSection,
+            section: concreteSection,
             dayOfWeek: day,
-            periodNo: input.schedule.periodNo,
-            startTime: input.schedule.startTime,
-            endTime: input.schedule.endTime,
+            periodNo: slotPeriodNo,
+            startTime: slotStart,
+            endTime: slotEnd,
             subjectId: input.subjectId,
             teacherUserId: input.teacherUserId,
             roomNo: input.schedule.roomNo ?? null,
           });
           createdPeriods.push(entry);
+          existingAll.push(entry);
         }
       }
     }
@@ -1507,7 +1599,20 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
-  // === Class Timetable / Routine ===
+  // === Class Timetable / Routine & Clash Detector ===
+  const parseTimeMins = (t: string) => {
+    const [h, m] = String(t || "").split(":").map(Number);
+    return Number.isNaN(h) || Number.isNaN(m) ? -1 : h * 60 + m;
+  };
+  const slotsOverlap = (s1: string, e1: string, p1: number, s2: string, e2: string, p2: number) => {
+    if (p1 === p2) return true;
+    const m1s = parseTimeMins(s1), m1e = parseTimeMins(e1), m2s = parseTimeMins(s2), m2e = parseTimeMins(e2);
+    if (m1s !== -1 && m1e !== -1 && m2s !== -1 && m2e !== -1) {
+      return m1s < m2e && m1e > m2s;
+    }
+    return false;
+  };
+
   app.get("/api/timetable", requireAuth, async (req, res) => {
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
@@ -1525,70 +1630,194 @@ export async function registerRoutes(
     res.json(entries);
   });
 
+  app.get("/api/timetable/conflicts", requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session || typeof (dataStore as any).getTimetable !== "function") return res.json([]);
+    const all: any[] = await (dataStore as any).getTimetable(user.schoolId, session.id, {});
+    const schoolUsersList = await dataStore.getUsersBySchool(user.schoolId);
+    const userMap = new Map(schoolUsersList.map((u) => [u.id, u.name]));
+    const subjectsList = await dataStore.getSubjects(user.schoolId, session.id);
+    const subjMap = new Map(subjectsList.map((s) => [s.id, s.name]));
+
+    const conflicts: any[] = [];
+    for (let i = 0; i < all.length; i++) {
+      const a = all[i];
+      if (a.section === "ALL") {
+        conflicts.push({
+          id: `all-sec-${a.id}`,
+          type: "ALL_SECTION_CLASH",
+          dayOfWeek: a.dayOfWeek,
+          periodNo: a.periodNo,
+          startTime: a.startTime,
+          endTime: a.endTime,
+          entryIds: [a.id],
+          message: `Teacher ${a.teacherUserId ? userMap.get(a.teacherUserId) ?? `#${a.teacherUserId}` : "Unassigned"} is set to "All Sections" at once in Class ${a.className} on ${a.dayOfWeek} Period ${a.periodNo} (${a.startTime}–${a.endTime}). One teacher can only be in one specific section at a time.`,
+        });
+      }
+      for (let j = i + 1; j < all.length; j++) {
+        const b = all[j];
+        if (a.dayOfWeek !== b.dayOfWeek) continue;
+        if (!slotsOverlap(a.startTime, a.endTime, a.periodNo, b.startTime, b.endTime, b.periodNo)) continue;
+
+        if (a.teacherUserId && b.teacherUserId && a.teacherUserId === b.teacherUserId) {
+          conflicts.push({
+            id: `t-clash-${a.id}-${b.id}`,
+            type: "TEACHER_CLASH",
+            dayOfWeek: a.dayOfWeek,
+            periodNo: a.periodNo,
+            startTime: a.startTime,
+            endTime: a.endTime,
+            teacherUserId: a.teacherUserId,
+            teacherName: userMap.get(a.teacherUserId) ?? `Teacher #${a.teacherUserId}`,
+            entryIds: [a.id, b.id],
+            message: `${userMap.get(a.teacherUserId) ?? `Teacher #${a.teacherUserId}`} is scheduled in TWO classrooms at the same time on ${a.dayOfWeek} (${a.startTime}–${a.endTime}): Class ${a.className}-${a.section} (${subjMap.get(a.subjectId) ?? "Subject"}) AND Class ${b.className}-${b.section} (${subjMap.get(b.subjectId) ?? "Subject"}).`,
+          });
+        }
+
+        if (a.className === b.className && (a.section === b.section || a.section === "ALL" || b.section === "ALL")) {
+          conflicts.push({
+            id: `r-clash-${a.id}-${b.id}`,
+            type: "CLASSROOM_CLASH",
+            dayOfWeek: a.dayOfWeek,
+            periodNo: a.periodNo,
+            startTime: a.startTime,
+            endTime: a.endTime,
+            className: a.className,
+            section: a.section,
+            entryIds: [a.id, b.id],
+            message: `Classroom Class ${a.className}-${a.section} has TWO teachers/subjects at the same time on ${a.dayOfWeek} (${a.startTime}–${a.endTime}): ${userMap.get(a.teacherUserId) ?? "Teacher"} (${subjMap.get(a.subjectId) ?? "Subject"}) AND ${userMap.get(b.teacherUserId) ?? "Teacher"} (${subjMap.get(b.subjectId) ?? "Subject"}).`,
+          });
+        }
+      }
+    }
+    res.json(conflicts);
+  });
+
+  app.post("/api/timetable/resolve-conflicts", requireRole("admin", "principal"), async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session || typeof (dataStore as any).getTimetable !== "function") return res.json({ removed: 0 });
+    const all: any[] = await (dataStore as any).getTimetable(user.schoolId, session.id, {});
+    const kept: any[] = [];
+    let removed = 0;
+
+    for (const entry of all) {
+      // If an entry has section === "ALL", delete it or normalize it
+      const teacherConflict = entry.teacherUserId
+        ? kept.find(
+            (k) =>
+              k.dayOfWeek === entry.dayOfWeek &&
+              k.teacherUserId === entry.teacherUserId &&
+              slotsOverlap(k.startTime, k.endTime, k.periodNo, entry.startTime, entry.endTime, entry.periodNo),
+          )
+        : undefined;
+      const roomConflict = kept.find(
+        (k) =>
+          k.dayOfWeek === entry.dayOfWeek &&
+          k.className === entry.className &&
+          (k.section === entry.section || k.section === "ALL" || entry.section === "ALL") &&
+          slotsOverlap(k.startTime, k.endTime, k.periodNo, entry.startTime, entry.endTime, entry.periodNo),
+      );
+
+      if (teacherConflict || roomConflict || entry.section === "ALL") {
+        await (dataStore as any).deleteTimetableEntry(entry.id, user.schoolId, session.id);
+        removed++;
+      } else {
+        kept.push(entry);
+      }
+    }
+    res.json({ removed, kept: kept.length });
+  });
+
   app.post("/api/timetable", requireRole("admin", "principal"), async (req, res) => {
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
     if (!session) return res.status(409).json({ message: "No active academic session" });
-    const rawDay = req.body?.dayOfWeek;
-    if (rawDay === "ALL" || Array.isArray(req.body?.days)) {
-      const targetDays: ("Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday" | "Saturday")[] =
-        Array.isArray(req.body?.days) && req.body.days.length > 0
-          ? req.body.days
-          : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-      const createdList = [];
-      for (const d of targetDays) {
-        const input = insertTimetableEntrySchema.parse({ ...req.body, dayOfWeek: d });
-        const created = await (dataStore as any).createTimetableEntry({
-          ...input,
-          schoolId: user.schoolId,
-          sessionId: session.id,
-          teacherUserId: input.teacherUserId ?? null,
-          roomNo: input.roomNo ?? null,
-        });
-        createdList.push(created);
-      }
-      if (createdList[0]?.teacherUserId) {
-        await dataStore.createTeacherClassAssignment({
-          teacherUserId: createdList[0].teacherUserId,
-          className: createdList[0].className,
-          section: createdList[0].section,
-          schoolId: user.schoolId,
-          sessionId: session.id,
-        }).catch(() => undefined);
-        await dataStore.createTeacherSubjectAssignment({
-          teacherUserId: createdList[0].teacherUserId,
-          subjectId: createdList[0].subjectId,
-          schoolId: user.schoolId,
-          sessionId: session.id,
-        }).catch(() => undefined);
-      }
-      return res.status(201).json(createdList[0]);
+    if (req.body?.section === "ALL") {
+      return res.status(400).json({
+        message: "⚠️ Ek physical period me ek teacher ek hi section (e.g., Section A ya B) me padha sakta hai, 'All Sections' me ek sath nahi! Please select a specific Section (A, B, C...).",
+      });
     }
 
-    const input = insertTimetableEntrySchema.parse(req.body);
-    const created = await (dataStore as any).createTimetableEntry({
-      ...input,
-      schoolId: user.schoolId,
-      sessionId: session.id,
-      teacherUserId: input.teacherUserId ?? null,
-      roomNo: input.roomNo ?? null,
-    });
-    if (created.teacherUserId) {
+    const existingAll: any[] = typeof (dataStore as any).getTimetable === "function"
+      ? await (dataStore as any).getTimetable(user.schoolId, session.id, {})
+      : [];
+    const schoolUsersList = await dataStore.getUsersBySchool(user.schoolId);
+    const userMap = new Map(schoolUsersList.map((u) => [u.id, u.name]));
+    const subjectsList = await dataStore.getSubjects(user.schoolId, session.id);
+    const subjMap = new Map(subjectsList.map((s) => [s.id, s.name]));
+
+    const rawDay = req.body?.dayOfWeek;
+    const targetDays: ("Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday" | "Saturday")[] =
+      rawDay === "ALL" || (Array.isArray(req.body?.days) && req.body.days.length > 0)
+        ? Array.isArray(req.body?.days) && req.body.days.length > 0
+          ? req.body.days
+          : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        : [rawDay];
+
+    // Validate all target days for Teacher Clash and Classroom Clash before saving!
+    for (const d of targetDays) {
+      const candidate = insertTimetableEntrySchema.parse({ ...req.body, dayOfWeek: d });
+      if (candidate.teacherUserId) {
+        const teacherClash = existingAll.find(
+          (e) =>
+            e.dayOfWeek === d &&
+            e.teacherUserId === candidate.teacherUserId &&
+            !(e.className === candidate.className && e.section === candidate.section && e.periodNo === candidate.periodNo) &&
+            slotsOverlap(candidate.startTime, candidate.endTime, candidate.periodNo, e.startTime, e.endTime, e.periodNo),
+        );
+        if (teacherClash) {
+          return res.status(409).json({
+            message: `⚠️ Teacher Clash Detected! ${userMap.get(candidate.teacherUserId) ?? "This teacher"} is already scheduled in Class ${teacherClash.className}-${teacherClash.section} (${subjMap.get(teacherClash.subjectId) ?? "Subject"}) on ${d} during Period ${teacherClash.periodNo} (${teacherClash.startTime}–${teacherClash.endTime}). Same time par ek teacher 2 class me nahi padha sakta!`,
+          });
+        }
+      }
+
+      const roomClash = existingAll.find(
+        (e) =>
+          e.dayOfWeek === d &&
+          e.className === candidate.className &&
+          (e.section === candidate.section || e.section === "ALL") &&
+          e.periodNo !== candidate.periodNo &&
+          slotsOverlap(candidate.startTime, candidate.endTime, candidate.periodNo, e.startTime, e.endTime, e.periodNo),
+      );
+      if (roomClash) {
+        return res.status(409).json({
+          message: `⚠️ Classroom Time Clash! Class ${candidate.className}-${candidate.section} already has Period ${roomClash.periodNo} (${subjMap.get(roomClash.subjectId) ?? "Subject"} by ${userMap.get(roomClash.teacherUserId) ?? "Teacher"}) on ${d} from ${roomClash.startTime} to ${roomClash.endTime}. Same time par ek classroom me 2 teacher nahi ho sakte!`,
+        });
+      }
+    }
+
+    const createdList = [];
+    for (const d of targetDays) {
+      const input = insertTimetableEntrySchema.parse({ ...req.body, dayOfWeek: d });
+      const created = await (dataStore as any).createTimetableEntry({
+        ...input,
+        schoolId: user.schoolId,
+        sessionId: session.id,
+        teacherUserId: input.teacherUserId ?? null,
+        roomNo: input.roomNo ?? null,
+      });
+      createdList.push(created);
+    }
+
+    if (createdList[0]?.teacherUserId) {
       await dataStore.createTeacherClassAssignment({
-        teacherUserId: created.teacherUserId,
-        className: created.className,
-        section: created.section,
+        teacherUserId: createdList[0].teacherUserId,
+        className: createdList[0].className,
+        section: createdList[0].section,
         schoolId: user.schoolId,
         sessionId: session.id,
       }).catch(() => undefined);
       await dataStore.createTeacherSubjectAssignment({
-        teacherUserId: created.teacherUserId,
-        subjectId: created.subjectId,
+        teacherUserId: createdList[0].teacherUserId,
+        subjectId: createdList[0].subjectId,
         schoolId: user.schoolId,
         sessionId: session.id,
       }).catch(() => undefined);
     }
-    res.status(201).json(created);
+    res.status(201).json(createdList[0]);
   });
 
   app.delete("/api/timetable/:id", requireRole("admin", "principal"), async (req, res) => {
@@ -1600,45 +1829,66 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
-  // === Leave Requests ===
+  // === Leave Requests (Student & Staff Identity + Principal Approval) ===
   app.get("/api/leaves", requireAuth, async (req, res) => {
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
     if (!session || typeof (dataStore as any).getLeaveRequests !== "function") return res.json([]);
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    let list: any[];
     if (user.role === "student" || user.role === "staff" || user.role === "accountant") {
-      return res.json(await (dataStore as any).getLeaveRequests(user.schoolId, session.id, { userId: user.id, status }));
+      list = await (dataStore as any).getLeaveRequests(user.schoolId, session.id, { userId: user.id, status });
+    } else {
+      list = await (dataStore as any).getLeaveRequests(user.schoolId, session.id, { status });
     }
-    const list = await (dataStore as any).getLeaveRequests(user.schoolId, session.id, { status });
-    res.json(list);
+    const allStudents = await dataStore.getStudents(user.schoolId, {}, session.id).catch(() => []);
+    const studentMap = new Map(allStudents.map((s) => [s.id, s]));
+    const enriched = list.map((item) => {
+      const stu = item.studentId ? studentMap.get(item.studentId) : undefined;
+      return {
+        ...item,
+        fatherName: stu?.fatherName ?? null,
+        admissionNo: stu?.admissionNo ?? null,
+        rollNo: stu?.rollNo ?? null,
+        studentContact: stu?.contact ?? null,
+      };
+    });
+    res.json(enriched);
   });
 
   app.post("/api/leaves", requireAuth, async (req, res) => {
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
     if (!session) return res.status(409).json({ message: "No active academic session" });
+    const rawStaffId = req.body?.staffId ? Number(req.body.staffId) : null;
     const input = insertLeaveRequestSchema.parse(req.body);
     let applicantType: "student" | "staff" = user.role === "student" ? "student" : (input.applicantType ?? "staff");
     let studentId: number | null = input.studentId ?? null;
     let applicantName = user.name;
     let className: string | null = input.className ?? null;
     let section: string | null = input.section ?? null;
+
     if (user.role === "student") {
       const own = await dataStore.getStudentForUser(user.id, user.schoolId, session.id);
       if (own) {
         studentId = own.id;
-        applicantName = own.name;
+        applicantName = `${own.name} (Father: ${own.fatherName} · Adm: ${own.admissionNo})`;
         className = own.class;
         section = own.section;
       }
     } else if (applicantType === "student" && studentId) {
       const student = await dataStore.getStudent(studentId, user.schoolId);
-      if (student) {
-        applicantName = student.name;
-        className = student.class;
-        section = student.section;
-      }
+      if (!student) return res.status(400).json({ message: "Selected student not found" });
+      applicantName = `${student.name} (Father: ${student.fatherName} · Adm: ${student.admissionNo})`;
+      className = student.class;
+      section = student.section;
+    } else if (applicantType === "staff" && rawStaffId) {
+      const staffMembers = await dataStore.getStaff(user.schoolId);
+      const foundStaff = staffMembers.find((st) => st.id === rawStaffId);
+      if (!foundStaff) return res.status(400).json({ message: "Selected staff member not found" });
+      applicantName = `${foundStaff.name} (${foundStaff.designation} · Mob: ${foundStaff.contact})`;
     }
+
     const created = await (dataStore as any).createLeaveRequest({
       ...input,
       schoolId: user.schoolId,
@@ -1654,7 +1904,8 @@ export async function registerRoutes(
     res.status(201).json(created);
   });
 
-  app.post("/api/leaves/:id/review", requireRole("admin", "principal", "teacher"), async (req, res) => {
+  // Only Principal (or Admin acting as Principal) can approve/reject leaves
+  app.post("/api/leaves/:id/review", requireRole("principal", "admin"), async (req, res) => {
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
     if (!session) return res.status(409).json({ message: "No active academic session" });

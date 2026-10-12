@@ -9,6 +9,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertStudentSchema } from "@shared/schema";
 import { useCreateStudent } from "@/hooks/use-students";
+import { useSchoolCatalog } from "@/hooks/use-school-catalog";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import { useLocation } from "wouter";
@@ -73,6 +74,7 @@ const DEFAULT_STREAMS = [
 
 export default function Admissions() {
   const { toast } = useToast();
+  const { classOptions, sectionOptions } = useSchoolCatalog();
   const [, setLocation] = useLocation();
   const createStudent = useCreateStudent();
 
@@ -243,29 +245,13 @@ export default function Admissions() {
                       name="class"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Class</FormLabel>
+                          <FormLabel>Class (Dropdown)</FormLabel>
                           <FormControl>
                             <select
                               className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
                               {...field}
                             >
-                              {[
-                                "Nursery",
-                                "LKG",
-                                "UKG",
-                                "1",
-                                "2",
-                                "3",
-                                "4",
-                                "5",
-                                "6",
-                                "7",
-                                "8",
-                                "9",
-                                "10",
-                                "11",
-                                "12",
-                              ].map((c) => (
+                              {classOptions.map((c) => (
                                 <option key={c} value={c}>
                                   Class {c}
                                 </option>
@@ -281,9 +267,18 @@ export default function Admissions() {
                       name="section"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Section</FormLabel>
+                          <FormLabel>Section (Dropdown)</FormLabel>
                           <FormControl>
-                            <Input placeholder="A, B, C..." {...field} />
+                            <select
+                              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
+                              {...field}
+                            >
+                              {sectionOptions.map((sec) => (
+                                <option key={sec} value={sec}>
+                                  Section {sec}
+                                </option>
+                              ))}
+                            </select>
                           </FormControl>
                           <FormMessage />
                         </FormItem>

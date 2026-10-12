@@ -71,6 +71,8 @@ const fakeStorage = {
     return created;
   },
   getActiveSession: async (schoolId: number) => (schoolId === 10 ? activeSession : undefined),
+  getSubjects: async () => [{ id: 1, name: "Hindi", code: "HIN" }],
+  getStudents: async (schoolId: number) => students.filter((s) => s.schoolId === schoolId),
   getStudent: async (id: number, schoolId: number) =>
     students.find((s) => s.id === id && s.schoolId === schoolId),
   getStudentForUser: async (userId: number, schoolId: number) =>
@@ -225,6 +227,27 @@ try {
   const bulkResult = await bulkAssign.json();
   assert.equal(bulkResult.classes.length, 5);
   assert.equal(bulkResult.periods.length, 30);
+
+  // 2c. Verify that scheduling the SAME teacher in another class at Period 1 (08:00-08:45) is BLOCKED with 409 Clash
+  const clashAttempt = await req(
+    "/api/timetable",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        className: "10",
+        section: "B",
+        dayOfWeek: "Monday",
+        periodNo: 1,
+        startTime: "08:00",
+        endTime: "08:45",
+        subjectId: 1,
+        teacherUserId: createdTeacherUser.id,
+      }),
+    },
+    adminCookie,
+  );
+  assert.equal(clashAttempt.status, 409);
 
   // 3. Publish a Notice
   const createNotice = await req(
