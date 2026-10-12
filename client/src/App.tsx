@@ -33,11 +33,14 @@ import Timetable from "@/pages/Timetable";
 import Leaves from "@/pages/Leaves";
 import Certificates from "@/pages/Certificates";
 import Transport from "@/pages/Transport";
+import ParentMobileApp from "@/pages/ParentMobileApp";
 
 function Router() {
+  const { data: user } = useAuth();
   return (
     <Switch>
-      <Route path="/" component={Dashboard} />
+      <Route path="/parent-app" component={ParentMobileApp} />
+      <Route path="/" component={user?.role === "student" ? ParentMobileApp : Dashboard} />
       <Route path="/notices" component={Notices} />
       <Route path="/students" component={Students} />
       <Route path="/students/:id/edit" component={StudentEdit} />

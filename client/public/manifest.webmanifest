@@ -1,0 +1,25 @@
+{
+  "name": "School Suits - Parent & Student Lite App",
+  "short_name": "School Parent App",
+  "description": "Lightweight Parent & Student Mobile App for Attendance, Notices, Homework, Timetable, Fees, and Leave Requests",
+  "start_url": "/parent-app",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

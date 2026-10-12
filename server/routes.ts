@@ -2311,5 +2311,178 @@ export async function registerRoutes(
     res.status(204).send();
   });
 
+  // === Lightweight Parent & Student Mobile App Single-Payload Endpoint ===
+  app.get("/api/parent-app/overview", requireAuth, async (req, res) => {
+    const user = currentUser(req);
+    const school = await dataStore.getSchool(user.schoolId);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) {
+      return res.json({ school, session: null, student: null });
+    }
+
+    let student: any = null;
+    if (user.role === "student") {
+      student = await dataStore.getStudentForUser(user.id, user.schoolId, session.id);
+    } else if (typeof req.query.studentId === "string" && req.query.studentId) {
+      student = await dataStore.getStudent(Number(req.query.studentId), user.schoolId);
+    } else {
+      const allStudents = await dataStore.getStudents(user.schoolId, {}, session.id).catch(() => []);
+      student = allStudents[0] ?? null;
+    }
+
+    const rawNotices: any[] =
+      typeof (dataStore as any).getNotices === "function"
+        ? await (dataStore as any).getNotices(user.schoolId, session.id)
+        : [];
+    const notices = rawNotices.filter(
+      (n) => !n.audience || ["all", "students", "parents"].includes(String(n.audience).toLowerCase()),
+    );
+
+    if (!student) {
+      return res.json({
+        school,
+        session,
+        student: null,
+        notices,
+        homework: [],
+        timetable: [],
+        attendance: { totalDays: 0, presentDays: 0, absentDays: 0, lateDays: 0, excusedDays: 0, percentage: 0, todayStatus: null, records: [] },
+        fees: { totalExpected: 0, totalPaid: 0, totalDiscount: 0, pendingBalance: 0, payments: [] },
+        leaves: [],
+        transport: null,
+        certificates: [],
+      });
+    }
+
+    const [
+      subjectsList,
+      schoolUsersList,
+      homeworkList,
+      timetableList,
+      attendanceRecords,
+      feeStructuresList,
+      feePaymentsList,
+      feeDiscountsList,
+      leavesList,
+      transportRoutesList,
+      transportAllocationsList,
+      certificatesList,
+    ] = await Promise.all([
+      dataStore.getSubjects(user.schoolId, session.id).catch(() => []),
+      dataStore.getUsersBySchool(user.schoolId).catch(() => []),
+      typeof (dataStore as any).getHomework === "function"
+        ? (dataStore as any).getHomework(user.schoolId, session.id, {
+            className: student.class,
+            section: student.section,
+          })
+        : Promise.resolve([]),
+      typeof (dataStore as any).getTimetable === "function"
+        ? (dataStore as any).getTimetable(user.schoolId, session.id, {
+            className: student.class,
+            section: student.section,
+          })
+        : Promise.resolve([]),
+      dataStore.getAttendance(user.schoolId, session.id, { studentId: student.id }).catch(() => []),
+      dataStore.getFeeStructures(user.schoolId, session.id).catch(() => []),
+      dataStore.getFeePayments(user.schoolId, session.id, student.id).catch(() => []),
+      typeof (dataStore as any).getStudentDiscounts === "function"
+        ? (dataStore as any).getStudentDiscounts(user.schoolId, session.id, student.id).catch(() => [])
+        : Promise.resolve([]),
+      typeof (dataStore as any).getLeaveRequests === "function"
+        ? (dataStore as any).getLeaveRequests(user.schoolId, session.id, { studentId: student.id })
+        : Promise.resolve([]),
+      typeof (dataStore as any).getTransportRoutes === "function"
+        ? (dataStore as any).getTransportRoutes(user.schoolId, true)
+        : Promise.resolve([]),
+      typeof (dataStore as any).getStudentTransportAllocations === "function"
+        ? (dataStore as any).getStudentTransportAllocations(user.schoolId, session.id)
+        : Promise.resolve([]),
+      typeof (dataStore as any).getCertificates === "function"
+        ? (dataStore as any).getCertificates(user.schoolId, session.id, student.id)
+        : Promise.resolve([]),
+    ]);
+
+    const subjMap = new Map(subjectsList.map((s: any) => [s.id, s.name]));
+    const userMap = new Map(schoolUsersList.map((u: any) => [u.id, u.name]));
+
+    const enrichedHomework = (homeworkList ?? []).map((h: any) => ({
+      ...h,
+      subjectName: subjMap.get(h.subjectId) ?? `Subject #${h.subjectId}`,
+      teacherName: userMap.get(h.assignedByUserId) ?? "Teacher",
+    }));
+
+    const enrichedTimetable = (timetableList ?? []).map((t: any) => ({
+      ...t,
+      subjectName: subjMap.get(t.subjectId) ?? `Subject #${t.subjectId}`,
+      teacherName: t.teacherUserId ? (userMap.get(t.teacherUserId) ?? "Teacher") : "Unassigned",
+    }));
+
+    // Attendance stats
+    const totalDays = attendanceRecords.length;
+    const presentDays = attendanceRecords.filter((a: any) => a.status === "present").length;
+    const absentDays = attendanceRecords.filter((a: any) => a.status === "absent").length;
+    const lateDays = attendanceRecords.filter((a: any) => a.status === "late").length;
+    const excusedDays = attendanceRecords.filter((a: any) => a.status === "excused").length;
+    const percentage =
+      totalDays > 0 ? Math.round(((presentDays + lateDays * 0.5) / totalDays) * 100) : 0;
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayRec = attendanceRecords.find((a: any) => a.attendanceDate === todayIso);
+
+    // Fee calculation for this student's class
+    const classFees = feeStructuresList.filter(
+      (f: any) => String(f.class).trim() === String(student.class).trim(),
+    );
+    const totalExpected = classFees.reduce((sum: number, f: any) => sum + Number(f.amount || 0), 0);
+    const totalPaid = feePaymentsList.reduce((sum: number, p: any) => sum + Number(p.amountPaid || 0), 0);
+    const totalDiscount = feeDiscountsList.reduce((sum: number, d: any) => sum + Number(d.amount || 0), 0);
+    const pendingBalance = Math.max(0, totalExpected - totalPaid - totalDiscount);
+
+    // Transport allocation
+    const alloc = (transportAllocationsList ?? []).find((a: any) => a.studentId === student.id);
+    const route = alloc
+      ? (transportRoutesList ?? []).find((r: any) => r.id === alloc.routeId)
+      : student.transportRouteId
+      ? (transportRoutesList ?? []).find((r: any) => r.id === student.transportRouteId)
+      : null;
+
+    res.json({
+      school,
+      session,
+      student,
+      notices,
+      homework: enrichedHomework,
+      timetable: enrichedTimetable,
+      attendance: {
+        totalDays,
+        presentDays,
+        absentDays,
+        lateDays,
+        excusedDays,
+        percentage,
+        todayStatus: todayRec?.status ?? null,
+        records: attendanceRecords.slice(0, 30),
+      },
+      fees: {
+        totalExpected,
+        totalPaid,
+        totalDiscount,
+        pendingBalance,
+        payments: feePaymentsList,
+      },
+      leaves: leavesList,
+      transport: route
+        ? {
+            routeName: route.routeName,
+            vehicleNo: route.vehicleNo,
+            driverName: route.driverName,
+            driverPhone: route.driverPhone,
+            stopName: alloc?.stopName ?? "Assigned Stop",
+            monthlyFee: alloc?.monthlyFee ?? route.monthlyFee ?? route.amount ?? 0,
+          }
+        : null,
+      certificates: (certificatesList ?? []).filter((c: any) => c.status === "issued"),
+    });
+  });
+
   return httpServer;
 }

@@ -22,12 +22,14 @@ import {
   Briefcase,
   IdCard,
   GraduationCap,
+  Smartphone,
 } from "lucide-react";
 import { useAuth, useLogout } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
+  { name: "Parent Mobile App 📱", href: "/parent-app", icon: Smartphone, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
   { name: "Notice Board", href: "/notices", icon: Bell, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
   { name: "Students", href: "/students", icon: Users, roles: ["admin", "principal", "accountant", "staff", "teacher", "student"] },
   { name: "Admissions", href: "/admissions", icon: UserPlus, roles: ["admin", "principal", "accountant", "staff", "teacher"] },
