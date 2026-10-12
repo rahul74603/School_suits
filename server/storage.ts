@@ -421,6 +421,13 @@ export class DatabaseStorage implements IStorage {
       eq(subjects.id, insertAssignment.subjectId), eq(subjects.schoolId, insertAssignment.schoolId), eq(subjects.sessionId, insertAssignment.sessionId),
     ));
     if (!subject) return undefined;
+    const existing = await db.select().from(teacherSubjectAssignments).where(and(
+      eq(teacherSubjectAssignments.teacherUserId, insertAssignment.teacherUserId),
+      eq(teacherSubjectAssignments.subjectId, insertAssignment.subjectId),
+      eq(teacherSubjectAssignments.schoolId, insertAssignment.schoolId),
+      eq(teacherSubjectAssignments.sessionId, insertAssignment.sessionId),
+    )).limit(1);
+    if (existing.length > 0) return existing[0];
     const [assignment] = await db.insert(teacherSubjectAssignments).values(insertAssignment).returning();
     return assignment;
   }
@@ -443,6 +450,14 @@ export class DatabaseStorage implements IStorage {
       eq(users.id, insertAssignment.teacherUserId), eq(users.schoolId, insertAssignment.schoolId), eq(users.role, "teacher"),
     ));
     if (!teacher) throw new Error("Teacher user not found in this school");
+    const existing = await db.select().from(teacherClassAssignments).where(and(
+      eq(teacherClassAssignments.teacherUserId, insertAssignment.teacherUserId),
+      eq(teacherClassAssignments.className, insertAssignment.className),
+      eq(teacherClassAssignments.section, insertAssignment.section),
+      eq(teacherClassAssignments.schoolId, insertAssignment.schoolId),
+      eq(teacherClassAssignments.sessionId, insertAssignment.sessionId),
+    )).limit(1);
+    if (existing.length > 0) return existing[0];
     const [assignment] = await db.insert(teacherClassAssignments).values(insertAssignment).returning();
     return assignment;
   }
@@ -1092,6 +1107,24 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTimetableEntry(input: InsertTimetableEntry & { schoolId: number; sessionId: number }): Promise<TimetableEntry> {
+    const existing = await db.select().from(timetableEntries).where(and(
+      eq(timetableEntries.schoolId, input.schoolId),
+      eq(timetableEntries.sessionId, input.sessionId),
+      eq(timetableEntries.className, input.className),
+      eq(timetableEntries.section, input.section),
+      eq(timetableEntries.dayOfWeek, input.dayOfWeek),
+      eq(timetableEntries.periodNo, input.periodNo),
+    )).limit(1);
+    if (existing.length > 0) {
+      const [updated] = await db.update(timetableEntries).set({
+        startTime: input.startTime,
+        endTime: input.endTime,
+        subjectId: input.subjectId,
+        teacherUserId: input.teacherUserId ?? null,
+        roomNo: input.roomNo ?? null,
+      }).where(eq(timetableEntries.id, existing[0].id)).returning();
+      return updated;
+    }
     const [entry] = await db.insert(timetableEntries).values(input).returning();
     return entry;
   }

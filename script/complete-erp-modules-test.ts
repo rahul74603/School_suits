@@ -151,6 +151,8 @@ const fakeStorage = {
     allocationsList.push(created);
     return created;
   },
+  createTeacherClassAssignment: async (input: any) => ({ id: 1, ...input }),
+  createTeacherSubjectAssignment: async (input: any) => ({ id: 1, ...input }),
 } as unknown as IStorage;
 
 const app = express();
@@ -196,6 +198,33 @@ try {
     adminCookie,
   );
   assert.equal(createTeacher.status, 201);
+  const createdTeacherUser = await createTeacher.json();
+
+  // 2b. Bulk assign Classes 1 to 5 + All Sections (ALL) + Subject + Period Schedule
+  const bulkAssign = await req(
+    "/api/teacher-class-assignments/bulk",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        teacherUserId: createdTeacherUser.id,
+        classes: ["1", "2", "3", "4", "5"],
+        section: "ALL",
+        subjectId: 1,
+        schedule: {
+          days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+          periodNo: 1,
+          startTime: "08:00",
+          endTime: "08:45",
+        },
+      }),
+    },
+    adminCookie,
+  );
+  assert.equal(bulkAssign.status, 201);
+  const bulkResult = await bulkAssign.json();
+  assert.equal(bulkResult.classes.length, 5);
+  assert.equal(bulkResult.periods.length, 30);
 
   // 3. Publish a Notice
   const createNotice = await req(

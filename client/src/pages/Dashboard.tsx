@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { useStudents } from "@/hooks/use-students";
@@ -17,16 +18,41 @@ import {
   UserPlus,
   Award,
   Calendar,
+  Radio,
 } from "lucide-react";
 import { format } from "date-fns";
 import type { HomeworkAssignment, Notice } from "@shared/schema";
+
+function timeToMinutes(t: string): number {
+  const [h, m] = t.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return -1;
+  return h * 60 + m;
+}
 
 export default function Dashboard() {
   const { data: user } = useAuth();
   const school = useSchool(user?.schoolId);
   const session = useActiveSession();
   const canViewFees = ["admin", "principal", "accountant", "staff"].includes(user?.role ?? "");
+  const isManager = user?.role === "admin" || user?.role === "principal";
   const isStudent = user?.role === "student";
+
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const currentDayName = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ][now.getDay()];
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
   const students = useStudents();
   const payments = usePayments();
@@ -43,6 +69,41 @@ export default function Dashboard() {
     queryKey: ["/api/homework"],
     queryFn: async () => (await fetch("/api/homework", { credentials: "include" })).json(),
     enabled: !!user,
+  });
+  const timetable = useQuery<any[]>({
+    queryKey: ["/api/timetable"],
+    queryFn: async () => {
+      const res = await fetch("/api/timetable", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!user,
+    refetchInterval: 15000,
+  });
+  const subjects = useQuery<any[]>({
+    queryKey: ["/api/subjects"],
+    queryFn: async () => {
+      const res = await fetch("/api/subjects", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!user,
+  });
+  const schoolUsers = useQuery<any[]>({
+    queryKey: ["/api/school-users"],
+    queryFn: async () => {
+      const res = await fetch("/api/school-users", { credentials: "include" });
+      return res.ok ? res.json() : [];
+    },
+    enabled: !!user && isManager,
+  });
+
+  const subjectMap = new Map((subjects.data ?? []).map((s) => [s.id, s]));
+  const teacherMap = new Map((schoolUsers.data ?? []).map((u) => [u.id, u.name]));
+
+  const liveClassesNow = (timetable.data ?? []).filter((t) => {
+    if (t.dayOfWeek !== currentDayName) return false;
+    const st = timeToMinutes(t.startTime);
+    const et = timeToMinutes(t.endTime);
+    return st !== -1 && et !== -1 && currentMinutes >= st && currentMinutes <= et;
   });
 
   const today = new Date().toDateString();
@@ -80,7 +141,7 @@ export default function Dashboard() {
             </Link>
             <Link href="/timetable">
               <Button size="sm" variant="outline">
-                <Calendar className="h-4 w-4 mr-1.5" /> Timetable
+                <Calendar className="h-4 w-4 mr-1.5" /> Live Classes & Timetable
               </Button>
             </Link>
             <Link href="/report-cards">
@@ -125,6 +186,61 @@ export default function Dashboard() {
               value={homework.data?.length ?? 0}
               icon={BookOpen}
             />
+          )}
+        </div>
+
+        {/* REAL-TIME LIVE CLASSES & TEACHER MONITOR */}
+        <div className="rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50/70 via-white to-indigo-50/50 p-6 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <Radio className="h-5 w-5 text-emerald-600 animate-pulse" />
+              Live Classroom & Teacher Monitor ({currentDayName},{" "}
+              {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })})
+            </h2>
+            <Link href="/timetable">
+              <span className="text-xs font-semibold text-indigo-600 hover:underline cursor-pointer">
+                Open Live Tracker & Full Timetable →
+              </span>
+            </Link>
+          </div>
+          {liveClassesNow.length === 0 ? (
+            <p className="text-sm text-slate-600">
+              No active period running at this exact minute ({now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}).{" "}
+              <Link href="/timetable">
+                <span className="font-semibold text-indigo-600 hover:underline cursor-pointer">
+                  Go to Live Timetable
+                </span>
+              </Link>{" "}
+              to schedule periods or preview any period slot.
+            </p>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-3">
+              {liveClassesNow.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-xl border border-emerald-300 bg-white p-4 shadow-sm"
+                >
+                  <div className="flex items-center justify-between text-xs font-bold text-emerald-800">
+                    <span>● LIVE · PERIOD {item.periodNo}</span>
+                    <span>
+                      {item.startTime}–{item.endTime}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 text-base font-bold text-slate-900">
+                    Class {item.className} —{" "}
+                    {item.section === "ALL" ? "All Sections" : `Section ${item.section}`}
+                  </div>
+                  <div className="text-sm font-semibold text-indigo-700">
+                    {subjectMap.get(item.subjectId)?.name ?? `Subject #${item.subjectId}`}
+                  </div>
+                  {item.teacherUserId && (
+                    <div className="mt-1 text-xs text-slate-600">
+                      Teacher: <b>{teacherMap.get(item.teacherUserId) ?? `#${item.teacherUserId}`}</b>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
         </div>
 

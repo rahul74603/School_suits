@@ -677,6 +677,70 @@ export async function registerRoutes(
     try { return res.status(201).json(await dataStore.createTeacherClassAssignment({ ...input, schoolId: user.schoolId, sessionId: session.id })); }
     catch { return res.status(400).json({ message: "Teacher or assignment is invalid" }); }
   });
+  app.post("/api/teacher-class-assignments/bulk", academicManager, async (req, res) => {
+    const user = currentUser(req);
+    const session = await dataStore.getActiveSession(user.schoolId);
+    if (!session) return res.status(409).json({ message: "No active academic session" });
+    const input = z.object({
+      teacherUserId: z.number().int().positive(),
+      classes: z.array(z.string().trim().min(1)).min(1),
+      section: z.string().trim().min(1).default("ALL"),
+      subjectId: z.number().int().positive().nullable().optional(),
+      schedule: z.object({
+        days: z.array(z.enum(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"])).min(1),
+        periodNo: z.number().int().min(1).max(12),
+        startTime: z.string().trim().min(1),
+        endTime: z.string().trim().min(1),
+        roomNo: z.string().trim().nullable().optional(),
+      }).nullable().optional(),
+    }).parse(req.body);
+
+    const createdClasses = [];
+    for (const clsName of input.classes) {
+      const created = await dataStore.createTeacherClassAssignment({
+        teacherUserId: input.teacherUserId,
+        className: clsName,
+        section: input.section,
+        schoolId: user.schoolId,
+        sessionId: session.id,
+      });
+      createdClasses.push(created);
+    }
+
+    if (input.subjectId) {
+      await dataStore.createTeacherSubjectAssignment({
+        teacherUserId: input.teacherUserId,
+        subjectId: input.subjectId,
+        schoolId: user.schoolId,
+        sessionId: session.id,
+      });
+    }
+
+    const createdPeriods = [];
+    if (input.schedule && input.subjectId && typeof (dataStore as any).createTimetableEntry === "function") {
+      for (const clsName of input.classes) {
+        const targetSection = input.section === "ALL" ? "ALL" : input.section;
+        for (const day of input.schedule.days) {
+          const entry = await (dataStore as any).createTimetableEntry({
+            schoolId: user.schoolId,
+            sessionId: session.id,
+            className: clsName,
+            section: targetSection,
+            dayOfWeek: day,
+            periodNo: input.schedule.periodNo,
+            startTime: input.schedule.startTime,
+            endTime: input.schedule.endTime,
+            subjectId: input.subjectId,
+            teacherUserId: input.teacherUserId,
+            roomNo: input.schedule.roomNo ?? null,
+          });
+          createdPeriods.push(entry);
+        }
+      }
+    }
+
+    res.status(201).json({ classes: createdClasses, periods: createdPeriods });
+  });
   app.delete(api.assignments.removeClass.path, academicManager, async (req, res) => {
     const user = currentUser(req); const session = await dataStore.getActiveSession(user.schoolId);
     if (!session) return res.status(409).json({ message: "No active academic session" });
@@ -942,7 +1006,7 @@ export async function registerRoutes(
     const session = await dataStore.getActiveSession(user.schoolId);
     if (!session) return false;
     const classes = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id);
-    if (!classes.some((assignment) => assignment.className === className && assignment.section === section)) return false;
+    if (!classes.some((assignment) => assignment.className === className && (assignment.section === section || assignment.section === "ALL"))) return false;
     if (subjectId !== undefined) {
       const subjects = await dataStore.getTeacherSubjectAssignments(user.schoolId, session.id, user.id);
       if (!subjects.some((assignment) => assignment.subjectId === subjectId)) return false;
@@ -961,8 +1025,9 @@ export async function registerRoutes(
       const classes = await dataStore.getTeacherClassAssignments(user.schoolId, session.id, user.id);
       const subjects = await dataStore.getTeacherSubjectAssignments(user.schoolId, session.id, user.id);
       const classKeys = new Set(classes.map((item) => `${item.className}\\0${item.section}`));
+      const allSectionClasses = new Set(classes.filter((item) => item.section === "ALL").map((item) => item.className));
       const subjectIds = new Set(subjects.map((item) => item.subjectId));
-      records = records.filter((record) => classKeys.has(`${record.className}\\0${record.section}`) && (record.subjectId === null || subjectIds.has(record.subjectId)));
+      records = records.filter((record) => (classKeys.has(`${record.className}\\0${record.section}`) || allSectionClasses.has(record.className)) && (record.subjectId === null || subjectIds.has(record.subjectId)));
     }
     return { session, records };
   };
@@ -1138,7 +1203,8 @@ export async function registerRoutes(
     if (user.role === "teacher" && activeSession) {
       const assignments = await dataStore.getTeacherClassAssignments(user.schoolId, activeSession.id, user.id);
       const allowed = new Set(assignments.map((assignment) => `${assignment.className}\\0${assignment.section}`));
-      students = students.filter((student) => allowed.has(`${student.class}\\0${student.section}`));
+      const allSectionClasses = new Set(assignments.filter((assignment) => assignment.section === "ALL").map((assignment) => assignment.className));
+      students = students.filter((student) => allowed.has(`${student.class}\\0${student.section}`) || allSectionClasses.has(student.class));
     }
     res.json(students.map(safeStudent));
   });
@@ -1166,7 +1232,7 @@ export async function registerRoutes(
     if (!student) return res.status(404).json({ message: "Student not found" });
     if (user.role === "teacher" && activeSession) {
       const assignments = await dataStore.getTeacherClassAssignments(user.schoolId, activeSession.id, user.id);
-      if (!assignments.some((assignment) => assignment.className === student.class && assignment.section === student.section)) {
+      if (!assignments.some((assignment) => assignment.className === student.class && (assignment.section === student.section || assignment.section === "ALL"))) {
         return res.status(404).json({ message: "Student not found" });
       }
     }
@@ -1463,6 +1529,42 @@ export async function registerRoutes(
     const user = currentUser(req);
     const session = await dataStore.getActiveSession(user.schoolId);
     if (!session) return res.status(409).json({ message: "No active academic session" });
+    const rawDay = req.body?.dayOfWeek;
+    if (rawDay === "ALL" || Array.isArray(req.body?.days)) {
+      const targetDays: ("Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday" | "Saturday")[] =
+        Array.isArray(req.body?.days) && req.body.days.length > 0
+          ? req.body.days
+          : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const createdList = [];
+      for (const d of targetDays) {
+        const input = insertTimetableEntrySchema.parse({ ...req.body, dayOfWeek: d });
+        const created = await (dataStore as any).createTimetableEntry({
+          ...input,
+          schoolId: user.schoolId,
+          sessionId: session.id,
+          teacherUserId: input.teacherUserId ?? null,
+          roomNo: input.roomNo ?? null,
+        });
+        createdList.push(created);
+      }
+      if (createdList[0]?.teacherUserId) {
+        await dataStore.createTeacherClassAssignment({
+          teacherUserId: createdList[0].teacherUserId,
+          className: createdList[0].className,
+          section: createdList[0].section,
+          schoolId: user.schoolId,
+          sessionId: session.id,
+        }).catch(() => undefined);
+        await dataStore.createTeacherSubjectAssignment({
+          teacherUserId: createdList[0].teacherUserId,
+          subjectId: createdList[0].subjectId,
+          schoolId: user.schoolId,
+          sessionId: session.id,
+        }).catch(() => undefined);
+      }
+      return res.status(201).json(createdList[0]);
+    }
+
     const input = insertTimetableEntrySchema.parse(req.body);
     const created = await (dataStore as any).createTimetableEntry({
       ...input,
@@ -1471,6 +1573,21 @@ export async function registerRoutes(
       teacherUserId: input.teacherUserId ?? null,
       roomNo: input.roomNo ?? null,
     });
+    if (created.teacherUserId) {
+      await dataStore.createTeacherClassAssignment({
+        teacherUserId: created.teacherUserId,
+        className: created.className,
+        section: created.section,
+        schoolId: user.schoolId,
+        sessionId: session.id,
+      }).catch(() => undefined);
+      await dataStore.createTeacherSubjectAssignment({
+        teacherUserId: created.teacherUserId,
+        subjectId: created.subjectId,
+        schoolId: user.schoolId,
+        sessionId: session.id,
+      }).catch(() => undefined);
+    }
     res.status(201).json(created);
   });
 
