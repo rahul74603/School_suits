@@ -26,6 +26,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPost, apiDel } from "@/lib/api";
 import {
   GraduationCap,
   Plus,
@@ -70,6 +71,21 @@ const CLASSES = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8"
 const SECTIONS = ["A", "B", "C", "D", "E"] as const;
 const SESSION = "2026-27";
 
+// --- REST adapter (Phase 3 Batch C) ---------------------------------------
+// REST exam camelCase hai (examName/class/maxMarks...); page snake_case
+// padhta hai — fetch ke turant baad purane naam bhare jate hain.
+function adaptExam(e: any) {
+  return {
+    ...e,
+    exam_name: e.examName,
+    exam_type: e.examType,
+    class_name: e.class,
+    max_marks: e.maxMarks,
+    passing_marks: e.passingMarks,
+    exam_date: e.examDate,
+  };
+}
+
 type ExamType = typeof EXAM_TYPES[number];
 type ClassType = typeof CLASSES[number];
 type SectionType = typeof SECTIONS[number];
@@ -106,12 +122,17 @@ export default function Exams() {
   const fetchExams = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await (window as any).electronAPI.invoke("get-exams", {
-        className: classFilter,
-        section: sectionFilter,
-        session: SESSION,
-      });
-      setExams(data || []);
+      // REST: GET /api/exams — server class/section/session filter
+      // nahi leta, isliye IPC wale filter yahin lage hain. Session
+      // khali ho to row bahar nahi karte (REST par session optional
+      // hai; IPC create hamesha session bhejta tha).
+      const data = await apiGet<any[]>("/api/exams");
+      const adapted = (data || []).map(adaptExam).filter((exam: any) =>
+        (classFilter === "ALL" || exam.class_name === classFilter) &&
+        (sectionFilter === "ALL" || exam.section === sectionFilter) &&
+        (!exam.session || exam.session === SESSION)
+      );
+      setExams(adapted);
     } catch (e) {
       toast({ 
         title: "Error", 
@@ -138,10 +159,18 @@ export default function Exams() {
     }
 
     try {
-      await (window as any).electronAPI.invoke("create-exam", {
-        ...formData,
+      // REST: POST /api/exams — className -> class. Khali section/
+      // subject bhejte hi nahi (server par optional hain).
+      await apiPost("/api/exams", {
+        examName: formData.examName,
+        examType: formData.examType,
+        class: formData.className,
+        section: formData.section || undefined,
+        subject: formData.subject || undefined,
         maxMarks: parseInt(formData.maxMarks),
         passingMarks: parseInt(formData.passingMarks),
+        examDate: formData.examDate,
+        session: formData.session,
       });
       toast({ title: "Success", description: "Exam created successfully" });
       setIsAddOpen(false);
@@ -173,7 +202,9 @@ export default function Exams() {
   const handleDelete = async (id: number) => {
     if (!confirm("Delete this exam and all its marks? This action cannot be undone.")) return;
     try {
-      await (window as any).electronAPI.invoke("delete-exam", id);
+      // REST: DELETE /api/exams/:id (server par sirf principal —
+      // teacher ko 403 ayega to neeche wala error toast hi dikhega).
+      await apiDel(`/api/exams/${id}`);
       toast({ title: "Success", description: "Exam deleted" });
       fetchExams();
     } catch (e) {
@@ -191,16 +222,21 @@ export default function Exams() {
     setLoading(true);
     
     try {
-      const studentsData = await (window as any).electronAPI.invoke("get-students", {
-        classStr: exam.class_name,
-        section: exam.section,
-        session: SESSION,
-      });
-      setStudents(studentsData || []);
+      // REST: GET /api/students?class=&section= — roll_number <- rollNo.
+      const studentParams = new URLSearchParams({ class: exam.class_name });
+      if (exam.section) studentParams.set("section", exam.section);
+      const rawStudents = await apiGet<any[]>(`/api/students?${studentParams.toString()}`);
+      const studentsData = (rawStudents || []).map((st: any) => ({ ...st, roll_number: st.rollNo }));
+      setStudents(studentsData);
       
-      const existingMarks = await (window as any).electronAPI.invoke("get-marks", {
-        examId: exam.id,
-      });
+      // REST: GET /api/exams/:id/marks — rows camelCase (studentId,
+      // marksObtained); page student_id / marks_obtained padhta hai.
+      const rawMarks = await apiGet<any[]>(`/api/exams/${exam.id}/marks`);
+      const existingMarks = (rawMarks || []).map((m: any) => ({
+        ...m,
+        student_id: m.studentId,
+        marks_obtained: m.marksObtained,
+      }));
       
       const initialMarks: Record<number, MarkEntry> = {};
       studentsData?.forEach((student: Student) => {
@@ -244,10 +280,10 @@ export default function Exams() {
         remarks: entry.remarks,
       }));
 
-      await (window as any).electronAPI.invoke("save-marks", {
-        examId: selectedExam.id,
-        marks: marksArray,
-      });
+      // REST: POST /api/exams/:id/marks — marksArray ka shape
+      // ({ studentId, marksObtained, remarks }) server ke schema se
+      // bilkul match hai.
+      await apiPost(`/api/exams/${selectedExam.id}/marks`, { marks: marksArray });
 
       toast({ title: "Success", description: "Marks saved successfully" });
       setIsMarksOpen(false);

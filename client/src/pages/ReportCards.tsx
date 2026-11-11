@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet } from "@/lib/api";
 import { Printer, Search, FileText, Award, TrendingUp, Calendar, User } from "lucide-react";
 
 interface ExamResult {
@@ -44,6 +45,50 @@ interface StudentInfo {
   address: string;
 }
 
+// --- REST adapters (Phase 3 Batch C) ---------------------------------------
+// Electron ke main process wala grade scale (calculateGrade).
+function gradeForPercentage(percentage: number): string {
+  if (percentage >= 90) return "A+";
+  if (percentage >= 80) return "A";
+  if (percentage >= 70) return "B";
+  if (percentage >= 60) return "C";
+  if (percentage >= 50) return "D";
+  return "F";
+}
+
+function adaptStudent(raw: any) {
+  return {
+    ...raw,
+    admission_no: raw.admissionNo,
+    father_name: raw.fatherName,
+    mother_name: raw.motherName,
+  };
+}
+
+// REST results row (marks + exam ki kuch fields) ko page ke IPC shape
+// me badalta hai. Computed fields (subject_marks/total/percentage/
+// grade/result_status) IPC ke get-student-all-results ke apne
+// fallback formulas se bante hain; class/session exams list se join
+// karke aati hai.
+function adaptResult(row: any, exam: any) {
+  const maxMarks = row.maxMarks ?? exam?.maxMarks ?? 100;
+  const passingMarks = row.passingMarks ?? exam?.passingMarks ?? 33;
+  const total = row.marksObtained ?? 0;
+  const percentage = maxMarks > 0 ? Number(((total * 100) / maxMarks).toFixed(2)) : 0;
+  const subjectName = (row.subject || exam?.subject || "").trim() || "Marks";
+  return {
+    exam_name: row.examName ?? exam?.examName ?? "",
+    exam_type: row.examType ?? exam?.examType ?? "",
+    class_name: exam?.class ?? "",
+    session: exam?.session ?? "",
+    subject_marks: JSON.stringify({ [subjectName]: total }),
+    total_marks: total,
+    percentage,
+    grade: gradeForPercentage(percentage),
+    result_status: total >= passingMarks ? "Pass" : "Fail",
+  };
+}
+
 export default function ReportCards() {
   const { toast } = useToast();
   const printRef = useRef<HTMLDivElement>(null);
@@ -61,8 +106,14 @@ export default function ReportCards() {
   }, []);
 
   const loadSchoolInfo = async () => {
-    const info = await (window as any).electronAPI.invoke("get-school-info");
-    setSchoolInfo(info);
+    // REST: GET /api/branding — jawab ke naam (name/address/phone/
+    // email) page se match hain, adapter nahi chahiye.
+    try {
+      const info = await apiGet<any>("/api/branding");
+      setSchoolInfo(info);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const searchStudent = async () => {
@@ -73,7 +124,15 @@ export default function ReportCards() {
 
     setLoading(true);
     try {
-      const studentData = await (window as any).electronAPI.invoke("get-student-by-admno", searchAdmNo.trim());
+      // REST: GET /api/students/by-admission-no/:no — na mile to
+      // server 404 deta hai; IPC null deta tha, isliye catch me null.
+      let studentData: any = null;
+      try {
+        const raw = await apiGet<any>(`/api/students/by-admission-no/${encodeURIComponent(searchAdmNo.trim())}`);
+        studentData = raw ? adaptStudent(raw) : null;
+      } catch (e) {
+        studentData = null;
+      }
       
       if (!studentData) {
         toast({ title: "Not Found", description: "No student found with this admission number", variant: "destructive" });
@@ -85,8 +144,16 @@ export default function ReportCards() {
       setStudent(studentData);
 
       // Get all results for this student
-      const allResults = await (window as any).electronAPI.invoke("get-student-all-results", studentData.id);
-      setResults(allResults || []);
+      // REST: GET /api/students/:id/results (+ class/session ke liye
+      // exams list se join — adaptResult dekho).
+      const rawResults = await apiGet<any[]>(`/api/students/${studentData.id}/results`);
+      let examById = new Map<number, any>();
+      try {
+        const examList = await apiGet<any[]>("/api/exams");
+        examById = new Map((examList || []).map((e: any) => [e.id, e]));
+      } catch (e) { /* join na mile to class/session khali rahenge */ }
+      const allResults = (rawResults || []).map((row: any) => adaptResult(row, examById.get(row.examId)));
+      setResults(allResults);
     } catch (e) {
       toast({ title: "Error", description: "Failed to load student data", variant: "destructive" });
     }

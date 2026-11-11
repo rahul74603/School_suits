@@ -1,0 +1,75 @@
+# School Guardian Suite — Render Blueprint (FREE staging)
+# ---------------------------------------------------------------
+# Ye file repo ke ROOT me rakhi jayegi. Render dashboard me
+# "New +" -> "Blueprint" chunne par Render isi file ko padh kar
+# web service bana dega (ya service haath se banao aur yahi
+# settings lagao — dono chalega).
+#
+# Abhi ye STAGING/TESTING setup hai: branch `phase-1-cleanup`
+# par chalta hai. Pehla paying school aane par main branch +
+# paid plan par shift hoga.
+
+services:
+  - type: web
+    name: school-guardian-api
+    runtime: node
+    plan: free
+    branch: phase-1-cleanup
+
+    # npm install --include=dev isliye: NODE_ENV=production set hone
+    # par npm devDependencies (tsx, vite, esbuild) skip kar sakta hai,
+    # aur build unhi se hota hai (script/build.ts = vite + esbuild).
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+
+    # autoDeploy OFF rakha hai: phase-1-cleanup ek staging/WIP branch
+    # hai — har push par live server khud deploy ho jaye to aadha-
+    # adhura code bina test ke live chala jayega. Deploy karna ho to
+    # Render dashboard -> service -> "Manual Deploy" -> "Deploy latest
+    # commit" dabao. (Production/main branch par shift hote hi
+    # autoDeploy ON karne par dobara vichar hoga.)
+    autoDeploy: false
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Node 20 pakka karne ke liye (Vite 7 / Express 5 ko chahiye).
+      - key: NODE_VERSION
+        value: "20"
+
+      # Electron ka binary (~100 MB) server ko nahi chahiye — download
+      # skip karne se Render build tez aur halka rehta hai. PC .exe
+      # build local/GitHub Actions par hota hai, Render par nahi.
+      - key: ELECTRON_SKIP_BINARY_DOWNLOAD
+        value: "1"
+
+      # Neon ki POOLED connection string. sync: false = value repo me
+      # NAHI jata; Render dashboard me haath se paste karna hoga.
+      # YE VALUE KABHI CHAT/GITHUB ME MAT DALNA.
+      - key: DATABASE_URL
+        sync: false
+
+      # Auth tokens sign karne ki secret key — Render khud ek strong
+      # random value bana dega (generateValue). Dashboard me dikhegi
+      # bhi nahi dobara, aur zaroorat bhi nahi.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Pehla Super Admin — server ke pehle boot par
+      # ensureSuperAdmin() inhi se account bana dega (Render free
+      # plan par shell/console nahi milta, isliye seed CLI ki jagah
+      # boot-time seed rakha hai). Password kam se kam 10 characters,
+      # aur kahin apne paas note karke rakho.
+      - key: SUPER_ADMIN_USERNAME
+        sync: false
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+
+      # Optional: sirf wahi origin allow karna ho to set karo
+      # (jaise https://download.example.com). Khali chhoda to app
+      # request ka Origin echo karta hai — PC/Android native apps
+      # ke liye ye theek hai. Abhi khali rakho to sync:false ki
+      # prompt par blank chhod dena.
+      - key: CORS_ORIGIN
+        sync: false

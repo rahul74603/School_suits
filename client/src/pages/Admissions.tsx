@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPost } from "@/lib/api";
 import {
   UserPlus,
   Bus,
@@ -62,8 +63,12 @@ export default function Admissions() {
 
   const loadInitialData = async () => {
     try {
-      const routes = await (window as any).electronAPI.invoke("get-transport");
-      setTransportRoutes(routes || []);
+      // REST: GET /api/transport-routes — camelCase aata hai,
+      // page route_name padhta hai, adapter wahi bharta hai.
+      const routes = await apiGet<any[]>("/api/transport-routes");
+      setTransportRoutes(
+        (routes || []).map((r) => ({ ...r, route_name: r.routeName }))
+      );
       await refreshAdmissionNumber();
     } catch (e) {
       console.error(e);
@@ -72,9 +77,12 @@ export default function Admissions() {
 
   const refreshAdmissionNumber = async () => {
     try {
-      const nextNum = await (window as any).electronAPI.invoke(
-        "get-next-admission-no"
+      // REST: GET /api/students/next-admission-no — jawab
+      // { admissionNo } object me aata hai, string yahin nikali.
+      const res = await apiGet<{ admissionNo: string }>(
+        "/api/students/next-admission-no"
       );
+      const nextNum = res?.admissionNo ?? "";
       setFormData((prev) => ({ ...prev, admissionNumber: nextNum }));
       return nextNum;
     } catch (e) {
@@ -114,10 +122,12 @@ export default function Admissions() {
     setLoading(true);
     try {
       // Duplicate check
-      const isDuplicate = await (window as any).electronAPI.invoke(
-        "check-admission-duplicate",
-        formData.admissionNumber
+      // REST: GET /api/students/check-admission-no?no= — jawab
+      // { exists } deta hai, page ko boolean chahiye tha.
+      const dup = await apiGet<{ exists: boolean }>(
+        `/api/students/check-admission-no?no=${encodeURIComponent(formData.admissionNumber)}`
       );
+      const isDuplicate = !!dup?.exists;
 
       if (isDuplicate) {
         toast({
@@ -130,7 +140,34 @@ export default function Admissions() {
       }
 
       // ✅ Create student
-      await (window as any).electronAPI.invoke("create-student", formData);
+      // REST: POST /api/students — form ke naam server ke camelCase
+      // columns par map kiye hain; switches 0/1 me jate hain aur
+      // transportId sirf enabled ho to (warna null).
+      await apiPost("/api/students", {
+        admissionNo: formData.admissionNumber,
+        name: formData.studentName,
+        fatherName: formData.fatherName,
+        motherName: formData.motherName || undefined,
+        dob: formData.dob || undefined,
+        aadhaar: formData.aadhaarNo || undefined,
+        birthCertificateNo: formData.birthCertificateNo || undefined,
+        contact: formData.contactNumber,
+        address: formData.address || undefined,
+        class: formData.class,
+        section: formData.section,
+        rollNo: formData.rollNo || undefined,
+        category: formData.category || undefined,
+        previousSchoolName: formData.previousSchoolName || undefined,
+        previousClass: formData.previousClass || undefined,
+        tcNumber: formData.tcNumber || undefined,
+        tcIssueDate: formData.tcIssueDate || undefined,
+        tcSubmitted: formData.tcSubmitted ? 1 : 0,
+        reportCardSubmitted: formData.reportCardSubmitted ? 1 : 0,
+        transportId:
+          formData.transportEnabled && formData.transportId
+            ? parseInt(formData.transportId)
+            : null,
+      });
 
       toast({ title: "Success", description: "Admission Created Successfully!" });
 

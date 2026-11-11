@@ -1,9 +1,34 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { ensureSuperAdmin } from "./seed";
 
 const app = express();
-app.use(express.json());
+
+// CORS (Phase 2 design §1): PC (Electron) aur Android (Capacitor) clients
+// browser nahi hain aur JWT Authorization header me bhejte hain, isliye
+// header-based CORS kaafi hai. CORS_ORIGIN env set ho to wahi origin,
+// warna request ka apna Origin echo hota hai.
+app.use((req, res, next) => {
+  const origin = process.env.CORS_ORIGIN || req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
+// Phase 3 Batch C — documents base64 JSON body me aate hain (~2MB ki
+// file = ~2.7MB base64), isliye JSON limit 4mb rakhi hai. Isse badi
+// body Express 413 dega; asal 2MB wali limit routes me saaf message
+// ke saath lagti hai.
+app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 
 app.use((req, res, next) => {
@@ -52,8 +77,26 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   server.listen(PORT, "0.0.0.0", () => {
     log(`serving on port ${PORT}`);
+
+    // Boot-time Super Admin seed (FREE RENDER DEPLOY): Render free
+    // plan par shell nahi milta, isliye seed CLI nahi chal sakta —
+    // pehla Super Admin yahin, listen ke turant baad banta hai.
+    // ensureSuperAdmin() idempotent hai (super_admin pehle se ho
+    // to no-op) aur andar se kabhi throw nahi karta; phir bhi
+    // yahan try/catch hai taaki seed ki koi bhi gadbad API server
+    // ko kabhi na giraye — server chalta rahega, bas log hoga.
+    void (async () => {
+      try {
+        await ensureSuperAdmin();
+      } catch (err) {
+        console.error(
+          "Super Admin boot-seed failed (server chalta rahega):",
+          err,
+        );
+      }
+    })();
   });
 })();

@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { apiGet } from "@/lib/api";
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -73,14 +74,34 @@ export default function FinancialDashboard() {
     fetchTrendData();
   }, [selectedMonth, selectedYear]);
 
+  // REST: /api/reports/financial-summary month/year filter NAHI leta —
+  // wo bina filter ke kul (all-time) jod deta hai. Page ko chuney hue
+  // mahine ka hisaab chahiye, isliye summary bhi mahina-dar trend rows
+  // (/api/reports/financial-trend) se nikala jata hai — IPC wala
+  // month-wise matlab bilkul barkaraar rehta hai (NOTES.md).
+  const loadTrendRows = async (): Promise<any[]> =>
+    (await apiGet<any[]>("/api/reports/financial-trend")) || [];
+
   const fetchFinancialData = async () => {
     setLoading(true);
     try {
-      const data = await (window as any).electronAPI.invoke("get-financial-summary", {
-        month: selectedMonth,
-        year: selectedYear
+      const rows = await loadTrendRows();
+      const row = rows.find(
+        (r) => r.month === selectedMonth && r.year === selectedYear
+      );
+      const income = row?.feesCollected ?? 0;
+      const salaryExpense = row?.salaryPaid ?? 0;
+      const otherExpense = row?.expenses ?? 0;
+      const totalExpense = salaryExpense + otherExpense;
+      const netProfit = income - totalExpense;
+      setSummary({
+        income,
+        salaryExpense,
+        otherExpense,
+        totalExpense,
+        netProfit,
+        profitMargin: income > 0 ? ((netProfit / income) * 100).toFixed(1) : "0",
       });
-      setSummary(data);
     } catch (e) {
       console.error("Failed to load financial data", e);
     }
@@ -89,8 +110,18 @@ export default function FinancialDashboard() {
 
   const fetchTrendData = async () => {
     try {
-      const data = await (window as any).electronAPI.invoke("get-financial-trend");
-      setTrendData(data);
+      const rows = await loadTrendRows();
+      // Adapter: server { feesCollected, salaryPaid, expenses } deta
+      // hai; page { income, expense, profit } padhta hai.
+      setTrendData(
+        rows.map((r) => ({
+          month: r.month,
+          year: r.year,
+          income: r.feesCollected ?? 0,
+          expense: (r.salaryPaid ?? 0) + (r.expenses ?? 0),
+          profit: (r.feesCollected ?? 0) - ((r.salaryPaid ?? 0) + (r.expenses ?? 0)),
+        }))
+      );
     } catch (e) {
       console.error("Failed to load trend data", e);
     }

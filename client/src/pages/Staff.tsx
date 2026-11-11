@@ -46,6 +46,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 
 const DEPARTMENTS = ["Teaching", "Administration", "Accounts", "Support", "Transport", "Security"];
 const DESIGNATIONS = ["Principal", "Vice Principal", "Teacher", "Accountant", "Clerk", "Librarian", "Driver", "Security Guard", "Peon", "Other"];
@@ -58,6 +59,24 @@ const DOC_TYPES = [
   { key: "contract", label: "Employment Contract" },
   { key: "other", label: "Other Document" },
 ];
+
+// --- REST adapter (Phase 3 Batch A) ---------------------------------------
+// REST staff row camelCase hai: salary <- basicSalary, join_date <- joinDate,
+// employee_id <- employeeId, status <- isActive (1 = Active, 0 = Inactive).
+// father_name Batch A server fix me column bankar aa gaya. Documents
+// staff table me nahi hain — Batch C se wo alag staff_documents table
+// se aate hain aur View khulne par selectedStaff.documents me bhare
+// jate hain (openView dekho).
+function adaptStaffMember(m: any) {
+  return {
+    ...m,
+    employee_id: m.employeeId,
+    salary: m.basicSalary,
+    father_name: m.fatherName || "",
+    join_date: m.joinDate,
+    status: m.isActive === 0 ? "Inactive" : "Active",
+  };
+}
 
 export default function Staff() {
   const { toast } = useToast();
@@ -91,11 +110,25 @@ export default function Staff() {
   const fetchStaff = async () => {
     setLoading(true);
     try {
-      const data = await (window as any).electronAPI.invoke("get-staff", {
-        search: search.trim(),
-        status: statusFilter,
-      });
-      setStaffList(data || []);
+      // REST: GET /api/staff — server na search/status params leta hai,
+      // na inactive staff deta hai (sirf active rows aati hain). Isliye
+      // khoj aur status filter yahin client par lage hain; "Inactive /
+      // On Leave / Terminated" chunne par list khali ayegi kyunki wo
+      // rows server deta hi nahi (NOTES.md).
+      const data = await apiGet<any[]>("/api/staff");
+      let adapted = (data || []).map(adaptStaffMember);
+      const q = search.trim().toLowerCase();
+      if (q) {
+        adapted = adapted.filter((s: any) =>
+          s.name?.toLowerCase().includes(q) ||
+          (s.employee_id || "").toLowerCase().includes(q) ||
+          (s.contact || "").includes(search.trim())
+        );
+      }
+      if (statusFilter !== "ALL") {
+        adapted = adapted.filter((s: any) => s.status === statusFilter);
+      }
+      setStaffList(adapted);
     } catch (e) {
       console.error(e);
       toast({ title: "Error", description: "Failed to load staff list", variant: "destructive" });
@@ -126,7 +159,22 @@ export default function Staff() {
 
   const handleAdd = async () => {
     try {
-      await (window as any).electronAPI.invoke("create-staff", formData);
+      // REST: POST /api/staff — salary -> basicSalary (number lazmi).
+      // fatherName aur status server ke staff table me hain hi nahi,
+      // isliye nahi bheje (NOTES.md).
+      await apiPost("/api/staff", {
+        name: formData.name,
+        designation: formData.designation,
+        department: formData.department,
+        qualification: formData.qualification,
+        experience: formData.experience,
+        contact: formData.contact,
+        email: formData.email,
+        address: formData.address,
+        basicSalary: parseInt(formData.salary) || 0,
+        fatherName: formData.fatherName || undefined,
+        joinDate: formData.joinDate,
+      });
       toast({ title: "Success", description: "Staff member added successfully" });
       setIsAddOpen(false);
       resetForm();
@@ -138,10 +186,26 @@ export default function Staff() {
 
   const handleUpdate = async () => {
     try {
-      await (window as any).electronAPI.invoke("update-staff", {
-        ...formData,
-        id: selectedStaff.id,
-        salary: parseInt(formData.salary) || 0,
+      // REST: PUT /api/staff/:id — status ka REST jawab sirf isActive
+      // hai: Active -> 1, Inactive -> 0. "On Leave"/"Terminated" ka koi
+      // jawab nahi, un par isActive bhejte hi nahi (purani value rehti hai).
+      await apiPut(`/api/staff/${selectedStaff.id}`, {
+        name: formData.name,
+        designation: formData.designation,
+        department: formData.department,
+        qualification: formData.qualification,
+        experience: formData.experience,
+        contact: formData.contact,
+        email: formData.email,
+        address: formData.address,
+        basicSalary: parseInt(formData.salary) || 0,
+        fatherName: formData.fatherName || undefined,
+        joinDate: formData.joinDate,
+        ...(formData.status === "Active"
+          ? { isActive: 1 }
+          : formData.status === "Inactive"
+            ? { isActive: 0 }
+            : {}),
       });
       toast({ title: "Success", description: "Staff updated successfully" });
       setIsEditOpen(false);
@@ -153,7 +217,11 @@ export default function Staff() {
 
   const handleDelete = async () => {
     try {
-      await (window as any).electronAPI.invoke("delete-staff", selectedStaff.id);
+      // REST: staff ke liye DELETE route hai hi nahi — server ka tareeka
+      // POST /api/staff/:id/deactivate hai (soft delete: record rehta hai,
+      // list se gayab ho jata hai). AUDIT.md ka "DELETE /api/staff/:id"
+      // likhna galat tha, asal route yahi hai.
+      await apiPost(`/api/staff/${selectedStaff.id}/deactivate`);
       toast({ title: "Success", description: "Staff deleted successfully" });
       setIsDeleteOpen(false);
       fetchStaff();
@@ -181,9 +249,49 @@ export default function Staff() {
     setIsEditOpen(true);
   };
 
-  const openView = (staff: any) => {
-    setSelectedStaff(staff);
+  const openView = async (staff: any) => {
+    // REST (Batch C): documents staff_documents table se aate hain —
+    // View khulne par is staff ke documents laakar purane IPC wale
+    // shape (JSON string: [{type, fileName, filePath, uploadedAt}])
+    // me selectedStaff.documents me bharte hain, taaki dialog ka code
+    // bilkul pehle jaisa chale. filePath asal local path nahi —
+    // "sgstaffdoc:<id>" token hai jisse openStaffDocument file mangta hai.
+    let docsJson = "[]";
+    try {
+      const docs = await apiGet<any[]>(`/api/staff/${staff.id}/documents`);
+      docsJson = JSON.stringify((docs || []).map((d: any) => ({
+        type: d.docType,
+        fileName: d.fileName,
+        filePath: `sgstaffdoc:${d.id}`,
+        uploadedAt: d.createdAt,
+      })));
+    } catch (e) { /* documents na aaye to dialog khali documents ke saath khulega */ }
+    setSelectedStaff({ ...staff, documents: docsJson });
     setIsViewOpen(true);
+  };
+
+  const openStaffDocument = async (filePath: string) => {
+    try {
+      // REST: file ka content /file endpoint se aata hai aur blob URL
+      // se khulta hai (web/Android par yahi tareeka; na khule to
+      // download ho jata hai).
+      const docId = String(filePath || "").replace("sgstaffdoc:", "");
+      if (!selectedStaff?.id || !docId) return;
+      const file = await apiGet<any>(`/api/staff/${selectedStaff.id}/documents/${docId}/file`);
+      const bytes = Uint8Array.from(atob(file.base64Data), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: file.mimeType || "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank");
+      if (!win) {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file.fileName || "document";
+        a.click();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      toast({ title: "Error", description: "Failed to open document", variant: "destructive" });
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -202,15 +310,19 @@ export default function Staff() {
       const reader = new FileReader();
       reader.onload = async () => {
         const base64 = (reader.result?.toString() || "").split(",")[1];
-        await (window as any).electronAPI.invoke("upload-staff-document", {
-          staffId: selectedStaff.id,
-          employeeId: selectedStaff.employee_id,
+        // REST (Batch C): POST /api/staff/:id/documents — file
+        // content base64 me jata hai (server limit ~2MB). Upload ke
+        // baad list ke saath khule hue View dialog ke documents bhi
+        // taaza karte hain (openView dobara documents laata hai).
+        await apiPost(`/api/staff/${selectedStaff.id}/documents`, {
           docType,
           fileName: file.name,
           base64Data: base64,
+          mimeType: file.type || undefined,
         });
         toast({ title: "Uploaded", description: "Document uploaded successfully" });
         fetchStaff();
+        openView(selectedStaff);
       };
       reader.readAsDataURL(file);
     } catch (e) {
@@ -584,10 +696,11 @@ export default function Staff() {
                         {hasDoc ? (
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">Uploaded</span>
+                            {/* REST (Batch C): file server se blob bankar khulti hai — openStaffDocument dekho. */}
                             <Button 
                               variant="ghost" 
                               size="sm" 
-                              onClick={() => (window as any).electronAPI.invoke("open-student-document", hasDoc.filePath)}
+                              onClick={() => openStaffDocument(hasDoc.filePath)}
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
@@ -614,10 +727,11 @@ export default function Staff() {
                       {JSON.parse(selectedStaff.documents).map((doc: any, idx: number) => (
                         <div key={idx} className="flex items-center justify-between bg-white p-2 rounded border text-sm">
                           <span className="truncate flex-1">{doc.fileName}</span>
+                          {/* REST (Batch C): openStaffDocument se khulta hai. */}
                           <Button 
                             variant="ghost" 
                             size="sm"
-                            onClick={() => (window as any).electronAPI.invoke("open-student-document", doc.filePath)}
+                            onClick={() => openStaffDocument(doc.filePath)}
                           >
                             <Eye className="h-4 w-4" />
                           </Button>

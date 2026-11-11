@@ -19,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPost } from "@/lib/api";
 import { Save, CheckCircle, XCircle, Calculator } from "lucide-react";
 
 const SUBJECTS: Record<string, string[]> = {
@@ -27,6 +28,31 @@ const SUBJECTS: Record<string, string[]> = {
   "9-10": ["Hindi", "English", "Math", "Science", "Social Science"],
   "11-12": ["Physics", "Chemistry", "Math", "Biology", "English"]
 };
+
+// --- REST adapters (Phase 3 Batch C) ---------------------------------------
+// REST exam camelCase hai; page snake_case padhta hai.
+function adaptExam(e: any) {
+  return {
+    ...e,
+    exam_name: e.examName,
+    exam_type: e.examType,
+    class_name: e.class,
+    max_marks: e.maxMarks,
+    passing_marks: e.passingMarks,
+    exam_date: e.examDate,
+  };
+}
+
+// Electron ke main process wala grade scale (calculateGrade) — REST
+// server computed grade nahi deta, isliye wahi scale yahan rakha hai.
+function gradeForPercentage(percentage: number): string {
+  if (percentage >= 90) return "A+";
+  if (percentage >= 80) return "A";
+  if (percentage >= 70) return "B";
+  if (percentage >= 60) return "C";
+  if (percentage >= 50) return "D";
+  return "F";
+}
 
 interface StudentMarks {
   [subject: string]: string | undefined;
@@ -48,12 +74,10 @@ export default function ExamResults() {
   const [loading, setLoading] = useState(false);
 
   const fetchExams = async () => {
-    const data = await (window as any).electronAPI.invoke("get-exams", {
-      className: "ALL",
-      section: "ALL",
-      session: "2026-27",
-    });
-    setExams(data || []);
+    // REST: GET /api/exams — IPC session="2026-27" filter deta tha;
+    // session khali wali rows bahar nahi karte (REST par optional hai).
+    const data = await apiGet<any[]>("/api/exams");
+    setExams((data || []).map(adaptExam).filter((e: any) => !e.session || e.session === "2026-27"));
   };
 
   useEffect(() => {
@@ -65,14 +89,33 @@ export default function ExamResults() {
     setLoading(true);
     
     // Get students of this class/section
-    const allStudents = await (window as any).electronAPI.invoke("get-students", {
-      search: "",
-      classStr: exam.class_name,
-      section: exam.section,
-    });
+    // REST: GET /api/students?class=&section= — admission_no <- admissionNo.
+    const studentParams = new URLSearchParams({ class: exam.class_name });
+    if (exam.section) studentParams.set("section", exam.section);
+    const rawStudents = await apiGet<any[]>(`/api/students?${studentParams.toString()}`);
+    const allStudents = (rawStudents || []).map((st: any) => ({ ...st, admission_no: st.admissionNo }));
     
     // Get existing marks
-    const existingMarks = await (window as any).electronAPI.invoke("get-exam-marks", exam.id) || [];
+    // REST: GET /api/exams/:id/marks — REST marks model me ek exam =
+    // ek subject, isliye row ka marksObtained exam ke apne subject
+    // wale column me jata hai (IPC ke subject_marks fallback jaisa
+    // hi). Result/grade/percentage server nahi deta — IPC ke formulas
+    // se yahin gine hain.
+    const rawExamMarks = await apiGet<any[]>(`/api/exams/${exam.id}/marks`);
+    const existingMarks = (rawExamMarks || []).map((row: any) => {
+      const obtained = row.marksObtained;
+      const maxM = exam.max_marks || 100;
+      const passM = exam.passing_marks ?? 33;
+      const pct = obtained == null || maxM <= 0 ? null : (obtained * 100) / maxM;
+      return {
+        student_id: row.studentId,
+        subject_marks: obtained == null ? "{}" : JSON.stringify({ [(exam.subject || "").trim() || "Marks"]: obtained }),
+        marks_obtained: obtained,
+        result_status: obtained == null ? undefined : (obtained >= passM ? "Pass" : "Fail"),
+        grade: pct == null ? undefined : gradeForPercentage(pct),
+        percentage: pct == null ? undefined : Number(pct.toFixed(2)),
+      };
+    });
     
     // Merge
     const marksMap: MarksMap = {};
@@ -130,11 +173,25 @@ export default function ExamResults() {
         marksData.passingMarks[sub] = 33;
       });
 
-      const result = await (window as any).electronAPI.invoke("save-exam-marks", {
-        examId: selectedExam.id,
-        studentId,
-        marksData
+      // REST: POST /api/exams/:id/marks — REST model me ek exam = ek
+      // subject, isliye sirf exam ke apne subject ka number save hota
+      // hai; baaki subject columns me bhara data REST par save NAHI
+      // hota (NOTES.md me seema saaf likhi hai). Result/grade/
+      // percentage IPC wale formulas se yahin gine jate hain.
+      const subjectKey = (selectedExam.subject || "").trim() || "Marks";
+      const obtainedRaw = studentMarks[subjectKey];
+      const obtained = obtainedRaw === undefined || obtainedRaw === "" ? null : parseFloat(obtainedRaw);
+      await apiPost(`/api/exams/${selectedExam.id}/marks`, {
+        marks: [{ studentId, marksObtained: obtained, remarks: "" }],
       });
+      const maxM = selectedExam.max_marks || 100;
+      const passM = selectedExam.passing_marks ?? 33;
+      const pct = obtained == null || maxM <= 0 ? 0 : (obtained * 100) / maxM;
+      const result = {
+        resultStatus: obtained != null && obtained >= passM ? "Pass" : "Fail",
+        grade: gradeForPercentage(pct),
+        percentage: Number(pct.toFixed(2)),
+      };
 
       // Update local state with result
       setMarks((prev: MarksMap) => ({
