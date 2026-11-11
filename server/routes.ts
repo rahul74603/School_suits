@@ -11,10 +11,12 @@ import {
   insertStaffSchema,
   userRoleSchema,
   noticeAudienceSchema,
+  attendanceStatusSchema,
   type User,
   type UserRole,
   type Student,
   type Staff,
+  type StudentDues,
 } from "@shared/schema";
 import {
   hashPassword,
@@ -222,6 +224,23 @@ const createFeePaymentBodySchema = insertFeePaymentSchema.extend({
     .nullable()
     .optional(),
   isAdmission: z.boolean().optional(),
+  // Dues-fix batch — Fees page kisi pending custom due ke "Pay" se bill
+  // banata hai to us due ki pehchan (dueId) aur is bill me uske liye di
+  // gayi rakam (amount — bill me badli ja sakti hai, isliye due ki asal
+  // rakam se alag bhejna zaroori hai) yahan aati hai. Payment bante hi
+  // route in dues ko settle karta hai: poora paisa → is_paid = 1, kam
+  // paisa → due ki rakam utni hi ghat jati hai (baaki pending rehta
+  // hai). Field optional hai — purane clients bina iske bhejte rahe to
+  // bhi chalega; unke dues pehle ki tarah pending hi rahenge. Column
+  // koi nahi hai — ye bhi isAdmission ki tarah sirf payload hai.
+  dueSettlements: z
+    .array(
+      z.object({
+        dueId: z.number().int().positive(),
+        amount: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
 });
 
 function normalizePaymentBreakdown(
@@ -300,6 +319,24 @@ const saveMarksBodySchema = z.object({
         studentId: z.number().int().positive(),
         // null = is student ke marks abhi khaali karne hain / nahi bhare.
         marksObtained: z.number().nullable(),
+        remarks: z.string().nullable().optional(),
+      }),
+    )
+    .min(1),
+});
+
+// Attendance bulk mark (v1.5) — saveMarksBodySchema wala hi pattern.
+// date "YYYY-MM-DD" text hai (schema me examDate wali parampara).
+const DATE_TEXT_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_TEXT_RE = /^\d{4}-\d{2}$/;
+
+const markAttendanceBodySchema = z.object({
+  date: z.string().regex(DATE_TEXT_RE),
+  entries: z
+    .array(
+      z.object({
+        studentId: z.number().int().positive(),
+        status: attendanceStatusSchema,
         remarks: z.string().nullable().optional(),
       }),
     )
@@ -1031,7 +1068,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!result.success) return res.status(400).json(result.error);
       // isAdmission column nahi hai — use breakdown JSON ke andar
       // mehfooz kiya jata hai (upar normalizePaymentBreakdown dekho).
-      const { isAdmission, breakdown, ...paymentData } = result.data;
+      const { isAdmission, breakdown, dueSettlements, ...paymentData } =
+        result.data;
+
+      // Dues-fix — dueSettlements aaye hon to payment banane se PEHLE
+      // har due ki jaanch: due maujood ho, ISI payment wale student ka
+      // ho, aur wo student isi school ka ho. student_dues me school_id
+      // column hai hi nahi, isliye school ki pehchan student ke zariye
+      // hoti hai — DELETE /api/dues/:id (#41) wala hi tareeka. Ek bhi
+      // due galat nikla to payment bane hi nahi (400) — paisa kisi aur
+      // student/school ke due par kabhi settle nahi hoga. Ek hi due
+      // do baar aaye to rakam jud jayegi; pehle se paid due chupchaap
+      // skip hoga (network retry par dohra settle nahi hoga).
+      const settlements: Array<{ due: StudentDues; amount: number }> = [];
+      if (dueSettlements && dueSettlements.length > 0) {
+        const merged: Array<{ dueId: number; amount: number }> = [];
+        for (const settlement of dueSettlements) {
+          if (settlement.amount <= 0) continue;
+          const existing = merged.find((m) => m.dueId === settlement.dueId);
+          if (existing) existing.amount += settlement.amount;
+          else merged.push({ dueId: settlement.dueId, amount: settlement.amount });
+        }
+        for (const { dueId, amount } of merged) {
+          const due = await storage.getStudentDue(dueId);
+          if (
+            !due ||
+            due.studentId == null ||
+            due.studentId !== paymentData.studentId
+          ) {
+            return res
+              .status(400)
+              .json({ message: "Due does not belong to this student" });
+          }
+          const student = await storage.getStudent(due.studentId);
+          if (!student || student.schoolId !== schoolId) {
+            return res
+              .status(400)
+              .json({ message: "Due does not belong to this student" });
+          }
+          if (due.isPaid === 1) continue;
+          settlements.push({ due, amount });
+        }
+      }
+
       const breakdownText = normalizePaymentBreakdown(breakdown, isAdmission);
       const payment = await storage.createFeePayment({
         ...paymentData,
@@ -1040,6 +1119,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
           : {}),
         schoolId,
       });
+
+      // Payment ban gaya — ab dues settle karo. Poora paisa aaya ho to
+      // is_paid = 1 (due Pending Dues se gayab ho jayega); kam aaya ho
+      // to due ki rakam utni hi ghatado aur baaki hissa pending rakho —
+      // isse na kabhi dohra vasool hoga, na due jhootha "paid" hoga.
+      for (const { due, amount } of settlements) {
+        if (amount >= due.amount) {
+          await storage.updateStudentDue(due.id, {
+            isPaid: 1,
+            updatedAt: new Date(),
+          });
+        } else {
+          await storage.updateStudentDue(due.id, {
+            amount: due.amount - amount,
+            updatedAt: new Date(),
+          });
+        }
+      }
+
       res.status(201).json(payment);
     },
   );
@@ -2260,6 +2358,149 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }),
       );
       res.json(enriched);
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Attendance (v1.5 #73–76) — Gibbon/RosarioSIS se seekha design:
+  // hajri roz class-wise EK bulk save me lagti hai, default "present"
+  // (client sab ko present rakh kar sirf exceptions badalta hai), aur
+  // dobara bhejne par wahi din ki hajri update hoti hai (upsert).
+  // Mark karna sirf principal/teacher (marks-entry #68 wala usool —
+  // hajri class-teacher ka kaam hai; accountant ka kaam fees hai).
+  // Padhna: school staff sab; parent sirf apne linked bacche ka
+  // (loadStudentInScope ka † niyam — dusra baccha = 404).
+  // ---------------------------------------------------------------------
+
+  // #73 — ek class ki ek date ki hajri (roster ke saath mili hui).
+  // status null = us din ki hajri abhi lagi hi nahi.
+  app.get(
+    "/api/attendance",
+    requireAuth,
+    requireRole("principal", "teacher", "accountant", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const className =
+        typeof req.query.class === "string" ? req.query.class : undefined;
+      if (!className) {
+        return res.status(400).json({ message: "class query parameter is required" });
+      }
+      const section =
+        typeof req.query.section === "string" ? req.query.section : undefined;
+      const date =
+        typeof req.query.date === "string"
+          ? req.query.date
+          : new Date().toISOString().slice(0, 10);
+      if (!DATE_TEXT_RE.test(date)) {
+        return res.status(400).json({ message: "date must be YYYY-MM-DD" });
+      }
+      const students = await storage.getStudents(schoolId, {
+        class: className,
+        section,
+      });
+      const active = students.filter((student) => student.isActive !== 0);
+      const rows = await storage.getAttendanceForStudents(
+        active.map((student) => student.id),
+        date,
+      );
+      const byStudent = new Map(rows.map((row) => [row.studentId, row]));
+      res.json(
+        active.map((student) => {
+          const row = byStudent.get(student.id);
+          return {
+            studentId: student.id,
+            name: student.name,
+            rollNo: student.rollNo,
+            class: student.class,
+            section: student.section,
+            status: row?.status ?? null,
+            remarks: row?.remarks ?? null,
+            markedBy: row?.markedBy ?? null,
+          };
+        }),
+      );
+    },
+  );
+
+  // #74 — hajri bulk mark/update. Body ke har student ka is school ka
+  // hona lazmi hai; ek bhi bahar ka ho to poora batch reject (400) —
+  // marks #68 wala hi usool, aadha save karke halla nahi.
+  app.post(
+    "/api/attendance",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = markAttendanceBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      for (const entry of result.data.entries) {
+        const student = await storage.getStudent(entry.studentId);
+        if (!student || student.schoolId !== schoolId) {
+          return res.status(400).json({
+            message: "One or more students do not belong to this school",
+          });
+        }
+      }
+      const saved = await storage.markAttendanceBulk(
+        schoolId,
+        req.user!.id,
+        result.data.date,
+        result.data.entries.map((entry) => ({
+          studentId: entry.studentId,
+          status: entry.status,
+          remarks: entry.remarks ?? null,
+        })),
+      );
+      res.json(saved);
+    },
+  );
+
+  // #75 — ek student ki hajri history (month=YYYY-MM diya to sirf wo
+  // mahina, warna saari). Parent: sirf apna linked baccha
+  // (loadStudentInScope — dusra baccha 404).
+  app.get(
+    "/api/students/:id/attendance",
+    requireAuth,
+    requireRole("principal", "teacher", "accountant", "staff", "parent"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const month =
+        typeof req.query.month === "string" ? req.query.month : undefined;
+      if (month !== undefined && !MONTH_TEXT_RE.test(month)) {
+        return res.status(400).json({ message: "month must be YYYY-MM" });
+      }
+      const rows = await storage.getStudentAttendance(
+        loaded.student.id,
+        month,
+      );
+      res.json(rows);
+    },
+  );
+
+  // #76 — ek student ka mahina-summary (present/absent/late/half_day
+  // ginti + percentage). month na diya to chal raha mahina.
+  app.get(
+    "/api/students/:id/attendance/summary",
+    requireAuth,
+    requireRole("principal", "teacher", "accountant", "staff", "parent"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const now = new Date();
+      const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const month =
+        typeof req.query.month === "string" ? req.query.month : currentMonth;
+      if (!MONTH_TEXT_RE.test(month)) {
+        return res.status(400).json({ message: "month must be YYYY-MM" });
+      }
+      const summary = await storage.getStudentAttendanceSummary(
+        loaded.student.id,
+        month,
+      );
+      res.json(summary);
     },
   );
 

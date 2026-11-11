@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, date, real, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, date, real, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -207,6 +207,32 @@ export const marks = pgTable("marks", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Attendance status ki valid values (v1.5) — USER_ROLES/NOTICE_AUDIENCES
+// wala hi pattern: DB me text, code me is enum se enforce.
+export const ATTENDANCE_STATUSES = ["present", "absent", "late", "half_day"] as const;
+export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
+export const attendanceStatusSchema = z.enum(ATTENDANCE_STATUSES);
+
+// §6.10b — Roz ki attendance (v1.5). Ek student ki ek din ki ek hi row —
+// (student_id, date) par unique bandhan; dobara mark karna = usi row ka
+// update (storage bulk-upsert yahi karta hai). date baaki tables ki tarah
+// text string hai ("2026-11-11") taaki mahina-summary sirf prefix se
+// nikal jaye. school_id har parity table ki tarah hai; asal pehchan
+// student se bhi bandhi hai.
+export const attendance = pgTable("attendance", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  studentId: integer("student_id").notNull().references(() => students.id),
+  date: text("date").notNull(),
+  status: text("status").notNull().default("present"),
+  markedBy: integer("marked_by").references(() => users.id),
+  remarks: text("remarks"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  uniqueIndex("attendance_student_date_unique").on(table.studentId, table.date),
+]);
+
 // §6.11 — Transport routes (students.transport_id isi ko point karta hai).
 export const transportRoutes = pgTable("transport_routes", {
   id: serial("id").primaryKey(),
@@ -401,6 +427,14 @@ export const insertMarkSchema = createInsertSchema(marks).omit({
   createdAt: true,
 });
 
+export const insertAttendanceSchema = createInsertSchema(attendance).omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  // Status sirf chaar fixed values me se ek (v1.5).
+  status: attendanceStatusSchema.default("present"),
+});
+
 export const insertTransportRouteSchema = createInsertSchema(transportRoutes).omit({
   id: true,
   createdAt: true,
@@ -472,6 +506,9 @@ export type InsertExam = z.infer<typeof insertExamSchema>;
 
 export type Mark = typeof marks.$inferSelect;
 export type InsertMark = z.infer<typeof insertMarkSchema>;
+
+export type Attendance = typeof attendance.$inferSelect;
+export type InsertAttendance = z.infer<typeof insertAttendanceSchema>;
 
 export type TransportRoute = typeof transportRoutes.$inferSelect;
 export type InsertTransportRoute = z.infer<typeof insertTransportRouteSchema>;

@@ -23,6 +23,13 @@ import Staff from "@/pages/Staff";
 import Settings from "@/pages/Settings";
 import StudentProfile from "@/pages/StudentProfile";
 
+// 📅 Attendance (v1.5): roz ki hajri — class-wise bulk marking
+import Attendance from "@/pages/Attendance";
+
+// 📢 Notices (v1.6): school ki suchnayein — server API Phase 2 se thi,
+// screen ab bani (list sab roles ko, banana principal/teacher ko)
+import Notices from "@/pages/Notices";
+
 // 🟢 EXAM PAGES IMPORT
 import Exams from "@/pages/Exams";
 import ExamResults from "@/pages/ExamResults";
@@ -47,6 +54,8 @@ import {
   Settings as SettingsIcon,
   FileText,
   GraduationCap,
+  CalendarCheck,    // 📅 Attendance (v1.5)
+  Megaphone,        // 📢 Notices (v1.6)
   Award,
   Calculator,
   IndianRupee,      // 🟢 NEW ICON
@@ -74,6 +83,8 @@ function Sidebar({
       : []),
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/students", label: "Students", icon: Users },
+    { href: "/attendance", label: "Attendance", icon: CalendarCheck },
+    { href: "/notices", label: "Notices", icon: Megaphone },
     { href: "/admissions", label: "Admissions", icon: UserPlus },
     { href: "/student-profile", label: "Student Profile", icon: FileText },
     { href: "/fees", label: "Fees & Payments", icon: Banknote },
@@ -133,7 +144,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.4</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.6</div>
     </div>
   );
 }
@@ -244,6 +255,8 @@ function Router() {
             )}
             <Route path="/" component={Dashboard} />
             <Route path="/students" component={Students} />
+            <Route path="/attendance" component={Attendance} />
+            <Route path="/notices" component={Notices} />
             <Route path="/admissions" component={Admissions} />
             <Route path="/student-profile" component={StudentProfile} />
             <Route path="/fees" component={Fees} />

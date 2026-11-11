@@ -47,7 +47,7 @@ export default function Fees() {
   // 404, /api/students aur /api/payments 403; routes se verify).
   // Isliye SA par poora fees layout hi nahi dikhate — Settings wala
   // no-school card dikhega (neeche render me early return dekho).
-  const { user } = useAuth();
+  const { user, school } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
   const [search, setSearch] = useState("");
   const [selectedStudent, setSelectedStudent] = useState<any>(null);
@@ -169,18 +169,27 @@ export default function Fees() {
       const itemNames = extraCharges.map(c => `${c.name} (₹${c.amount})`).join(", ");
       const remarks = itemNames; 
 
-      // REST: POST /api/payments. Body pehle jaisa hi bheja hai, lekin
-      // jaan lo: isAdmission aur breakdown server ke schema me hain hi
-      // nahi, server unhe gira deta hai — iska asar NOTES.md me flag hai.
+      // Dues-fix: bill me jo items kisi pending custom due ke "Pay" se
+      // aaye hain (dueId wale), unki pehchan aur is bill me unke liye
+      // di gayi rakam alag se bhejo. Server payment ke saath hi un
+      // dues ko settle karega — pehle paisa to jud jata tha lekin due
+      // row hamesha pending reh jati thi.
+      const dueSettlements = extraCharges
+        .filter(c => c.dueId && c.amount > 0)
+        .map(c => ({ dueId: c.dueId as number, amount: c.amount }));
+
+      // REST: POST /api/payments — breakdown / isAdmission server ke
+      // schema me hain (Batch A fix), aur dueSettlements dues-fix se.
       await apiPost('/api/payments', {
         studentId: selectedStudent.id,
         amount: totalPayable,
         month: extraCharges.map(c => c.month).filter(Boolean).join(",") || "Misc",
         year: parseInt(year),
         receiptNo,
-        isAdmission: isAdmissionPayment, 
+        isAdmission: isAdmissionPayment,
         remarks: remarks,
-        breakdown: { extras: extraCharges }
+        breakdown: { extras: extraCharges },
+        dueSettlements: dueSettlements.length ? dueSettlements : undefined
       });
       
       toast({ title: "Success", description: "Payment Saved!" });
@@ -227,6 +236,33 @@ export default function Fees() {
   const admNotSet = admTotal <= 0;
   const isAdmFullyPaid = !admNotSet && admBalance <= 0;
   const admDue = !admNotSet && admBalance > 0;
+
+  // 📲 WhatsApp Defaulter Reminder (v1.6) — client-only, koi API
+  // kharcha nahi: wa.me link parent ke mobile par khulta hai, sandesh
+  // pehle se likha hota hai. Kul baaki = admission balance (agar due
+  // hai) + saare pending custom dues.
+  // Parent ka mobile = student record ka `contact` field (students
+  // table ka ekmatra mobile column — server ki search bhi yahi
+  // istemal karti hai; receipt wala sendWhatsApp bhi yahi leta hai).
+  const duesTotal = (status.pendingDues || []).reduce(
+    (sum: number, d: any) => sum + (Number(d.amount) || 0),
+    0,
+  );
+  const totalDue = (admDue ? admBalance : 0) + duesTotal;
+  const schoolName = schoolInfo.name || school?.name || "School Guardian Suite";
+  const parentMobileDigits = String(selectedStudent?.contact || "").replace(/\D/g, "");
+  const parentMobile =
+    parentMobileDigits.length === 10
+      ? `91${parentMobileDigits}`
+      : parentMobileDigits.length > 10
+        ? parentMobileDigits
+        : "";
+  const waReminderUrl =
+    totalDue > 0 && parentMobile
+      ? `https://wa.me/${parentMobile}?text=${encodeURIComponent(
+          `Namaste,\n${schoolName} se suchna hai ki aapke bacche ${selectedStudent.name} (Class ${selectedStudent.class}) ki kul ₹${totalDue} fee abhi baaki hai.\nKripya jald se jald school me jama karne ka kasht karein. Koi sawal ho to school se sampark karein.\nDhanyavaad,\n${schoolName}`,
+        )}`
+      : "";
 
   // Super Admin ke liye poora page hi no-school card hai (ye early
   // return saare hooks ke BAAD hai — hooks hamesha ek jaise chalte hain).
@@ -362,6 +398,28 @@ export default function Fees() {
                                     ))}
                                 </div>
                             ) : <div className="p-4 text-center text-xs text-gray-400">No pending dues.</div>}
+                            {/* 📲 WhatsApp Reminder (v1.6): dues hon to parent ko
+                                ek-tap reminder. Number na ho to button ki jagah
+                                saaf wajah — jhoota button nahi. */}
+                            {totalDue > 0 && (
+                                <div className="border-t bg-green-50 p-3 flex flex-wrap items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                        <div className="font-bold text-sm text-green-900">WhatsApp Reminder</div>
+                                        <div className="text-[11px] text-green-800">Kul baaki ₹{totalDue} — parent ko pehle se likha sandesh bhejein.</div>
+                                    </div>
+                                    {parentMobile ? (
+                                        <a href={waReminderUrl} target="_blank" rel="noreferrer" className="shrink-0">
+                                            <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white">
+                                                <MessageCircle className="h-4 w-4 mr-1" /> Reminder Bhejein
+                                            </Button>
+                                        </a>
+                                    ) : (
+                                        <span className="text-[11px] font-medium text-amber-700 bg-amber-100 border border-amber-200 rounded px-2 py-1">
+                                            Parent ka mobile number is student ke record me nahi hai — pehle number jodein.
+                                        </span>
+                                    )}
+                                </div>
+                            )}
                         </CardContent>
                     </Card>
 

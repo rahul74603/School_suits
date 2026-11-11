@@ -1,7 +1,7 @@
 import { 
     users, schools, students, feeStructures, feePayments, staff, studentDues,
     parentStudents,
-    exams, marks, transportRoutes, additionalFees, salaryPayments, expenses,
+    exams, marks, attendance, transportRoutes, additionalFees, salaryPayments, expenses,
     studentDocuments, staffDocuments, notices,
     type User, type InsertUser, type School, type InsertSchool,
     type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
@@ -9,6 +9,7 @@ import {
     type StudentDues, type InsertStudentDues,
     type ParentStudent, type InsertParentStudent,
     type Exam, type InsertExam, type Mark, type InsertMark,
+    type Attendance, type InsertAttendance,
     type TransportRoute, type InsertTransportRoute,
     type AdditionalFee, type InsertAdditionalFee,
     type SalaryPayment, type InsertSalaryPayment,
@@ -209,6 +210,35 @@ function summarizePaymentsForStatus(
 }
 
 // 1. Interface Definition
+// ---------------------------------------------------------------------------
+// Attendance summary helper (v1.5) — DatabaseStorage aur MockStorage dono
+// yahi istemal karte hain taaki hisaab har jagah ek jaisa rahe.
+// Percentage ka niyam: present = 1, late = 1 (der se aaya par aaya),
+// half_day = 0.5, absent = 0. totalMarked = 0 ho to percentage 0.
+// ---------------------------------------------------------------------------
+export function summarizeAttendance(
+  month: string,
+  rows: Attendance[],
+): {
+  month: string;
+  totalMarked: number;
+  present: number;
+  absent: number;
+  late: number;
+  halfDay: number;
+  percentage: number;
+} {
+  const present = rows.filter((row) => row.status === "present").length;
+  const absent = rows.filter((row) => row.status === "absent").length;
+  const late = rows.filter((row) => row.status === "late").length;
+  const halfDay = rows.filter((row) => row.status === "half_day").length;
+  const totalMarked = rows.length;
+  const counted = present + late + halfDay * 0.5;
+  const percentage =
+    totalMarked > 0 ? Math.round((counted / totalMarked) * 1000) / 10 : 0;
+  return { month, totalMarked, present, absent, late, halfDay, percentage };
+}
+
 export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
@@ -296,6 +326,10 @@ export interface IStorage {
   getStudentDues(studentId: number): Promise<StudentDues[]>;
   getStudentDue(id: number): Promise<StudentDues | undefined>;
   createStudentDue(due: InsertStudentDues): Promise<StudentDues>;
+  // Dues-fix batch: due ko paid mark karna / partial payment par rakam
+  // ghatana — pehle iske liye koi method hi nahi tha, isliye Fees page
+  // ka paisa jud jane ke baad bhi due pending reh jata tha.
+  updateStudentDue(id: number, due: Partial<InsertStudentDues>): Promise<StudentDues | undefined>;
   deleteStudentDue(id: number): Promise<void>;
 
   // Additional fees (§5.5 #42–44)
@@ -341,6 +375,21 @@ export interface IStorage {
   getMarksForStudents(examId: number, studentIds: number[]): Promise<Mark[]>;
   saveExamMarks(examId: number, schoolId: number, entries: Array<{ studentId: number; marksObtained: number | null; remarks?: string | null }>): Promise<Mark[]>;
   getStudentMarks(studentId: number): Promise<Mark[]>;
+
+  // Attendance (v1.5) — bulk mark/upsert saveExamMarks wale hi pattern
+  // par: (student_id, date) par maujood row update, warna nayi row.
+  markAttendanceBulk(schoolId: number, markedBy: number, date: string, entries: Array<{ studentId: number; status: string; remarks?: string | null }>): Promise<Attendance[]>;
+  getAttendanceForStudents(studentIds: number[], date: string): Promise<Attendance[]>;
+  getStudentAttendance(studentId: number, monthPrefix?: string): Promise<Attendance[]>;
+  getStudentAttendanceSummary(studentId: number, monthPrefix: string): Promise<{
+    month: string;
+    totalMarked: number;
+    present: number;
+    absent: number;
+    late: number;
+    halfDay: number;
+    percentage: number;
+  }>;
 
   // Notices (§5.8 #70–72)
   getNotices(schoolId: number): Promise<Notice[]>;
@@ -721,6 +770,11 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async updateStudentDue(id: number, dueUpdate: Partial<InsertStudentDues>): Promise<StudentDues | undefined> {
+    const [updated] = await db.update(studentDues).set(dueUpdate).where(eq(studentDues.id, id)).returning();
+    return updated;
+  }
+
   async deleteStudentDue(id: number): Promise<void> {
     await db.delete(studentDues).where(eq(studentDues.id, id));
   }
@@ -861,6 +915,60 @@ export class DatabaseStorage implements IStorage {
 
   async getStudentMarks(studentId: number): Promise<Mark[]> {
     return await db.select().from(marks).where(eq(marks.studentId, studentId));
+  }
+
+  // Attendance bulk mark (v1.5) — saveExamMarks wala hi upsert pattern:
+  // (student_id, date) par pehle select, maujood ho to update warna
+  // insert. (Schema me is pair par unique index bhi hai — dohra record
+  // DB star par bhi nahi ban sakta.)
+  async markAttendanceBulk(schoolId: number, markedBy: number, date: string, entries: Array<{ studentId: number; status: string; remarks?: string | null }>): Promise<Attendance[]> {
+    const saved: Attendance[] = [];
+    for (const entry of entries) {
+      const [existing] = await db.select().from(attendance)
+        .where(and(eq(attendance.studentId, entry.studentId), eq(attendance.date, date)));
+      if (existing) {
+        const [updated] = await db.update(attendance)
+          .set({ status: entry.status, markedBy, remarks: entry.remarks ?? null, updatedAt: new Date() })
+          .where(eq(attendance.id, existing.id))
+          .returning();
+        saved.push(updated);
+      } else {
+        const [created] = await db.insert(attendance)
+          .values({ schoolId, studentId: entry.studentId, date, status: entry.status, markedBy, remarks: entry.remarks ?? null })
+          .returning();
+        saved.push(created);
+      }
+    }
+    return saved;
+  }
+
+  async getAttendanceForStudents(studentIds: number[], date: string): Promise<Attendance[]> {
+    if (studentIds.length === 0) return [];
+    const rows = await db.select().from(attendance).where(eq(attendance.date, date));
+    const wanted = new Set(studentIds);
+    return rows.filter((row) => wanted.has(row.studentId));
+  }
+
+  async getStudentAttendance(studentId: number, monthPrefix?: string): Promise<Attendance[]> {
+    const rows = await db.select().from(attendance).where(eq(attendance.studentId, studentId));
+    const filtered = monthPrefix
+      ? rows.filter((row) => row.date.startsWith(monthPrefix))
+      : rows;
+    // Nayi tareekh pehle (history list ke liye).
+    return filtered.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  }
+
+  async getStudentAttendanceSummary(studentId: number, monthPrefix: string): Promise<{
+    month: string;
+    totalMarked: number;
+    present: number;
+    absent: number;
+    late: number;
+    halfDay: number;
+    percentage: number;
+  }> {
+    const rows = await this.getStudentAttendance(studentId, monthPrefix);
+    return summarizeAttendance(monthPrefix, rows);
   }
 
   async getNotices(schoolId: number): Promise<Notice[]> {
@@ -1033,6 +1141,7 @@ export class MockStorage implements IStorage {
   private studentDuesData: StudentDues[] = [];
   private examsData: Exam[] = [];
   private marksData: Mark[] = [];
+  private attendanceData: Attendance[] = [];
   private transportRoutesData: TransportRoute[] = [];
   private additionalFeesData: AdditionalFee[] = [];
   private salaryPaymentsData: SalaryPayment[] = [];
@@ -1050,6 +1159,7 @@ export class MockStorage implements IStorage {
   private nextStudentDueId = 1;
   private nextExamId = 1;
   private nextMarkId = 1;
+  private nextAttendanceId = 1;
   private nextTransportRouteId = 1;
   private nextAdditionalFeeId = 1;
   private nextSalaryPaymentId = 1;
@@ -1410,6 +1520,14 @@ export class MockStorage implements IStorage {
     return created;
   }
 
+  async updateStudentDue(id: number, dueUpdate: Partial<InsertStudentDues>): Promise<StudentDues | undefined> {
+    const index = this.studentDuesData.findIndex((item) => item.id === id);
+    if (index < 0) return undefined;
+    const updated: StudentDues = { ...this.studentDuesData[index], ...dueUpdate };
+    this.studentDuesData[index] = updated;
+    return updated;
+  }
+
   async deleteStudentDue(id: number): Promise<void> {
     this.studentDuesData = this.studentDuesData.filter((item) => item.id !== id);
   }
@@ -1578,6 +1696,60 @@ export class MockStorage implements IStorage {
 
   async getStudentMarks(studentId: number): Promise<Mark[]> {
     return this.marksData.filter((item) => item.studentId === studentId);
+  }
+
+  async markAttendanceBulk(schoolId: number, markedBy: number, date: string, entries: Array<{ studentId: number; status: string; remarks?: string | null }>): Promise<Attendance[]> {
+    const saved: Attendance[] = [];
+    for (const entry of entries) {
+      const existing = this.attendanceData.find(
+        (item) => item.studentId === entry.studentId && item.date === date,
+      );
+      if (existing) {
+        existing.status = entry.status;
+        existing.markedBy = markedBy;
+        existing.remarks = entry.remarks ?? null;
+        existing.updatedAt = new Date();
+        saved.push(existing);
+      } else {
+        const created: Attendance = {
+          id: this.nextAttendanceId++, schoolId, studentId: entry.studentId,
+          date, status: entry.status, markedBy, remarks: entry.remarks ?? null,
+          createdAt: new Date(), updatedAt: new Date(),
+        };
+        this.attendanceData.push(created);
+        saved.push(created);
+      }
+    }
+    return saved;
+  }
+
+  async getAttendanceForStudents(studentIds: number[], date: string): Promise<Attendance[]> {
+    return this.attendanceData.filter(
+      (item) => item.date === date && studentIds.includes(item.studentId),
+    );
+  }
+
+  async getStudentAttendance(studentId: number, monthPrefix?: string): Promise<Attendance[]> {
+    return this.attendanceData
+      .filter(
+        (item) =>
+          item.studentId === studentId &&
+          (!monthPrefix || item.date.startsWith(monthPrefix)),
+      )
+      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  }
+
+  async getStudentAttendanceSummary(studentId: number, monthPrefix: string): Promise<{
+    month: string;
+    totalMarked: number;
+    present: number;
+    absent: number;
+    late: number;
+    halfDay: number;
+    percentage: number;
+  }> {
+    const rows = await this.getStudentAttendance(studentId, monthPrefix);
+    return summarizeAttendance(monthPrefix, rows);
   }
 
   async getNotices(schoolId: number): Promise<Notice[]> {

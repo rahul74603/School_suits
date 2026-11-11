@@ -27,9 +27,9 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter, School } from "lucide-react";
+import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter, School, ArrowUpCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { apiGet, apiPut } from "@/lib/api";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 
@@ -41,6 +41,9 @@ export default function Students() {
   // karte — Settings wala no-school card dikhega, lal toast nahi.
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  // 🎓 Promotion sirf Principal kar sakta hai — server par bhi
+  // POST /api/students/promote requireRole("principal") hai.
+  const isPrincipal = user?.role === "principal";
 
   // 🟢 Filter States
   const [search, setSearch] = useState("");
@@ -48,6 +51,16 @@ export default function Students() {
   const [sectionFilter, setSectionFilter] = useState("ALL");
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // 🎓 Promotion State (v1.6) — server API Phase 2 se thi
+  // (POST /api/students/promote), screen/button ab bana.
+  const PROMOTE_CLASSES = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+  const [isPromoteOpen, setIsPromoteOpen] = useState(false);
+  const [promoteFrom, setPromoteFrom] = useState("");
+  const [promoteTo, setPromoteTo] = useState("");
+  const [promoteList, setPromoteList] = useState<any[]>([]);
+  const [promoteLoading, setPromoteLoading] = useState(false);
+  const [promoting, setPromoting] = useState(false);
 
   // Transport State
   const [isTransportOpen, setIsTransportOpen] = useState(false);
@@ -155,6 +168,65 @@ export default function Students() {
     }
   };
 
+  // 🎓 Promotion: "from" class ke ACTIVE students ki list.
+  // GET /api/students server par pehle se sirf active (isActive=1)
+  // students deta hai — isliye ye ginti hi promote hone walon ki hai.
+  const loadPromoteClass = async (fromClass: string) => {
+    setPromoteFrom(fromClass);
+    setPromoteList([]);
+    if (!fromClass) return;
+    setPromoteLoading(true);
+    try {
+      const data = await apiGet<any[]>(
+        `/api/students?class=${encodeURIComponent(fromClass)}`,
+      );
+      setPromoteList(data || []);
+    } catch (e) {
+      toast({
+        title: "Error",
+        description: "Class ki student list nahi aayi — dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setPromoteLoading(false);
+  };
+
+  const openPromoteDialog = () => {
+    setPromoteFrom("");
+    setPromoteTo("");
+    setPromoteList([]);
+    setIsPromoteOpen(true);
+  };
+
+  const doPromote = async () => {
+    if (!promoteFrom || !promoteTo || promoteFrom === promoteTo) return;
+    if (promoteList.length === 0) return;
+    setPromoting(true);
+    try {
+      // REST: POST /api/students/promote { studentIds, targetClass }
+      // Jawab: { message, promotedCount }. Server dusri school ke IDs
+      // khud gira deta hai, isliye asal ginti promotedCount se hi lo.
+      const res = await apiPost<any>("/api/students/promote", {
+        studentIds: promoteList.map((s: any) => s.id),
+        targetClass: promoteTo,
+      });
+      const count = res?.promotedCount ?? promoteList.length;
+      toast({
+        title: "Promotion ho gaya",
+        description: `${count} student(s) Class ${promoteFrom} se Class ${promoteTo} me bhej diye gaye.`,
+      });
+      setIsPromoteOpen(false);
+      fetchStudents(); // Directory refresh
+    } catch (e) {
+      toast({
+        title: "Promotion nahi hua",
+        description: "Kuch galat hua — koi badlav nahi hua hoga. Dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setPromoting(false);
+  };
+
   // Reset Button
   const handleReset = () => {
       setSearch("");
@@ -169,10 +241,18 @@ export default function Students() {
           <GraduationCap className="h-8 w-8 text-blue-600" /> Students Directory
         </h1>
 
-        <Button onClick={fetchStudents} variant="outline" size="sm" className="shrink-0 self-start sm:self-auto">
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-          Refresh List
-        </Button>
+        <div className="flex flex-wrap gap-2 shrink-0 self-start sm:self-auto">
+          {isPrincipal && (
+            <Button onClick={openPromoteDialog} size="sm" className="bg-green-600 hover:bg-green-700">
+              <ArrowUpCircle className="h-4 w-4 mr-2" />
+              Promote Students
+            </Button>
+          )}
+          <Button onClick={fetchStudents} variant="outline" size="sm">
+            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+            Refresh List
+          </Button>
+        </div>
       </div>
 
       {isSuperAdmin ? (
@@ -334,6 +414,104 @@ export default function Students() {
 
       </>
       )}
+
+      {/* 🎓 Promotion Popup (v1.6) — class chuno, ginti dekho,
+          pakka karke bhejo. Session server is route se NAHI badalta
+          (session school-level setting hai, Settings se badalta hai) —
+          ye sirf class badalta hai. */}
+      <Dialog open={isPromoteOpen} onOpenChange={setIsPromoteOpen}>
+        <DialogContent className="bg-white">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ArrowUpCircle className="h-5 w-5 text-green-600" /> Promote Students
+            </DialogTitle>
+            <DialogDescription>
+              Ek poori class ke saare active students ko agli (ya kisi
+              dusri) class me bhejein — saal ke ant ke liye.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1 min-w-0">
+              <Label className="text-xs font-bold text-gray-500 uppercase">Kaunsi class se</Label>
+              <Select value={promoteFrom} onValueChange={(v) => void loadPromoteClass(v)}>
+                <SelectTrigger className="bg-white w-full">
+                  <SelectValue placeholder="Class chunein" />
+                </SelectTrigger>
+                <SelectContent className="bg-white z-[9999] shadow-xl border-gray-200">
+                  {PROMOTE_CLASSES.map((c) => (
+                    <SelectItem key={c} value={c}>Class {c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1 min-w-0">
+              <Label className="text-xs font-bold text-gray-500 uppercase">Kaunsi class me bhejein</Label>
+              <Select value={promoteTo} onValueChange={setPromoteTo}>
+                <SelectTrigger className="bg-white w-full">
+                  <SelectValue placeholder="Target class chunein" />
+                </SelectTrigger>
+                <SelectContent className="bg-white z-[9999] shadow-xl border-gray-200">
+                  {PROMOTE_CLASSES.filter((c) => c !== promoteFrom).map((c) => (
+                    <SelectItem key={c} value={c}>Class {c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {promoteFrom && (
+              <div className="rounded-md border bg-slate-50 p-3 text-sm text-slate-700 space-y-1">
+                {promoteLoading ? (
+                  <p>Student ginti aa rahi hai…</p>
+                ) : (
+                  <>
+                    <p>
+                      Class <b>{promoteFrom}</b> me kul{" "}
+                      <b>{promoteList.length}</b> active student(s) hain
+                      {promoteTo ? (
+                        <>
+                          {" "}— ye sab Class <b>{promoteTo}</b> me chale
+                          jayenge.
+                        </>
+                      ) : (
+                        "."
+                      )}
+                    </p>
+                    <p className="text-xs text-amber-700">
+                      Dhyaan: promotion ke baad ye badlav ek click me wapas
+                      nahi hoga. Galti ho jaye to students ko haath se sahi
+                      class me wapas bhejna padega.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsPromoteOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void doPromote()}
+              className="bg-green-600 hover:bg-green-700"
+              disabled={
+                promoting ||
+                promoteLoading ||
+                !promoteFrom ||
+                !promoteTo ||
+                promoteFrom === promoteTo ||
+                promoteList.length === 0
+              }
+            >
+              {promoting
+                ? "Promote ho raha hai…"
+                : `Pakka — ${promoteList.length} Students ko Promote Karein`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Transport Popup */}
       <Dialog open={isTransportOpen} onOpenChange={setIsTransportOpen}>

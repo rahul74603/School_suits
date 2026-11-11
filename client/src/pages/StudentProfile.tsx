@@ -29,6 +29,7 @@ import {
   FileCheck,
   FileX,
   School,
+  CalendarCheck,
   ZoomIn,
   ZoomOut,
   RotateCcw
@@ -62,6 +63,9 @@ export default function StudentProfile() {
 
   const [student, setStudent] = useState<any>(null);
   const [documents, setDocuments] = useState<any[]>([]);
+  // Attendance summary (v1.5) — chal rahe mahine ka hisaab; endpoint na
+  // mile (purana server) to null rahega aur section dikhega hi nahi.
+  const [attendanceSummary, setAttendanceSummary] = useState<any>(null);
 
   // v1.3: in-app photo viewer ki state. Pehle documents window.open se
   // naye page me asal size par khulte the — phone par photo bahut
@@ -122,6 +126,7 @@ export default function StudentProfile() {
     if (!s) {
       setStudent(null);
       setDocuments([]);
+      setAttendanceSummary(null);
       toast({ title: "Not Found", description: "No student found." });
       return;
     }
@@ -129,6 +134,14 @@ export default function StudentProfile() {
     setStudent(s);
     const docs = await apiGet<any[]>(`/api/students/${s.id}/documents`);
     setDocuments((docs || []).map(adaptDoc));
+    // Attendance summary (v1.5) — fail ho to profile nahi rukti,
+    // sirf section chhup jata hai.
+    try {
+      const att = await apiGet<any>(`/api/students/${s.id}/attendance/summary`);
+      setAttendanceSummary(att ?? null);
+    } catch {
+      setAttendanceSummary(null);
+    }
     setSuggestions([]);
     toast({ title: "Success", description: `Student loaded: ${s.name}` });
   };
@@ -582,6 +595,50 @@ export default function StudentProfile() {
                 );
               })}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Attendance Summary (v1.5) — chal rahe mahine ki hajri ka hisaab.
+          Parent bhi yahi dekhta hai (server parent ko sirf uske linked
+          bacche ka summary deta hai — dusra baccha 404). */}
+      {student && attendanceSummary && (
+        <Card className="relative z-10 border-t-4 border-t-teal-600">
+          <CardHeader className="bg-teal-50 py-3">
+            <CardTitle className="text-base text-teal-800 flex items-center gap-2">
+              <CalendarCheck className="h-4 w-4" /> Attendance — Is Mahina ({attendanceSummary.month})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {attendanceSummary.totalMarked > 0 ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2 text-sm">
+                  <span className="rounded-full bg-green-100 text-green-800 px-3 py-1 font-medium">
+                    Present: {attendanceSummary.present}
+                  </span>
+                  <span className="rounded-full bg-red-100 text-red-800 px-3 py-1 font-medium">
+                    Absent: {attendanceSummary.absent}
+                  </span>
+                  <span className="rounded-full bg-amber-100 text-amber-800 px-3 py-1 font-medium">
+                    Late: {attendanceSummary.late}
+                  </span>
+                  <span className="rounded-full bg-violet-100 text-violet-800 px-3 py-1 font-medium">
+                    Half Day: {attendanceSummary.halfDay}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-700">
+                  Kul hajri:{" "}
+                  <span className="font-bold text-teal-700">
+                    {attendanceSummary.percentage}%
+                  </span>{" "}
+                  ({attendanceSummary.totalMarked} din mark hue)
+                </p>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">
+                Is mahine ki hajri abhi lagi nahi hai.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
