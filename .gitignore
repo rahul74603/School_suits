@@ -41,3 +41,8 @@ vite.config.ts.*
 
 # Test / coverage output
 coverage/
+
+# Android release signing — kabhi repo me nahi
+*.jks
+*.keystore
+keystore.properties
