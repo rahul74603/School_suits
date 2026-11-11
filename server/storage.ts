@@ -440,4 +440,13 @@ export class MockStorage implements IStorage {
 
 // 4. Export Instance
 const hasDatabaseUrl = Boolean(process.env.DATABASE_URL?.trim());
-export const storage: IStorage = hasDatabaseUrl ? new DatabaseStorage() : new MockStorage();
+// MockStorage is ONLY for explicit local development (USE_MOCK_STORAGE=1).
+// It must never be selected silently: its data is in-memory and is lost on
+// restart, which would silently discard a school's real records.
+const useMockStorage = process.env.USE_MOCK_STORAGE === "1";
+if (!useMockStorage && !hasDatabaseUrl) {
+  throw new Error(
+    "DATABASE_URL is not set. Set it, or set USE_MOCK_STORAGE=1 for throwaway local development."
+  );
+}
+export const storage: IStorage = useMockStorage ? new MockStorage() : new DatabaseStorage();

@@ -67,7 +67,7 @@ function Sidebar() {
     <div className="w-64 bg-slate-900 text-white flex flex-col h-screen fixed left-0 top-0 shadow-xl z-50">
       <div className="p-6 border-b border-slate-800">
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <span className="text-blue-500">🎓</span> SchoolMate
+          <span className="text-blue-500">🎓</span> School Guardian Suite
         </h1>
       </div>
 
