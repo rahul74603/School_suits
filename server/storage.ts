@@ -16,9 +16,196 @@ import {
     type StudentDocument, type InsertStudentDocument,
     type Notice, type InsertNotice
  } from "@shared/schema";
-import { eq, ilike, and } from "drizzle-orm";
+import { eq, ilike, and, or } from "drizzle-orm";
 import { db } from "./db";
 import * as schema from "@shared/schema";
+
+// ---------------------------------------------------------------------------
+// Phase 3 Batch A fix — payment breakdown helpers (getStudentStatus ke liye).
+//
+// Fees page ek bill ki EK payment banata hai: remarks me saari items ki
+// string jati hai aur item-wise hisaab `breakdown` (JSON text) me:
+//   { extras: [{ name, amount, type, month }] }
+// type ke asal values Fees.tsx se hain: "Tuition" (name "Tuition: April"),
+// "Transport Fee" (name "Bus: April"), "Admission Fee", "Due".
+// Item ka `month` ek mahine ka naam hota hai ("April"); payment ki apni
+// `month` field comma-judi ho sakti hai ("April,May") ya "Misc".
+//
+// Purana getStudentStatus mahine ko "paid" sirf tab manta tha jab remarks
+// bilkul "TUITION_FEE"/"TRANSPORT_FEE"/"ADMISSION_FEE" ho — page ki lambi
+// remarks string isse kabhi match nahi karti thi, isliye fees bharne ke
+// baad bhi mahina "due" dikhta tha. Neeche wala helper pehle breakdown
+// dekhta hai, aur jahan breakdown na ho wahan purana remarks-equality
+// raasta bilkul pehle jaisa chalta hai.
+//
+// Saara parsing defensive hai: kharab JSON / ajeeb shape par null ya
+// skip — crash kabhi nahi.
+// ---------------------------------------------------------------------------
+
+type PaymentBreakdownItem = {
+  name?: unknown;
+  amount?: unknown;
+  type?: unknown;
+  month?: unknown;
+};
+
+type ParsedPaymentBreakdown = {
+  extras: PaymentBreakdownItem[];
+  isAdmission: boolean;
+};
+
+function parsePaymentBreakdown(
+  raw: string | null | undefined,
+): ParsedPaymentBreakdown | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const extras = Array.isArray((parsed as { extras?: unknown }).extras)
+      ? ((parsed as { extras: PaymentBreakdownItem[] }).extras)
+      : [];
+    return {
+      extras,
+      isAdmission: (parsed as { isAdmission?: unknown }).isAdmission === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+type StatusMonth = {
+  name: string;
+  tuitionStatus: "paid" | "due" | "future";
+  transportStatus: "paid" | "due" | "future";
+  extras?: Array<{
+    name: string;
+    amount: number;
+    status: "paid" | "due" | "future";
+  }>;
+};
+
+const STATUS_MONTH_NAMES = [
+  "April", "May", "June", "July", "August", "September",
+  "October", "November", "December", "January", "February", "March",
+];
+
+// Ek student ke saal bhar ke payments se do cheezein nikalta hai:
+// mahino ki tuition/transport paid halat, aur admission me kul jama
+// rakam. DatabaseStorage aur MockStorage dono yahi istemal karte hain
+// taaki dono ki status hamesha ek jaisi rahe.
+function summarizePaymentsForStatus(
+  payments: Array<{
+    amount: number;
+    month: string;
+    remarks: string | null;
+    breakdown?: string | null;
+  }>,
+): { months: StatusMonth[]; admissionPaidSoFar: number } {
+  const months: StatusMonth[] = STATUS_MONTH_NAMES.map((name) => ({
+    name,
+    tuitionStatus: "due",
+    transportStatus: "due",
+  }));
+  let admissionPaidSoFar = 0;
+
+  // Item ka apna month pehle; na ho to payment ki month string
+  // (comma-judi ho sakti hai) ke saare mahine.
+  const targetMonths = (
+    itemMonth: unknown,
+    paymentMonth: string,
+  ): StatusMonth[] => {
+    const names =
+      typeof itemMonth === "string" && itemMonth
+        ? [itemMonth]
+        : paymentMonth
+            .split(",")
+            .map((part) => part.trim())
+            .filter(Boolean);
+    return names
+      .map((name) => months.find((m) => m.name === name))
+      .filter((m): m is StatusMonth => m != null);
+  };
+
+  for (const payment of payments) {
+    const bd = parsePaymentBreakdown(payment.breakdown);
+
+    if (bd && bd.extras.length > 0) {
+      let sawAdmissionItem = false;
+      for (const item of bd.extras) {
+        const amount =
+          typeof item.amount === "number" && Number.isFinite(item.amount)
+            ? item.amount
+            : 0;
+
+        if (item.type === "Admission Fee") {
+          // Admission ka paisa mahine se nahi judta — seedha balance
+          // kam karta hai.
+          sawAdmissionItem = true;
+          admissionPaidSoFar += amount;
+          continue;
+        }
+
+        const targets = targetMonths(item.month, payment.month);
+        if (item.type === "Tuition") {
+          targets.forEach((m) => {
+            m.tuitionStatus = "paid";
+          });
+        } else if (item.type === "Transport Fee") {
+          targets.forEach((m) => {
+            m.transportStatus = "paid";
+          });
+        } else if (targets[0]) {
+          // "Due" ya koi aur item — purane extras wale raaste ki tarah
+          // pehle matching mahine par paid extra ke roop me dikhao.
+          if (!targets[0].extras) targets[0].extras = [];
+          targets[0].extras.push({
+            name:
+              typeof item.name === "string" && item.name
+                ? item.name
+                : payment.remarks || "Other Fee",
+            amount,
+            status: "paid",
+          });
+        }
+      }
+      // Breakdown me admission item na ho lekin payload par isAdmission
+      // flag mehfooz ho (routes use breakdown JSON me rakhta hai) to
+      // pura amount admission me gino.
+      if (!sawAdmissionItem && bd.isAdmission) {
+        admissionPaidSoFar += payment.amount ?? 0;
+      }
+      continue;
+    }
+
+    if (bd && bd.isAdmission) {
+      admissionPaidSoFar += payment.amount ?? 0;
+      continue;
+    }
+
+    // Purana raasta — remarks equality, bilkul pehle jaisa behaviour.
+    if (payment.remarks === "ADMISSION_FEE") {
+      admissionPaidSoFar += payment.amount ?? 0;
+      continue;
+    }
+    const month = months.find((m) => m.name === payment.month);
+    if (month) {
+      if (payment.remarks === "TUITION_FEE") {
+        month.tuitionStatus = "paid";
+      } else if (payment.remarks === "TRANSPORT_FEE") {
+        month.transportStatus = "paid";
+      } else {
+        if (!month.extras) month.extras = [];
+        month.extras.push({
+          name: payment.remarks || "Other Fee",
+          amount: payment.amount ?? 0,
+          status: "paid",
+        });
+      }
+    }
+  }
+
+  return { months, admissionPaidSoFar };
+}
 
 // 1. Interface Definition
 export interface IStorage {
@@ -56,7 +243,10 @@ export interface IStorage {
   
   getDefaulters(schoolId: number, classStr?: string, month?: string): Promise<{ studentId: number, name: string, amountPending: number }[]> ;
   
-  getStaff(schoolId: number): Promise<Staff[]>;
+  // Default: sirf active staff (salary/pending aur dashboard stats isi
+  // par nirbhar hain). Staff page ki list ke liye includeInactive: true
+  // bhejo — wahan status filters ko inactive staff bhi chahiye.
+  getStaff(schoolId: number, options?: { includeInactive?: boolean }): Promise<Staff[]>;
   createStaff(staff: InsertStaff): Promise<Staff>;
   
   getStudentStatus(studentId: number, classStr: string, year: number): Promise<{
@@ -274,7 +464,19 @@ export class DatabaseStorage implements IStorage {
     
     if (filters?.class && filters.class !== 'all') conditions.push(eq(students.class, filters.class));
     if (filters?.section && filters.section !== 'all') conditions.push(eq(students.section, filters.section));
-    if (filters?.search) conditions.push(ilike(students.name, `%${filters.search}%`));
+    // Search sirf naam par thi — page "Name, Adm No, Mobile..." wadha
+    // karta hai. Ab admission no aur contact (students table ka ekmatra
+    // mobile column) par bhi khoj hoti hai.
+    if (filters?.search) {
+      const term = `%${filters.search}%`;
+      conditions.push(
+        or(
+          ilike(students.name, term),
+          ilike(students.admissionNo, term),
+          ilike(students.contact, term),
+        )!,
+      );
+    }
 
     return await db.select().from(students).where(and(...conditions));
   }
@@ -320,7 +522,10 @@ export class DatabaseStorage implements IStorage {
     return [];
   }
 
-  async getStaff(schoolId: number): Promise<Staff[]> {
+  async getStaff(schoolId: number, options?: { includeInactive?: boolean }): Promise<Staff[]> {
+    if (options?.includeInactive) {
+      return await db.select().from(staff).where(eq(staff.schoolId, schoolId));
+    }
     return await db.select().from(staff).where(and(eq(staff.schoolId, schoolId), eq(staff.isActive, 1)));
   }
 
@@ -369,55 +574,16 @@ export class DatabaseStorage implements IStorage {
     const payments = await db.select().from(feePayments)
       .where(and(eq(feePayments.studentId, studentId), eq(feePayments.year, year)));
 
-    const admissionPayments = payments.filter(p => p.remarks === "ADMISSION_FEE");
+    // Phase 3 Batch A fix: hisaab ab shared helper se — helper pehle
+    // payment ke breakdown (JSON) ko dekhta hai, isliye Fees page ki
+    // ek-bill-ek-payment wali receipts se bhi mahine "paid" honge aur
+    // admission balance ghatega. Bina breakdown wali purani payments
+    // ke liye remarks-equality wala purana raasta helper ke andar
+    // bilkul pehle jaisa chalta hai.
+    const { months, admissionPaidSoFar } = summarizePaymentsForStatus(payments);
     const admissionTotal = feeStructure.admissionFee ?? 0;
-    
-    const admissionPaidSoFar = admissionPayments.reduce((sum, p) => sum + (p.amount ?? 0), 0);
     const admissionBalance = Math.max(0, admissionTotal - admissionPaidSoFar);
     const admissionPaid = admissionBalance === 0;
-
-    type MonthData = {
-        name: string;
-        tuitionStatus: 'paid' | 'due' | 'future';
-        transportStatus: 'paid' | 'due' | 'future';
-        extras?: { name: string; amount: number; status: 'paid' | 'due' | 'future' }[];
-    };
-
-    const months: MonthData[] = [
-      { name: "April", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "May", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "June", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "July", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "August", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "September", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "October", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "November", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "December", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "January", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "February", tuitionStatus: 'due', transportStatus: 'due' },
-      { name: "March", tuitionStatus: 'due', transportStatus: 'due' }
-    ];
-
-     payments.forEach(payment => {
-       const monthName = payment.month;
-       const month = months.find(m => m.name === monthName);
-       if (month) {
-         if (payment.remarks === "TUITION_FEE") {
-           month.tuitionStatus = 'paid';
-         } else if (payment.remarks === "TRANSPORT_FEE") {
-           month.transportStatus = 'paid';
-         } else if (payment.remarks === "ADMISSION_FEE") {
-           // Already handled above
-         } else {
-           if (!month.extras) month.extras = [];
-           month.extras.push({
-             name: payment.remarks || "Other Fee",
-             amount: payment.amount ?? 0,
-             status: 'paid'
-           });
-         }
-       }
-     });
 
      // Fetch pending dues from student_dues table
      const pendingDuesList = await db.select()
@@ -1000,7 +1166,9 @@ export class MockStorage implements IStorage {
     if (filters?.section && filters.section !== "all") rows = rows.filter((item) => item.section === filters.section);
     if (filters?.search) {
       const search = filters.search.toLowerCase();
-      rows = rows.filter((item) => item.name.toLowerCase().includes(search) || item.admissionNo.toLowerCase().includes(search));
+      // Naam + admission no ke saath contact (mobile) bhi — DatabaseStorage
+      // wali search se parity ke liye.
+      rows = rows.filter((item) => item.name.toLowerCase().includes(search) || item.admissionNo.toLowerCase().includes(search) || (item.contact ?? "").toLowerCase().includes(search));
     }
     return rows;
   }
@@ -1050,26 +1218,50 @@ export class MockStorage implements IStorage {
   }
 
   async createFeePayment(payment: InsertFeePayment): Promise<FeePayment> {
-    const created: FeePayment = { id: this.nextFeePaymentId++, studentId: payment.studentId ?? null, schoolId: payment.schoolId ?? 1, amount: payment.amount, month: payment.month, year: payment.year, paymentDate: new Date(), receiptNo: payment.receiptNo, paymentMethod: payment.paymentMethod ?? "Cash", remarks: payment.remarks ?? null, createdAt: new Date() };
+    const created: FeePayment = { id: this.nextFeePaymentId++, studentId: payment.studentId ?? null, schoolId: payment.schoolId ?? 1, amount: payment.amount, month: payment.month, year: payment.year, paymentDate: new Date(), receiptNo: payment.receiptNo, paymentMethod: payment.paymentMethod ?? "Cash", remarks: payment.remarks ?? null, breakdown: payment.breakdown ?? null, createdAt: new Date() };
     this.feePaymentsData.push(created);
     return created;
   }
 
   async getDefaulters(schoolId: number, classStr?: string): Promise<{ studentId: number; name: string; amountPending: number }[]> { return []; }
 
-  async getStaff(schoolId: number): Promise<Staff[]> {
+  async getStaff(schoolId: number, options?: { includeInactive?: boolean }): Promise<Staff[]> {
+    if (options?.includeInactive) {
+      return this.staffData.filter((item) => item.schoolId === schoolId);
+    }
     return this.staffData.filter((item) => item.schoolId === schoolId && item.isActive === 1);
   }
 
   async createStaff(staffMember: InsertStaff): Promise<Staff> {
-    const created: Staff = { id: this.nextStaffId++, schoolId: staffMember.schoolId ?? 1, employeeId: staffMember.employeeId ?? null, name: staffMember.name, designation: staffMember.designation, department: staffMember.department ?? null, qualification: staffMember.qualification ?? null, experience: staffMember.experience ?? null, address: staffMember.address ?? null, contact: staffMember.contact, email: staffMember.email ?? null, basicSalary: staffMember.basicSalary, advanceGiven: staffMember.advanceGiven ?? 0, joinDate: staffMember.joinDate ?? null, isActive: staffMember.isActive ?? 1, createdAt: new Date(), updatedAt: new Date() };
+    const created: Staff = { id: this.nextStaffId++, schoolId: staffMember.schoolId ?? 1, employeeId: staffMember.employeeId ?? null, name: staffMember.name, fatherName: staffMember.fatherName ?? null, designation: staffMember.designation, department: staffMember.department ?? null, qualification: staffMember.qualification ?? null, experience: staffMember.experience ?? null, address: staffMember.address ?? null, contact: staffMember.contact, email: staffMember.email ?? null, basicSalary: staffMember.basicSalary, advanceGiven: staffMember.advanceGiven ?? 0, joinDate: staffMember.joinDate ?? null, isActive: staffMember.isActive ?? 1, createdAt: new Date(), updatedAt: new Date() };
     this.staffData.push(created);
     return created;
   }
 
   async getStudentStatus(studentId: number, classStr: string, year: number) {
-     const feeStructure = this.feeStructuresData.find(i => i.class === classStr);
-     return { admissionPaid: true, admissionBalance: 0, admissionPaidSoFar: 0, admissionTotal: 0, monthStatus: [], pendingDues: [], monthlyFee: feeStructure?.monthlyFee ?? 0 };
+     // Phase 3 Batch A fix: pehle ye sirf ek stub tha (hamesha
+     // admissionPaid: true, khali months). Ab DatabaseStorage wala hi
+     // hisaab in-memory data par chalta hai — wahi shared helper
+     // (breakdown + remarks dono raaste), wahi return shape.
+     const student = this.studentsData.find(i => i.id === studentId);
+     if (!student) throw new Error("Student not found");
+     const feeStructure = this.feeStructuresData.find(i => i.schoolId === student.schoolId && i.class === classStr);
+     if (!feeStructure) {
+       return { admissionPaid: false, admissionBalance: 0, admissionPaidSoFar: 0, admissionTotal: 0, monthStatus: [], pendingDues: [], monthlyFee: 0 };
+     }
+     const payments = this.feePaymentsData.filter(i => i.studentId === studentId && i.year === year);
+     const { months, admissionPaidSoFar } = summarizePaymentsForStatus(payments);
+     const admissionTotal = feeStructure.admissionFee ?? 0;
+     const admissionBalance = Math.max(0, admissionTotal - admissionPaidSoFar);
+     const pendingDues = this.studentDuesData
+       .filter(d => d.studentId === studentId && d.isPaid === 0)
+       .map(d => ({
+         id: d.id,
+         fee_name: d.feeName,
+         due_date: d.dueDate instanceof Date ? d.dueDate.toISOString() : String(d.dueDate),
+         amount: d.amount,
+       }));
+     return { admissionPaid: admissionBalance === 0, admissionBalance, admissionPaidSoFar, admissionTotal, monthStatus: months, pendingDues, monthlyFee: feeStructure.monthlyFee ?? 0 };
   }
 
   // -------------------------------------------------------------------

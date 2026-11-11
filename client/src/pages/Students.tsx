@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Table,
   TableBody,
@@ -29,6 +29,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPut } from "@/lib/api";
 
 export default function Students() {
   const { toast } = useToast();
@@ -46,6 +47,9 @@ export default function Students() {
   const [transportEnabled, setTransportEnabled] = useState(false);
   const [newTransportId, setNewTransportId] = useState("");
   const [transportRoutes, setTransportRoutes] = useState<any[]>([]);
+  // Transport routes ka cache — student list me route_name dikhane ke liye
+  // routes ek hi baar laaye jate hain (har search keystroke par nahi).
+  const routesCache = useRef<any[] | null>(null);
 
   // 🟢 LOAD STUDENTS (FIXED: Ab ye sahi naam bhejega)
   const fetchStudents = async () => {
@@ -53,14 +57,42 @@ export default function Students() {
     try {
       console.log("Fetching with:", { search, classFilter, sectionFilter }); // Debugging ke liye
 
-      // ✅ FIX: 'classStr' aur 'section' naam backend se match hone chahiye
-      const data = await (window as any).electronAPI.invoke("get-students", {
-        search: search.trim(),
-        classStr: classFilter === "ALL" ? null : classFilter,  // Yahan galti thi pehle
-        section: sectionFilter === "ALL" ? null : sectionFilter, // Yahan galti thi pehle
-      });
-      
-      setStudents(data || []);
+      // REST: GET /api/students?search=&class=&section=
+      // (server ke param naam class/section/search hain; "ALL" par param
+      // bhejte hi nahi). Dhyaan: server ki search sirf student ke NAAM par
+      // hai — Adm No/Mobile par khoj server me abhi nahi hai (NOTES.md).
+      const params = new URLSearchParams();
+      if (search.trim()) params.set("search", search.trim());
+      if (classFilter !== "ALL") params.set("class", classFilter);
+      if (sectionFilter !== "ALL") params.set("section", sectionFilter);
+      const qs = params.toString();
+      const data = await apiGet<any[]>(`/api/students${qs ? `?${qs}` : ""}`);
+
+      // Route names ke liye cached routes (fail ho to list bina naam ke
+      // bhi aa jaye — isliye alag chhota catch).
+      let routes = routesCache.current;
+      if (!routes) {
+        try {
+          routes = await loadRoutesData();
+        } catch {
+          routes = [];
+        }
+      }
+      const routeNameById = new Map((routes || []).map((r: any) => [r.id, r.routeName]));
+
+      // Adapters: REST camelCase -> page ke snake_case naam, aur
+      // route_name (IPC me join hokar aata tha, REST me transportId se joda).
+      const adapted = (data || []).map((s: any) => ({
+        ...s,
+        admission_no: s.admissionNo,
+        father_name: s.fatherName,
+        tc_number: s.tcNumber,
+        previous_school_name: s.previousSchoolName,
+        transport_id: s.transportId ?? null,
+        route_name:
+          s.transportId != null ? routeNameById.get(s.transportId) ?? null : null,
+      }));
+      setStudents(adapted);
     } catch (e) {
       console.error(e);
       toast({ title: "Error", description: "Failed to load list", variant: "destructive" });
@@ -74,8 +106,19 @@ export default function Students() {
   }, [search, classFilter, sectionFilter]);
 
   // Load Routes once
+  // REST: GET /api/transport-routes — route_name adapter ke saath.
+  const loadRoutesData = async () => {
+    const routes = await apiGet<any[]>("/api/transport-routes");
+    const adapted = (routes || []).map((r: any) => ({
+      ...r,
+      route_name: r.routeName,
+    }));
+    routesCache.current = adapted;
+    return adapted;
+  };
+
   const loadRoutes = async () => {
-    const routes = await (window as any).electronAPI.invoke("get-transport");
+    const routes = await loadRoutesData();
     setTransportRoutes(routes || []);
   };
 
@@ -89,8 +132,8 @@ export default function Students() {
 
   const saveTransport = async () => {
     try {
-      await (window as any).electronAPI.invoke("update-student-transport", {
-        studentId: selectedStudent.id,
+      // REST: PUT /api/students/:id/transport { transportId }
+      await apiPut(`/api/students/${selectedStudent.id}/transport`, {
         transportId: transportEnabled ? parseInt(newTransportId) : null,
       });
 

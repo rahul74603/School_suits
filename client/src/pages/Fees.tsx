@@ -9,6 +9,34 @@ import { useToast } from "@/hooks/use-toast";
 import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, CheckCircle2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useReactToPrint } from "react-to-print";
+import { apiGet, apiPost, apiDel } from "@/lib/api";
+
+// --- REST adapters (Phase 3 Batch A) --------------------------------------
+// IPC me student ke saath route_name/bus_fee join hokar aate the; REST me
+// student par sirf transportId hai. Isliye transport routes ek baar cache
+// karke naam/fees yahin bhari jati hai. Baaki fields camelCase -> snake_case.
+let feesRoutesCache: any[] | null = null;
+async function getFeesRoutes(): Promise<any[]> {
+  if (!feesRoutesCache) {
+    const routes = await apiGet<any[]>("/api/transport-routes");
+    feesRoutesCache = routes || [];
+  }
+  return feesRoutesCache;
+}
+
+function adaptFeeStudent(s: any, routes: any[]) {
+  const route =
+    s.transportId != null
+      ? routes.find((r: any) => r.id === s.transportId)
+      : undefined;
+  return {
+    ...s,
+    admission_no: s.admissionNo,
+    transport_id: s.transportId ?? null,
+    route_name: route?.routeName ?? null,
+    bus_fee: route?.amount ?? null,
+  };
+}
 
 export default function Fees() {
   const { toast } = useToast();
@@ -37,14 +65,26 @@ export default function Fees() {
 
   useEffect(() => {
     (async () => {
-        const info = await (window as any).electronAPI.invoke('get-school-info');
-        setSchoolInfo(info || {});
+        try {
+            // REST: GET /api/branding (school ki row seedhi aati hai —
+            // name/address page wahi padhta hai).
+            const info = await apiGet<any>('/api/branding');
+            setSchoolInfo(info || {});
+        } catch (e) { console.error(e); }
     })();
   }, []);
 
   const { data: students } = useQuery({
     queryKey: ["students-search", search],
-    queryFn: async () => { if (search.length < 2) return []; return await (window as any).electronAPI.invoke('get-students', { search }); },
+    queryFn: async () => {
+      if (search.length < 2) return [];
+      // REST: GET /api/students?search= (server ki search sirf NAAM par
+      // hai — NOTES.md). Student adapter route_name/bus_fee bhi bharta hai.
+      const data = await apiGet<any[]>(`/api/students?search=${encodeURIComponent(search)}`);
+      let routes: any[] = [];
+      try { routes = await getFeesRoutes(); } catch { /* bina route naam ke bhi list chalegi */ }
+      return (data || []).map((s: any) => adaptFeeStudent(s, routes));
+    },
     enabled: search.length >= 2
   });
 
@@ -54,9 +94,16 @@ export default function Fees() {
   const loadStudentData = async () => {
     try {
       setExtraCharges([]); 
-      const history = await (window as any).electronAPI.invoke('get-fee-payments', { studentId: selectedStudent.id });
-      setPaymentHistory(history || []);
-      const statusData = await (window as any).electronAPI.invoke('get-student-status', { studentId: selectedStudent.id, classStr: selectedStudent.class, year: parseInt(year) });
+      // REST: GET /api/payments?studentId= (payment_date/receipt_no adapter)
+      const history = await apiGet<any[]>(`/api/payments?studentId=${selectedStudent.id}`);
+      setPaymentHistory((history || []).map((pay: any) => ({
+        ...pay,
+        payment_date: pay.paymentDate,
+        receipt_no: pay.receiptNo,
+      })));
+      // REST: GET /api/students/:id/status?year= — jawab ka shape IPC jaisa
+      // hi hai (monthStatus/pendingDues/monthlyFee/admissionBalance).
+      const statusData = await apiGet<any>(`/api/students/${selectedStudent.id}/status?year=${parseInt(year)}`);
       if (statusData) setStatus(statusData);
     } catch (error) { console.error(error); }
   };
@@ -64,11 +111,13 @@ export default function Fees() {
   // --- ACTIONS ---
   const handleAddDue = async () => {
       if(!newDue.name || !newDue.amount) return;
-      await (window as any).electronAPI.invoke('add-student-due', { studentId: selectedStudent.id, feeName: newDue.name, amount: parseInt(newDue.amount) });
+      // REST: POST /api/students/:id/dues — dueDate server ko lazmi
+      // chahiye (IPC me nahi jata tha); aaj ki tareekh bhej rahe hain.
+      await apiPost(`/api/students/${selectedStudent.id}/dues`, { feeName: newDue.name, amount: parseInt(newDue.amount), dueDate: new Date().toISOString().split('T')[0] });
       setIsAddDueOpen(false); setNewDue({ name: "", amount: "" });
       loadStudentData();
   };
-  const deleteDue = async (id: number) => { await (window as any).electronAPI.invoke('delete-student-due', { id }); loadStudentData(); };
+  const deleteDue = async (id: number) => { await apiDel(`/api/dues/${id}`); loadStudentData(); };
 
   const addToBill = (name: string, amount: number, type: string, month?: string, dueId?: number) => {
     if (extraCharges.find(c => c.name === name)) return;
@@ -101,13 +150,18 @@ export default function Fees() {
   const finalizePayment = async () => {
     setIsConfirmOpen(false);
     try {
-      const receiptNo = await (window as any).electronAPI.invoke('get-next-receipt-no');
+      // REST jawab { receiptNo } object me aata hai — string yahin nikali.
+      const receiptRes = await apiGet<{ receiptNo: string }>('/api/payments/next-receipt-no');
+      const receiptNo = receiptRes.receiptNo;
       const isAdmissionPayment = extraCharges.some(c => c.type === 'Admission Fee');
       
       const itemNames = extraCharges.map(c => `${c.name} (₹${c.amount})`).join(", ");
       const remarks = itemNames; 
 
-      await (window as any).electronAPI.invoke('create-fee-payment', {
+      // REST: POST /api/payments. Body pehle jaisa hi bheja hai, lekin
+      // jaan lo: isAdmission aur breakdown server ke schema me hain hi
+      // nahi, server unhe gira deta hai — iska asar NOTES.md me flag hai.
+      await apiPost('/api/payments', {
         studentId: selectedStudent.id,
         amount: totalPayable,
         month: extraCharges.map(c => c.month).filter(Boolean).join(",") || "Misc",
@@ -135,7 +189,7 @@ export default function Fees() {
 
   const deleteReceipt = async (id: number) => {
     if(!confirm("Delete this receipt? Amount will be due again.")) return;
-    await (window as any).electronAPI.invoke('delete-fee-payment', { id });
+    await apiDel(`/api/payments/${id}`);
     loadStudentData();
   };
 

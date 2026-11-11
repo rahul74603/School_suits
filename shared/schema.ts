@@ -124,6 +124,12 @@ export const feePayments = pgTable("fee_payments", {
   receiptNo: text("receipt_no").notNull().unique(),
   paymentMethod: text("payment_method"),
   remarks: text("remarks"),
+  // Phase 3 Batch A fix: Fees page ek bill ki ek payment banata hai aur
+  // item-wise hisaab breakdown me bhejta hai — { extras: [{ name, amount,
+  // type, month }] } JSON string ke roop me yahi save hoga. Isi se
+  // getStudentStatus mahino ki paid halat aur admission balance nikalta
+  // hai, aur purani receipt dobara khulne par item list milti hai.
+  breakdown: text("breakdown"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -134,6 +140,10 @@ export const staff = pgTable("staff", {
    // Parity columns (Phase 2 §6.16) — Electron staff table me pehle se hain.
    employeeId: text("employee_id").unique(),
    name: text("name").notNull(),
+   // Phase 3 Batch A fix: Staff page ke Add/Edit form me father name ka
+   // field pehle se tha, lekin Postgres staff table me column hi nahi
+   // tha — value kahin save nahi hoti thi. Ab column hai.
+   fatherName: text("father_name"),
    designation: text("designation").notNull(),
    department: text("department"),
    qualification: text("qualification"),

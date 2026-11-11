@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet } from "@/lib/api";
 import {
   Users,
   IndianRupee,
@@ -54,11 +55,14 @@ export default function Dashboard() {
       const lastMonthYear = lastMonth.getFullYear();
 
       // 1. Total Students (Active)
-      const allStudents = await (window as any).electronAPI.invoke("get-students", {
-        search: "",
-        classStr: "ALL",
-        section: "ALL",
-      });
+      // REST: GET /api/students (bina filter ke — server par "ALL" ka matlab
+      // koi filter nahi, isliye params nahi bheje). Student row camelCase
+      // aata hai, page snake_case (admission_no) padhta hai — adapter yahi hai.
+      const rawStudents = await apiGet<any[]>("/api/students");
+      const allStudents = (rawStudents || []).map((s: any) => ({
+        ...s,
+        admission_no: s.admissionNo,
+      }));
       const totalStudents = allStudents?.length || 0;
 
       // 2. Last Month Students (for comparison)
@@ -67,7 +71,28 @@ export default function Dashboard() {
       // 3. Today's Collection
       const todayStr = today.toISOString().split('T')[0];
       let todaysCollection = 0;
-      const allPayments = await (window as any).electronAPI.invoke("get-all-payments-for-stats");
+      // REST: GET /api/payments — school ke saare payments (AUDIT ne
+      // /api/reports/dashboard likha tha, lekin wo sirf kul jod {todayCollection,
+      // monthCollection...} deta hai; is page ko weekly chart aur recent
+      // activity ke liye asal payment rows chahiye, isliye list wala
+      // endpoint sahi jawab hai — NOTES.md me tafseel).
+      // Adapters: payment_date <- paymentDate; student_name/class_name
+      // server join nahi karta, upar wale students map se bhare.
+      const rawPayments = await apiGet<any[]>("/api/payments");
+      const studentById = new Map((allStudents || []).map((s: any) => [s.id, s]));
+      const allPayments = (rawPayments || [])
+        .map((pay: any) => ({
+          ...pay,
+          payment_date: pay.paymentDate,
+          student_name: studentById.get(pay.studentId)?.name,
+          class_name: studentById.get(pay.studentId)?.class,
+        }))
+        // Recent activity ke liye sabse naye pehle (server list ka koi
+        // order pakka nahi hai).
+        .sort(
+          (a: any, b: any) =>
+            new Date(b.payment_date).getTime() - new Date(a.payment_date).getTime(),
+        );
       
       if (allPayments && Array.isArray(allPayments)) {
         todaysCollection = allPayments
@@ -88,11 +113,11 @@ export default function Dashboard() {
       // 5. Fee Defaulters (Students with pending dues)
       let defaultersCount = 0;
       for (const student of allStudents || []) {
-        const status = await (window as any).electronAPI.invoke("get-student-status", {
-          studentId: student.id,
-          classStr: student.class,
-          year: currentYear,
-        });
+        // REST: GET /api/students/:id/status?year= (class server student
+        // ki apni leta hai, bhejna nahi padta). Jawab ka shape IPC jaisa hi.
+        const status = await apiGet<any>(
+          `/api/students/${student.id}/status?year=${currentYear}`,
+        );
         const hasPending = status?.monthStatus?.some((m: any) => m.tuitionStatus === "due") ||
                           (status?.pendingDues?.length > 0) ||
                           (status?.admissionBalance > 0);
@@ -141,11 +166,9 @@ export default function Dashboard() {
       // 9. Upcoming Dues (Next 7 days)
       const upcoming = [];
       for (const student of allStudents?.slice(0, 10) || []) {
-        const status = await (window as any).electronAPI.invoke("get-student-status", {
-          studentId: student.id,
-          classStr: student.class,
-          year: currentYear,
-        });
+        const status = await apiGet<any>(
+          `/api/students/${student.id}/status?year=${currentYear}`,
+        );
         
         const pendingMonths = status?.monthStatus?.filter((m: any) => m.tuitionStatus === "due") || [];
         if (pendingMonths.length > 0) {

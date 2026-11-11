@@ -169,6 +169,55 @@ const createTransportRouteBodySchema = z.object({
 
 const updateStaffBodySchema = insertStaffSchema.partial();
 
+// Phase 3 Batch A fix — payment create ka body. Fees page `breakdown`
+// ko OBJECT bhejta hai ({ extras: [{ name, amount, type, month }] }),
+// jabki fee_payments.breakdown column text hai; isliye string / object /
+// array teeno kubool hain aur route store karne se pehle JSON string me
+// badalta hai (normalizePaymentBreakdown). Purane clients bina breakdown
+// ke bhejte rahe to bhi chalega — field optional hai.
+// `isAdmission` sirf payload flag hai, koi column nahi hai: route use
+// breakdown JSON ke andar mehfooz kar deta hai taaki getStudentStatus
+// admission balance ghatate waqt use padh sake.
+const createFeePaymentBodySchema = insertFeePaymentSchema.extend({
+  breakdown: z
+    .union([z.string(), z.array(z.any()), z.record(z.any())])
+    .nullable()
+    .optional(),
+  isAdmission: z.boolean().optional(),
+});
+
+function normalizePaymentBreakdown(
+  breakdown: string | unknown[] | Record<string, unknown> | null | undefined,
+  isAdmission: boolean | undefined,
+): string | undefined {
+  if (breakdown == null) {
+    // Breakdown nahi aaya lekin admission wali payment hai — flag ko
+    // khali-extras wale JSON me mehfooz kar do, warna ye jaankari
+    // hamesha ke liye kho jayegi.
+    return isAdmission
+      ? JSON.stringify({ extras: [], isAdmission: true })
+      : undefined;
+  }
+  if (typeof breakdown === "string") {
+    if (!isAdmission) return breakdown;
+    try {
+      const parsed = JSON.parse(breakdown);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return JSON.stringify({ ...parsed, isAdmission: true });
+      }
+    } catch {
+      // String jaisi hai waisi rahegi; getStudentStatus ka parsing bhi
+      // defensive hai.
+    }
+    return breakdown;
+  }
+  const obj: Record<string, unknown> = Array.isArray(breakdown)
+    ? { extras: breakdown }
+    : { ...breakdown };
+  if (isAdmission) obj.isAdmission = true;
+  return JSON.stringify(obj);
+}
+
 const createSalaryPaymentBodySchema = z.object({
   staffId: z.number().int().positive(),
   month: z.string().min(1),
@@ -892,11 +941,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get(
     "/api/payments",
     requireAuth,
-    requireRole("principal", "accountant", "staff"),
+    // Phase 3 Batch A fix: "teacher" Dashboard ki collection stats ke
+    // liye (page saari payments padhta hai) aur "parent" apne linked
+    // baccho ki payments ke liye jode gaye hain.
+    requireRole("principal", "accountant", "staff", "teacher", "parent"),
     async (req, res) => {
       const schoolId = requireSchoolId(req, res);
       if (schoolId == null) return;
       const studentId = parseOptionalId(req.query.studentId);
+
+      // Parent († rule): sirf apne parent_students-linked baccho ki
+      // payments. studentId diya ho aur wo linked na ho to khali list —
+      // kisi dusre bacche ki ek bhi payment parent ko nahi jayegi.
+      if (req.user!.role === "parent") {
+        const links = await storage.getParentStudentLinks(req.user!.id);
+        const linkedIds = new Set(links.map((link) => link.studentId));
+        if (studentId != null) {
+          if (!linkedIds.has(studentId)) return res.json([]);
+          return res.json(await storage.getFeePayments(schoolId, studentId));
+        }
+        const allPayments = await storage.getFeePayments(schoolId);
+        return res.json(
+          allPayments.filter(
+            (payment) =>
+              payment.studentId != null && linkedIds.has(payment.studentId),
+          ),
+        );
+      }
+
       const payments = await storage.getFeePayments(schoolId, studentId);
       res.json(payments);
     },
@@ -909,10 +981,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req, res) => {
       const schoolId = requireSchoolId(req, res);
       if (schoolId == null) return;
-      const result = insertFeePaymentSchema.safeParse(req.body);
+      const result = createFeePaymentBodySchema.safeParse(req.body);
       if (!result.success) return res.status(400).json(result.error);
+      // isAdmission column nahi hai — use breakdown JSON ke andar
+      // mehfooz kiya jata hai (upar normalizePaymentBreakdown dekho).
+      const { isAdmission, breakdown, ...paymentData } = result.data;
+      const breakdownText = normalizePaymentBreakdown(breakdown, isAdmission);
       const payment = await storage.createFeePayment({
-        ...result.data,
+        ...paymentData,
+        ...(breakdownText !== undefined
+          ? { breakdown: breakdownText }
+          : {}),
         schoolId,
       });
       res.status(201).json(payment);
@@ -949,7 +1028,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req, res) => {
       const schoolId = requireSchoolId(req, res);
       if (schoolId == null) return;
-      const staffList = await storage.getStaff(schoolId);
+      // Phase 3 Batch A fix: Staff page ke status filters (Inactive
+      // wagera) kaam karne ke liye list me saare staff (active +
+      // inactive) chahiye. Salary/pending aur dashboard stats apni
+      // jagah par default active-only wala getStaff hi istemal karte
+      // hain — unka behaviour nahi badla.
+      const staffList = await storage.getStaff(schoolId, {
+        includeInactive: true,
+      });
       res.json(
         staffList.map((member) => serializeStaffFor(member, req.user!.role)),
       );
@@ -969,6 +1055,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...result.data,
         schoolId,
       });
+      // Phase 3 Batch A fix: employeeId client se na aaye (Staff page
+      // me ID ka input hai hi nahi) to server khud banata hai. Insert
+      // ke baad mile id se banta hai (EMP-<id>), isliye hamesha unique
+      // hai — employee_id par unique bandhan bhi hai. Client ne ID
+      // bheja ho to wahi rehta hai.
+      if (!newStaff.employeeId) {
+        const withEmployeeId = await storage.updateStaff(newStaff.id, {
+          employeeId: `EMP-${newStaff.id}`,
+          updatedAt: new Date(),
+        });
+        return res.json(withEmployeeId);
+      }
       res.json(newStaff);
     },
   );

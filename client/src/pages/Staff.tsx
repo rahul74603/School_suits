@@ -46,6 +46,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 
 const DEPARTMENTS = ["Teaching", "Administration", "Accounts", "Support", "Transport", "Security"];
 const DESIGNATIONS = ["Principal", "Vice Principal", "Teacher", "Accountant", "Clerk", "Librarian", "Driver", "Security Guard", "Peon", "Other"];
@@ -58,6 +59,22 @@ const DOC_TYPES = [
   { key: "contract", label: "Employment Contract" },
   { key: "other", label: "Other Document" },
 ];
+
+// --- REST adapter (Phase 3 Batch A) ---------------------------------------
+// REST staff row camelCase hai: salary <- basicSalary, join_date <- joinDate,
+// employee_id <- employeeId, status <- isActive (1 = Active, 0 = Inactive).
+// father_name aur documents ke liye server ke staff table me column hi nahi
+// hai — page unke khali hone ko pehle se sambhal leta hai (NOTES.md).
+function adaptStaffMember(m: any) {
+  return {
+    ...m,
+    employee_id: m.employeeId,
+    salary: m.basicSalary,
+    father_name: m.fatherName || "",
+    join_date: m.joinDate,
+    status: m.isActive === 0 ? "Inactive" : "Active",
+  };
+}
 
 export default function Staff() {
   const { toast } = useToast();
@@ -91,11 +108,25 @@ export default function Staff() {
   const fetchStaff = async () => {
     setLoading(true);
     try {
-      const data = await (window as any).electronAPI.invoke("get-staff", {
-        search: search.trim(),
-        status: statusFilter,
-      });
-      setStaffList(data || []);
+      // REST: GET /api/staff — server na search/status params leta hai,
+      // na inactive staff deta hai (sirf active rows aati hain). Isliye
+      // khoj aur status filter yahin client par lage hain; "Inactive /
+      // On Leave / Terminated" chunne par list khali ayegi kyunki wo
+      // rows server deta hi nahi (NOTES.md).
+      const data = await apiGet<any[]>("/api/staff");
+      let adapted = (data || []).map(adaptStaffMember);
+      const q = search.trim().toLowerCase();
+      if (q) {
+        adapted = adapted.filter((s: any) =>
+          s.name?.toLowerCase().includes(q) ||
+          (s.employee_id || "").toLowerCase().includes(q) ||
+          (s.contact || "").includes(search.trim())
+        );
+      }
+      if (statusFilter !== "ALL") {
+        adapted = adapted.filter((s: any) => s.status === statusFilter);
+      }
+      setStaffList(adapted);
     } catch (e) {
       console.error(e);
       toast({ title: "Error", description: "Failed to load staff list", variant: "destructive" });
@@ -126,7 +157,22 @@ export default function Staff() {
 
   const handleAdd = async () => {
     try {
-      await (window as any).electronAPI.invoke("create-staff", formData);
+      // REST: POST /api/staff — salary -> basicSalary (number lazmi).
+      // fatherName aur status server ke staff table me hain hi nahi,
+      // isliye nahi bheje (NOTES.md).
+      await apiPost("/api/staff", {
+        name: formData.name,
+        designation: formData.designation,
+        department: formData.department,
+        qualification: formData.qualification,
+        experience: formData.experience,
+        contact: formData.contact,
+        email: formData.email,
+        address: formData.address,
+        basicSalary: parseInt(formData.salary) || 0,
+        fatherName: formData.fatherName || undefined,
+        joinDate: formData.joinDate,
+      });
       toast({ title: "Success", description: "Staff member added successfully" });
       setIsAddOpen(false);
       resetForm();
@@ -138,10 +184,26 @@ export default function Staff() {
 
   const handleUpdate = async () => {
     try {
-      await (window as any).electronAPI.invoke("update-staff", {
-        ...formData,
-        id: selectedStaff.id,
-        salary: parseInt(formData.salary) || 0,
+      // REST: PUT /api/staff/:id — status ka REST jawab sirf isActive
+      // hai: Active -> 1, Inactive -> 0. "On Leave"/"Terminated" ka koi
+      // jawab nahi, un par isActive bhejte hi nahi (purani value rehti hai).
+      await apiPut(`/api/staff/${selectedStaff.id}`, {
+        name: formData.name,
+        designation: formData.designation,
+        department: formData.department,
+        qualification: formData.qualification,
+        experience: formData.experience,
+        contact: formData.contact,
+        email: formData.email,
+        address: formData.address,
+        basicSalary: parseInt(formData.salary) || 0,
+        fatherName: formData.fatherName || undefined,
+        joinDate: formData.joinDate,
+        ...(formData.status === "Active"
+          ? { isActive: 1 }
+          : formData.status === "Inactive"
+            ? { isActive: 0 }
+            : {}),
       });
       toast({ title: "Success", description: "Staff updated successfully" });
       setIsEditOpen(false);
@@ -153,7 +215,11 @@ export default function Staff() {
 
   const handleDelete = async () => {
     try {
-      await (window as any).electronAPI.invoke("delete-staff", selectedStaff.id);
+      // REST: staff ke liye DELETE route hai hi nahi — server ka tareeka
+      // POST /api/staff/:id/deactivate hai (soft delete: record rehta hai,
+      // list se gayab ho jata hai). AUDIT.md ka "DELETE /api/staff/:id"
+      // likhna galat tha, asal route yahi hai.
+      await apiPost(`/api/staff/${selectedStaff.id}/deactivate`);
       toast({ title: "Success", description: "Staff deleted successfully" });
       setIsDeleteOpen(false);
       fetchStaff();
@@ -202,6 +268,10 @@ export default function Staff() {
       const reader = new FileReader();
       reader.onload = async () => {
         const base64 = (reader.result?.toString() || "").split(",")[1];
+        // TODO-API-GAP: upload-staff-document — is channel ka REST jawab
+        // Phase 2 server me hai hi nahi (staff documents endpoint missing
+        // hai; sirf student documents ke metadata endpoints hain). Jab tak
+        // server par endpoint na bane, ye call IPC par hi rakhi hai.
         await (window as any).electronAPI.invoke("upload-staff-document", {
           staffId: selectedStaff.id,
           employeeId: selectedStaff.employee_id,
@@ -584,6 +654,7 @@ export default function Staff() {
                         {hasDoc ? (
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">Uploaded</span>
+                            {/* TODO-API-GAP: open-student-document — local file kholna REST ka kaam nahi; documents batch (Phase 3) me file URL wala tareeka ayega, tab tak IPC par hi hai. */}
                             <Button 
                               variant="ghost" 
                               size="sm" 
@@ -614,6 +685,7 @@ export default function Staff() {
                       {JSON.parse(selectedStaff.documents).map((doc: any, idx: number) => (
                         <div key={idx} className="flex items-center justify-between bg-white p-2 rounded border text-sm">
                           <span className="truncate flex-1">{doc.fileName}</span>
+                          {/* TODO-API-GAP: open-student-document — upar wali hi baat: local-file kaam, documents batch tak IPC par. */}
                           <Button 
                             variant="ghost" 
                             size="sm"
