@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Switch, Route, Link, useLocation } from "wouter";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
@@ -45,10 +46,17 @@ import {
   IndianRupee,      // 🟢 NEW ICON
   TrendingUp,       // 🟢 NEW ICON
   Building2,        // 🏫 Super Admin: Schools
-  LogOut            // 🔐 Phase 3: logout button
+  LogOut,           // 🔐 Phase 3: logout button
+  Menu              // 📱 Mobile: hamburger (sidebar drawer kholne ke liye)
 } from "lucide-react";
 
-function Sidebar() {
+function Sidebar({
+  mobileOpen,
+  onClose,
+}: {
+  mobileOpen: boolean;
+  onClose: () => void;
+}) {
   const [location] = useLocation();
   // 🔐 School ka naam login ke baad /api/auth/me se aata hai (branding).
   const { school, user } = useAuth();
@@ -79,7 +87,14 @@ function Sidebar() {
   ];
 
   return (
-    <div className="w-64 bg-slate-900 text-white flex flex-col h-screen fixed left-0 top-0 shadow-xl z-50">
+    // 📱 Mobile: sidebar ek overlay drawer hai — default band
+    // (-translate-x-full), hamburger se khulta hai. md+ par hamesha
+    // dikhne wala static sidebar (translate-x-0) pehle jaisa hi hai.
+    <div
+      className={`w-64 bg-slate-900 text-white flex flex-col h-screen fixed left-0 top-0 shadow-xl z-50 transform transition-transform duration-200 md:translate-x-0 ${
+        mobileOpen ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
       <div className="p-6 border-b border-slate-800">
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <span className="text-blue-500">🎓</span> {school?.name || "School Guardian Suite"}
@@ -97,6 +112,7 @@ function Sidebar() {
           return (
             <Link key={link.href} href={link.href}>
               <div
+                onClick={onClose}
                 className={`flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all ${
                   isActive
                     ? "bg-blue-600 text-white"
@@ -110,18 +126,32 @@ function Sidebar() {
           );
         })}
       </nav>
+
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.1</div>
     </div>
   );
 }
 
-function TopBar() {
+function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   const [location] = useLocation();
   // 🔐 Phase 3: login kiya user + logout (bina iske user band hi nahi ho sakta tha).
   const { user, logout } = useAuth();
 
   return (
-    <div className="h-16 bg-white border-b flex items-center justify-between px-6 sticky top-0 z-40 shadow-sm ml-64">
+    <div className="h-16 bg-white border-b flex items-center justify-between px-4 md:px-6 sticky top-0 z-40 shadow-sm">
       <div className="flex items-center gap-4">
+        {/* 📱 Mobile par sidebar band rehta hai — ye button use drawer
+            ki tarah kholta hai. Desktop (md+) par button dikhta hi nahi. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="md:hidden"
+          onClick={onMenuClick}
+          aria-label="Menu"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+
         {location !== "/" && (
           <Button
             variant="outline"
@@ -141,13 +171,13 @@ function TopBar() {
       </div>
 
       <div className="flex items-center gap-4">
-        <span className="font-bold text-gray-500 capitalize">
+        <span className="hidden font-bold text-gray-500 capitalize md:inline">
           {location.replace("/", "") || "Dashboard"}
         </span>
 
         {user && (
           <div className="flex items-center gap-3">
-            <div className="text-right leading-tight">
+            <div className="hidden text-right leading-tight sm:block">
               <div className="text-sm font-medium text-gray-700">
                 {user.name || user.username}
               </div>
@@ -176,13 +206,30 @@ function Router() {
   // 🏫 Schools ka route bhi sirf super_admin ke liye register hota hai —
   // dusra role /schools khole to NotFound milega (server bhi 403 dega).
   const { user } = useAuth();
+  const [location] = useLocation();
+
+  // 📱 Mobile drawer ki haalat: default band. Route badlte hi band ho
+  // jata hai (link par onClose bhi hai, ye doosra suraksha jaal hai).
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location]);
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans">
-      <Sidebar />
+      <Sidebar mobileOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      <div className="flex-1 ml-64 flex flex-col h-screen overflow-hidden">
-        <TopBar />
+      {/* 📱 Drawer khula ho to peeche kaala parda — tap karne par band.
+          Sirf mobile par (md:hidden); desktop par sidebar static hai. */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-[45] bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <div className="flex min-w-0 flex-1 flex-col h-screen overflow-hidden md:ml-64">
+        <TopBar onMenuClick={() => setSidebarOpen(true)} />
 
         <main className="flex-1 overflow-y-auto p-2">
           <Switch>
