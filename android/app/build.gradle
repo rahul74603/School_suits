@@ -1,5 +1,17 @@
 apply plugin: 'com.android.application'
 
+// --- SGS fixed internal signing: ONE key for every CI build, so each new APK
+// installs as an update over the previous one (no signature mismatch).
+def sgsKsB64 = file('keystore.b64')
+def sgsKsFile = file('sgs-internal.p12')
+if (sgsKsB64.exists() && !sgsKsFile.exists()) {
+    try {
+        sgsKsFile.bytes = java.util.Base64.getDecoder().decode(sgsKsB64.text.replaceAll('\\s', ''))
+    } catch (Exception e) {
+        logger.warn("SGS keystore decode failed: " + e.message)
+    }
+}
+
 android {
     namespace "com.schoolguardian.suite"
     compileSdk rootProject.ext.compileSdkVersion
@@ -16,7 +28,23 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        sgsInternal {
+            if (sgsKsFile.exists()) {
+                storeFile sgsKsFile
+                storePassword 'gHsPOWmdEk5Eo6QOpPzL7mfr'
+                keyAlias 'schoolguardian'
+                keyPassword 'gHsPOWmdEk5Eo6QOpPzL7mfr'
+                storeType 'PKCS12'
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (sgsKsFile.exists()) {
+                signingConfig signingConfigs.sgsInternal
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
