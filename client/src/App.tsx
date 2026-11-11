@@ -30,6 +30,16 @@ import Attendance from "@/pages/Attendance";
 // screen ab bani (list sab roles ko, banana principal/teacher ko)
 import Notices from "@/pages/Notices";
 
+// 🗓️ Timetable (v1.7): class ka hafta-grid — dekhna sab roles ko,
+// badalna principal/teacher ko (page ke andar gating hai)
+import Timetable from "@/pages/Timetable";
+
+// 📊 Broadsheet (v1.7): poori class ka subject-wise marks matrix,
+// office screen (principal/teacher/accountant)
+import Broadsheet from "@/pages/Broadsheet";
+// 📚 Library (v1.7): kitabon ka catalog + issue/return
+import Library from "@/pages/Library";
+
 // 🟢 EXAM PAGES IMPORT
 import Exams from "@/pages/Exams";
 import ExamResults from "@/pages/ExamResults";
@@ -55,6 +65,8 @@ import {
   FileText,
   GraduationCap,
   CalendarCheck,    // 📅 Attendance (v1.5)
+  BookOpen,         // 🗓️ Timetable (v1.7)
+  LayoutGrid,       // 📊 Broadsheet (v1.7)
   Megaphone,        // 📢 Notices (v1.6)
   Award,
   Calculator,
@@ -84,7 +96,9 @@ function Sidebar({
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/students", label: "Students", icon: Users },
     { href: "/attendance", label: "Attendance", icon: CalendarCheck },
+    { href: "/timetable", label: "Timetable", icon: BookOpen },
     { href: "/notices", label: "Notices", icon: Megaphone },
+    { href: "/library", label: "Library", icon: BookOpen },
     { href: "/admissions", label: "Admissions", icon: UserPlus },
     { href: "/student-profile", label: "Student Profile", icon: FileText },
     { href: "/fees", label: "Fees & Payments", icon: Banknote },
@@ -93,6 +107,7 @@ function Sidebar({
     { href: "/exams", label: "Examinations", icon: GraduationCap },
     { href: "/exam-results", label: "Marks Entry", icon: Calculator },
     { href: "/report-cards", label: "Report Cards", icon: Award },
+    { href: "/broadsheet", label: "Broadsheet", icon: LayoutGrid },
     
     { href: "/staff", label: "Staff", icon: Briefcase },
     
@@ -144,7 +159,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.6</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.7</div>
     </div>
   );
 }
@@ -256,7 +271,9 @@ function Router() {
             <Route path="/" component={Dashboard} />
             <Route path="/students" component={Students} />
             <Route path="/attendance" component={Attendance} />
+            <Route path="/timetable" component={Timetable} />
             <Route path="/notices" component={Notices} />
+            <Route path="/library" component={Library} />
             <Route path="/admissions" component={Admissions} />
             <Route path="/student-profile" component={StudentProfile} />
             <Route path="/fees" component={Fees} />
@@ -265,6 +282,7 @@ function Router() {
             <Route path="/exams" component={Exams} />
             <Route path="/exam-results" component={ExamResults} />
             <Route path="/report-cards" component={ReportCards} />
+            <Route path="/broadsheet" component={Broadsheet} />
             
             <Route path="/staff" component={Staff} />
             
@@ -288,8 +306,49 @@ function Router() {
 //  - pehla login (password badalna lazmi) → Login screen ka change-password hissa
 //  - sab theek                      → purana layout (Router) — pages abhi bhi
 //    IPC par hain, unki migration alag batches me hogi.
+// 🔒 License lock screen (v1.7): school ka license khatm ho jaye to
+// data-API server par band hai (403 LICENSE_EXPIRED) — yahan poori
+// app ki jagah sirf ye sandesh + Logout dikhega, taaki user atka na
+// rahe aur Super Admin se sampark kar sake. Super Admin par ye kabhi
+// nahi aata (auth.tsx me licenseExpired uske liye hamesha false hai).
+function LicenseLockScreen() {
+  const { school, logout } = useAuth();
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-xl space-y-4">
+        <div className="text-4xl">🔒</div>
+        <h1 className="text-xl font-bold text-slate-800">
+          License Khatm Ho Gaya Hai
+        </h1>
+        <p className="text-sm text-gray-600">
+          Aapke school ka license khatm ho gaya hai — kripya apne
+          seller/Super Admin se sampark karein.
+        </p>
+        {school?.name && (
+          <p className="text-xs text-gray-400">
+            School: {school.name}
+            {school.licenseExpiry
+              ? ` • License expiry: ${school.licenseExpiry}`
+              : ""}
+            {school.plan ? ` • Plan: ${school.plan}` : ""}
+          </p>
+        )}
+        <Button
+          className="w-full min-h-[44px] gap-2"
+          variant="outline"
+          onClick={() => {
+            void logout();
+          }}
+        >
+          <LogOut className="h-4 w-4" /> Logout
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function Gate() {
-  const { user, loading } = useAuth();
+  const { user, loading, licenseExpired } = useAuth();
 
   if (loading) {
     return (
@@ -302,6 +361,11 @@ function Gate() {
 
   if (!user || user.mustChangePassword) {
     return <Login />;
+  }
+
+  // 🔒 License band ho to Router ki jagah lock screen (v1.7).
+  if (licenseExpired) {
+    return <LicenseLockScreen />;
   }
 
   return <Router />;

@@ -27,11 +27,68 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter, School, ArrowUpCircle } from "lucide-react";
+import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter, School, ArrowUpCircle, Download, CreditCard, Award } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { downloadCsv, todayStamp } from "@/lib/exportCsv";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
+// 🪪📜 v1.7: ID Card + Certificates (TC/Bonafide) — components apna
+// print khud sambhalte hain (ReportCards wala window pattern).
+import {
+  IdCardDialog,
+  type IdCardSchool,
+  type IdCardStudent,
+} from "@/components/IdCard";
+import {
+  CertificateDialog,
+  type CertificateStudent,
+  type CertificateType,
+} from "@/components/Certificates";
+
+// Card/Certificate ke liye school ka shape — branding API (ya auth ke
+// school) se jo mile use is saaf roop me badlo; field na ho to null.
+function normalizeSchool(raw: any): IdCardSchool | null {
+  if (!raw?.name) return null;
+  return {
+    name: String(raw.name),
+    address: raw.address ?? null,
+    phone: raw.phone ?? null,
+    email: raw.email ?? null,
+    logo: raw.logo ?? null,
+    session: raw.session ?? null,
+    primaryColor: raw.primaryColor ?? null,
+  };
+}
+
+// Page ki adapted (snake_case) row se card wala student.
+function toIdCardStudent(s: any): IdCardStudent {
+  return {
+    id: s.id,
+    name: s.name,
+    class: s.class,
+    section: s.section,
+    admissionNo: s.admission_no ?? s.admissionNo ?? "",
+    fatherName: s.father_name ?? s.fatherName ?? "",
+    contact: s.contact ?? "",
+    rollNo: s.rollNo ?? null,
+    dob: s.dob ?? null,
+    photo: s.photo ?? null,
+  };
+}
+
+function toCertificateStudent(s: any): CertificateStudent {
+  return {
+    name: s.name,
+    fatherName: s.father_name ?? s.fatherName ?? "",
+    motherName: s.motherName ?? null,
+    class: s.class,
+    section: s.section,
+    admissionNo: s.admission_no ?? s.admissionNo ?? "",
+    dob: s.dob ?? null,
+    contact: s.contact ?? null,
+  };
+}
 
 export default function Students() {
   const { toast } = useToast();
@@ -39,7 +96,7 @@ export default function Students() {
   // server par uske liye 403 deta hai (requireRole me super_admin
   // hai hi nahi; routes se verify). Isliye SA par API call hi nahi
   // karte — Settings wala no-school card dikhega, lal toast nahi.
-  const { user } = useAuth();
+  const { user, school } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
   // 🎓 Promotion sirf Principal kar sakta hai — server par bhi
   // POST /api/students/promote requireRole("principal") hai.
@@ -61,6 +118,35 @@ export default function Students() {
   const [promoteList, setPromoteList] = useState<any[]>([]);
   const [promoteLoading, setPromoteLoading] = useState(false);
   const [promoting, setPromoting] = useState(false);
+
+  // 🪪📜 v1.7: ID Card / Certificate dialogs ki state + school branding
+  // (Fees/ReportCards wala pattern: /api/branding; na mile to auth ka
+  // school — dono ek hi API row hain).
+  const [branding, setBranding] = useState<any>(null);
+  const [idCardStudent, setIdCardStudent] = useState<IdCardStudent | null>(null);
+  const [certStudent, setCertStudent] = useState<CertificateStudent | null>(null);
+  const [certType, setCertType] = useState<CertificateType>("tc");
+  const [isCertOpen, setIsCertOpen] = useState(false);
+  const schoolForCards = normalizeSchool(branding ?? school);
+
+  useEffect(() => {
+    if (isSuperAdmin) return;
+    (async () => {
+      try {
+        const info = await apiGet<any>("/api/branding");
+        if (info) setBranding(info);
+      } catch {
+        /* auth wala school fallback pehle se hai */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openCertificate = (s: any, type: CertificateType) => {
+    setCertStudent(toCertificateStudent(s));
+    setCertType(type);
+    setIsCertOpen(true);
+  };
 
   // Transport State
   const [isTransportOpen, setIsTransportOpen] = useState(false);
@@ -227,6 +313,39 @@ export default function Students() {
     setPromoting(false);
   };
 
+  // 📤 Export CSV (v1.7 FIN) — client-side, screen par pehle se loaded
+  // list se hi banta hai: matlab jo filter (search/class/section) laga
+  // hai, CSV me bhi wahi students ayenge. Koi nayi API call nahi hai.
+  const exportStudentsCsv = () => {
+    if (students.length === 0) return;
+    downloadCsv(
+      `students-${todayStamp()}.csv`,
+      [
+        "Admission No", "Name", "Class", "Section", "Roll No",
+        "Father Name", "Mother Name", "Contact", "DOB", "Category",
+        "Address", "Transport Route",
+      ],
+      students.map((s: any) => [
+        s.admission_no ?? s.admissionNo ?? "",
+        s.name ?? "",
+        s.class ?? "",
+        s.section ?? "",
+        s.rollNo ?? "",
+        s.father_name ?? s.fatherName ?? "",
+        s.motherName ?? "",
+        s.contact ?? "",
+        s.dob ?? "",
+        s.category ?? "",
+        s.address ?? "",
+        s.route_name ?? "",
+      ]),
+    );
+    toast({
+      title: "CSV download ho gaya",
+      description: `${students.length} student(s) ki list export hui — jo filter laga tha, wahi list gayi hai.`,
+    });
+  };
+
   // Reset Button
   const handleReset = () => {
       setSearch("");
@@ -246,6 +365,18 @@ export default function Students() {
             <Button onClick={openPromoteDialog} size="sm" className="bg-green-600 hover:bg-green-700">
               <ArrowUpCircle className="h-4 w-4 mr-2" />
               Promote Students
+            </Button>
+          )}
+          {!isSuperAdmin && (
+            <Button
+              onClick={exportStudentsCsv}
+              variant="outline"
+              size="sm"
+              disabled={students.length === 0}
+              title="Screen par dikh rahi student list ki CSV file download karein"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Export CSV
             </Button>
           )}
           <Button onClick={fetchStudents} variant="outline" size="sm">
@@ -395,9 +526,17 @@ export default function Students() {
                       </TableCell>
 
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => openTransportDialog(s)} className="text-blue-600 hover:text-blue-800 hover:bg-blue-50">
-                          <Bus className="h-4 w-4 mr-1" /> Edit Bus
-                        </Button>
+                        <div className="flex flex-wrap justify-end gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => setIdCardStudent(toIdCardStudent(s))} className="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50">
+                            <CreditCard className="h-4 w-4 mr-1" /> ID Card
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => openCertificate(s, "tc")} className="text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50">
+                            <Award className="h-4 w-4 mr-1" /> Certificate
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => openTransportDialog(s)} className="text-blue-600 hover:text-blue-800 hover:bg-blue-50">
+                            <Bus className="h-4 w-4 mr-1" /> Edit Bus
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -552,6 +691,25 @@ export default function Students() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 🪪 ID Card (v1.7) — photo dialog khud documents se lata hai */}
+      <IdCardDialog
+        open={!!idCardStudent}
+        onOpenChange={(open) => {
+          if (!open) setIdCardStudent(null);
+        }}
+        student={idCardStudent}
+        school={schoolForCards}
+      />
+
+      {/* 📜 Certificate (v1.7) — TC/Bonafide, andar hi badal sakte hain */}
+      <CertificateDialog
+        open={isCertOpen}
+        onOpenChange={setIsCertOpen}
+        initialType={certType}
+        student={certStudent}
+        school={schoolForCards}
+      />
     </div>
   );
 }

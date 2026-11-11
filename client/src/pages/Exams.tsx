@@ -40,12 +40,16 @@ import {
   Search,
   Save,
   X,
-  School
+  School,
+  CheckCircle,
+  Undo2
 } from "lucide-react";
 
 // Types
 interface Exam {
   id: number;
+  // v1.7: result approval haalat — 'draft' | 'approved'
+  results_status?: string;
   exam_name: string;
   exam_type: string;
   class_name: string;
@@ -80,6 +84,9 @@ const SESSION = "2026-27";
 function adaptExam(e: any) {
   return {
     ...e,
+    // Purani rows par resultsStatus null ho sakta hai — wo 'approved'
+    // hi mani jayengi (server/DB ka default bhi wahi hai).
+    results_status: e.resultsStatus ?? "approved",
     exam_name: e.examName,
     exam_type: e.examType,
     class_name: e.class,
@@ -101,6 +108,9 @@ export default function Exams() {
   // karte — Settings wala no-school card dikhega, lal toast nahi.
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  // v1.7: approve sirf principal kar sakta hai (server bhi wahi deta hai).
+  const isPrincipal = user?.role === "principal";
+  const [togglingStatusId, setTogglingStatusId] = useState<number | null>(null);
   const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -208,6 +218,34 @@ export default function Exams() {
       session: SESSION,
       subject: "",
     });
+  };
+
+  // v1.7: Result approval toggle — POST /api/exams/:id/results-status
+  // (sirf principal). Approved karte hi parent ko marks dikhne lagenge;
+  // wapas draft karte hi parent se result gayab (server par filter hai,
+  // yahan sirf button/badge hai).
+  const toggleResultsStatus = async (exam: Exam) => {
+    const next = exam.results_status === "approved" ? "draft" : "approved";
+    setTogglingStatusId(exam.id);
+    try {
+      await apiPost(`/api/exams/${exam.id}/results-status`, { status: next });
+      toast({
+        title: next === "approved" ? "Result Approved ✅" : "Wapas Draft kar diya",
+        description:
+          next === "approved"
+            ? "Ab parent ko is exam ka result dikhega."
+            : "Ab parent ko is exam ka result NAHI dikhega.",
+      });
+      fetchExams();
+    } catch (e) {
+      toast({
+        title: "Error",
+        description: "Result ki haalat nahi badli — dobara koshish karein.",
+        variant: "destructive",
+      });
+    } finally {
+      setTogglingStatusId(null);
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -430,6 +468,7 @@ export default function Exams() {
                 <TableHead>Max Marks</TableHead>
                 <TableHead>Passing</TableHead>
                 <TableHead>Date</TableHead>
+                <TableHead>Result</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -452,8 +491,42 @@ export default function Exams() {
                         {new Date(exam.exam_date).toLocaleDateString()}
                       </div>
                     </TableCell>
+                    <TableCell>
+                      {exam.results_status === "approved" ? (
+                        <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-medium whitespace-nowrap">
+                          ✅ Approved
+                        </span>
+                      ) : (
+                        <span className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-medium whitespace-nowrap">
+                          📝 Draft — parent ko nahi dikhega
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        {isPrincipal &&
+                          (exam.results_status === "approved" ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={togglingStatusId === exam.id}
+                              onClick={() => toggleResultsStatus(exam)}
+                              title="Wapas draft karo — parent se result chhup jayega"
+                              className="text-amber-700 border-amber-300"
+                            >
+                              <Undo2 className="h-4 w-4 mr-1" /> Draft
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              disabled={togglingStatusId === exam.id}
+                              onClick={() => toggleResultsStatus(exam)}
+                              title="Approve karo — parent ko result dikhega"
+                              className="bg-green-600 hover:bg-green-700"
+                            >
+                              <CheckCircle className="h-4 w-4 mr-1" /> Approve karo
+                            </Button>
+                          ))}
                         <Button 
                           variant="ghost" 
                           size="sm" 

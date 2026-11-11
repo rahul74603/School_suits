@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, apiPut, apiDel } from "@/lib/api";
+import { downloadTextFile, todayStamp } from "@/lib/exportCsv";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 import {
@@ -36,7 +37,9 @@ import {
   Edit,
   RefreshCw,
   Printer,
-  FileText
+  FileText,
+  Download,
+  Database
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -47,6 +50,12 @@ export default function SettingsPage() {
   // Super Admin ka khud ka koi school nahi hota — us haalat me page
   // par lal error toast ki jagah saaf sandesh dikhta hai.
   const [noSchool, setNoSchool] = useState(false);
+  // 📦 Backup/Export (v1.7 FIN) — poora data download SIRF principal
+  // ke liye hai (server par bhi GET /api/export/school sirf
+  // requireRole("principal") hai — jawab me salary aur saare
+  // students ka data hota hai).
+  const isPrincipal = user?.role === "principal";
+  const [exporting, setExporting] = useState(false);
 
   // School ki id page ke state me nahi hoti; PUT /api/schools/:id ke
   // liye load ke samay branding jawab se yahan rakh li jati hai.
@@ -179,6 +188,33 @@ export default function SettingsPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // 📦 Poora Data Download (v1.7 FIN) — GET /api/export/school se
+  // school ka saara data JSON me aata hai; usei ko file banakar
+  // download kar diya jata hai. Account/password isme kabhi nahi
+  // hote (server export me users rakhe hi nahi gaye hain).
+  const downloadFullBackup = async () => {
+    setExporting(true);
+    try {
+      const data = await apiGet<any>("/api/export/school");
+      downloadTextFile(
+        `school-backup-${todayStamp()}.json`,
+        JSON.stringify(data, null, 2),
+        "application/json",
+      );
+      toast({
+        title: "Backup download ho gaya",
+        description: `Students: ${data?.students?.length ?? 0} • Staff: ${data?.staff?.length ?? 0} • Payments: ${data?.feePayments?.length ?? 0} • Dues: ${data?.studentDues?.length ?? 0}. File sambhal kar rakhein — isme school ka saara data hai.`,
+      });
+    } catch (e: any) {
+      toast({
+        title: "Backup nahi ban paya",
+        description: e?.message || "Kuch galat hua — dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setExporting(false);
+  };
 
   // Save School Info
   const saveSchoolInfo = async () => {
@@ -345,6 +381,7 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       ) : (
+      <>
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-4 lg:w-[600px]">
           <TabsTrigger value="school" className="flex shrink-0 items-center gap-2 whitespace-nowrap">
@@ -617,6 +654,41 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* 📦 Backup / Export Card (v1.7 FIN) — sirf Principal ko
+          dikhta hai; server endpoint bhi sirf principal ke liye hai. */}
+      {isPrincipal && (
+        <Card className="border-t-4 border-t-indigo-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Database className="h-5 w-5" /> Backup / Data Export
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-gray-600 leading-relaxed">
+              School ka <b>poora data ek JSON file</b> me download karein —
+              students, staff, fee structure, payments, pending dues, exams,
+              marks, attendance, notices aur transport. Ye aapki apni
+              backup copy hai: file ko surakshit jagah (pen-drive / email /
+              Drive) par sambhal kar rakhein. Account aur password is file
+              me <b>kabhi nahi</b> hote.
+            </p>
+            <Button
+              onClick={() => void downloadFullBackup()}
+              className="bg-indigo-600 hover:bg-indigo-700"
+              disabled={exporting}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              {exporting ? "Backup ban raha hai…" : "Poora Data Download (JSON)"}
+            </Button>
+            <p className="text-[11px] text-gray-400">
+              List-wise CSV chahiye to Students page se students ki aur
+              Fees page se payments / pending dues ki CSV alag se milti hai.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+      </>
       )}
 
       {/* Edit Fee Dialog */}

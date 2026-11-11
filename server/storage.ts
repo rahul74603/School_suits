@@ -1,8 +1,8 @@
 import { 
     users, schools, students, feeStructures, feePayments, staff, studentDues,
     parentStudents,
-    exams, marks, attendance, transportRoutes, additionalFees, salaryPayments, expenses,
-    studentDocuments, staffDocuments, notices,
+    exams, marks, attendance, timetableEntries, transportRoutes, additionalFees, salaryPayments, expenses,
+    studentDocuments, staffDocuments, notices, libraryBooks, libraryIssues,
     type User, type InsertUser, type School, type InsertSchool,
     type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
     type FeePayment, type InsertFeePayment, type Staff, type InsertStaff,
@@ -10,13 +10,16 @@ import {
     type ParentStudent, type InsertParentStudent,
     type Exam, type InsertExam, type Mark, type InsertMark,
     type Attendance, type InsertAttendance,
+    type TimetableEntry, type InsertTimetableEntry,
     type TransportRoute, type InsertTransportRoute,
     type AdditionalFee, type InsertAdditionalFee,
     type SalaryPayment, type InsertSalaryPayment,
     type Expense, type InsertExpense,
     type StudentDocument, type InsertStudentDocument,
     type StaffDocument, type InsertStaffDocument,
-    type Notice, type InsertNotice
+    type Notice, type InsertNotice,
+    type LibraryBook, type InsertLibraryBook,
+    type LibraryIssue, type InsertLibraryIssue
  } from "@shared/schema";
 import { eq, ilike, and, or } from "drizzle-orm";
 import { db } from "./db";
@@ -209,6 +212,392 @@ function summarizePaymentsForStatus(
   return { months, admissionPaidSoFar };
 }
 
+// ---------------------------------------------------------------------------
+// v1.7 FIN — Fee kishten (installments) + poora school data export.
+//
+// === Kishten ka design (Frappe ke fee-schedule model par, apne shabdon me)
+// Ek class ke saare active students ke liye ek saath student_dues rows
+// banti hain — ek row = ek student ki ek kisht.
+//
+// SOURCE-MARKER: student_dues table me koi remarks/batch column NAHI hai
+// (schema padh kar pakka kiya) — ekmatra title field `feeName` hai.
+// Isliye kisht ki pehchan yahi jodi hai:
+//     (studentId, feeName = kisht ka title, dueDate ki calendar date)
+// Dobara generate karne par jis student ke paas usi title + usi date ki
+// due pehle se hai (paid ho ya pending — dono haalat me) wo kisht SKIP
+// hoti hai, nayi row nahi banti. Isi se jawab me { created, skipped }
+// ginti sach bolti hai. Rakam pehchan ka hissa NAHI hai: title+date
+// same ho to rakam badli hui ho tab bhi purani kisht hi rahegi (dohra
+// charge lagne se bachna, galat rakam se zyada bura hai — NOTES dekho).
+//
+// Dono impls (Database/Mock) ke liye logic EK hi jagah hai —
+// summarizePaymentsForStatus wala hi pattern — taaki asal DB aur smoke
+// test ka vyavhaar kabhi alag na ho.
+// ---------------------------------------------------------------------------
+
+export interface FeeInstallmentInput {
+  title: string;
+  amount: number;
+  dueDate: Date;
+}
+
+export interface GenerateInstallmentsResult {
+  studentCount: number;
+  created: number;
+  skipped: number;
+  dues: StudentDues[];
+}
+
+// GET /api/export/school ka jawab — sirf principal ko milta hai.
+// Users/accounts jaan-bujh kar NAHI hain: unme password hash hota hai,
+// backup file me hash kabhi nahi jana chahiye. Documents bhi nahi hain
+// (unka content base64 file_data me hai; backup JSON phool jayega).
+export interface SchoolExportData {
+  exportedAt: string;
+  school: School | null;
+  students: Student[];
+  staff: Staff[];
+  feeStructures: FeeStructure[];
+  feePayments: FeePayment[];
+  studentDues: StudentDues[];
+  exams: Exam[];
+  marks: Mark[];
+  attendance: Attendance[];
+  notices: Notice[];
+  transportRoutes: TransportRoute[];
+  additionalFees: AdditionalFee[];
+  salaryPayments: SalaryPayment[];
+  expenses: Expense[];
+}
+
+// Due ki pehchan ke liye sirf calendar date — time-of-day se farak
+// nahi padna chahiye ("2026-04-10" se bana Date aur DB se wapas aaya
+// timestamp dono ek hi din ginne chahiye).
+function dueDateKey(value: Date | string): string {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toISOString().slice(0, 10);
+}
+
+export async function generateInstallmentDuesImpl(
+  store: IStorage,
+  schoolId: number,
+  className: string,
+  installments: FeeInstallmentInput[],
+): Promise<GenerateInstallmentsResult> {
+  // getStudents dono impls me sirf ACTIVE students deta hai aur
+  // schoolId-scoped hai — school isolation yahin se pakki hai:
+  // dusri school ke students is list me aa hi nahi sakte.
+  const students = await store.getStudents(schoolId, { class: className });
+  const createdDues: StudentDues[] = [];
+  let skipped = 0;
+  for (const student of students) {
+    const existing = await store.getStudentDues(student.id);
+    const existingKeys = new Set(
+      existing.map((d) => `${(d.feeName ?? "").trim()}|${dueDateKey(d.dueDate)}`),
+    );
+    for (const inst of installments) {
+      const title = inst.title.trim();
+      const key = `${title}|${dueDateKey(inst.dueDate)}`;
+      if (existingKeys.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      const due = await store.createStudentDue({
+        studentId: student.id,
+        feeName: title,
+        amount: inst.amount,
+        dueDate: inst.dueDate,
+        isPaid: 0,
+      });
+      // Ek hi request me wahi kisht do baar aaye to dusri skip hogi.
+      existingKeys.add(key);
+      createdDues.push(due);
+    }
+  }
+  return {
+    studentCount: students.length,
+    created: createdDues.length,
+    skipped,
+    dues: createdDues,
+  };
+}
+
+export async function buildSchoolExportImpl(
+  store: IStorage,
+  schoolId: number,
+): Promise<SchoolExportData> {
+  const school = (await store.getSchool(schoolId)) ?? null;
+  // getStudents = sirf active students (dono impls ka maujooda
+  // vyavhaar) — deactivated students export me nahi ayenge; NOTES
+  // me flag hai. Staff ke liye includeInactive hai, isliye staff
+  // poora ayega.
+  const students = await store.getStudents(schoolId);
+  const staffList = await store.getStaff(schoolId, { includeInactive: true });
+  const feeStructures = await store.getFeeStructures(schoolId);
+  const feePayments = await store.getFeePayments(schoolId);
+  // Dues/marks/attendance ke school-level getters nahi hain — student/
+  // exam ke zariye jode jate hain (student_dues me school_id hai hi
+  // nahi, wahi purana usool).
+  const studentDues = (
+    await Promise.all(students.map((s) => store.getStudentDues(s.id)))
+  ).flat();
+  const exams = await store.getExams(schoolId);
+  const marks = (
+    await Promise.all(exams.map((e) => store.getExamMarks(e.id)))
+  ).flat();
+  const attendanceRows = (
+    await Promise.all(students.map((s) => store.getStudentAttendance(s.id)))
+  ).flat();
+  const notices = await store.getNotices(schoolId);
+  const transportRoutes = await store.getTransportRoutes(schoolId);
+  const additionalFees = await store.getAdditionalFees(schoolId);
+  const salaryPayments = await store.getSalaryPayments(schoolId);
+  const expenses = await store.getExpenses(schoolId);
+  return {
+    exportedAt: new Date().toISOString(),
+    school,
+    students,
+    staff: staffList,
+    feeStructures,
+    feePayments,
+    studentDues,
+    exams,
+    marks,
+    attendance: attendanceRows,
+    notices,
+    transportRoutes,
+    additionalFees,
+    salaryPayments,
+    expenses,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Attendance office reports (v1.7) — DatabaseStorage aur MockStorage dono
+// yahi do PURE helpers istemal karte hain, taaki hisaab har jagah ek
+// jaisa rahe (summarizeAttendance wala hi usool). Helpers sirf diye gaye
+// students/rows par chalte hain — DB chhoote hi nahi, isliye inki
+// paribhasha hi asal specification hai.
+//
+// (a) Missing report ki paribhasha:
+//  - Ikai (unit) = class+section group, kyunki hajri asal me class+section
+//    ke roster par lagti hai (GET /api/attendance). Sirf "class" lene se
+//    section B ki chhooti hajri "lagi hui" dikh jati — jhooth hota.
+//  - Sirf ACTIVE students (getStudents pehle se isActive=1 deta hai).
+//  - Group ki haalat: markedCount == studentCount → "marked";
+//    0 < markedCount < studentCount → "partial"; 0 → "missing".
+//    markedCount = us date par attendance row wale alag students.
+//  - Kram: missing pehle, phir partial, phir marked; andar class/section.
+//
+// (b) Absent-streak report ki paribhasha (imaandaar — jhooti list nahi):
+//  - Har class+section group ki apni "attendance-dates" = wo dates jin
+//    par us group ke KISI student ki row hai. Group ke paas kul milakar
+//    `days` se kam aisi dates hon to poora group list se BAHAR — kam
+//    data par "lagatar absent" ka daawa nahi banta.
+//  - Student tabhi list me hai jab group ki AAKHRI `days` attendance-
+//    dates me se HAR date par uski apni row 'absent' ho. Kisi date par
+//    row hi na ho (naya admission / us din mark nahi hua) to wo absent
+//    NAHI gina jata — student bahar.
+//  - consecutiveAbsent = group ki sabse taaza date se peeche ginne par
+//    lagatar 'absent' wali dates ki asal ginti (ye `days` se zyada bhi
+//    ho sakti hai; kam kabhi nahi, kyunki shart hi wahi hai).
+//  - lastPresentDate = student ki sabse taaza date jahan status
+//    present/late/half_day ho (school AAYA tha); kabhi na aaya ho to null.
+//  - Sirf ACTIVE students (getStudents se aaye hue hi diye jate hain).
+// ---------------------------------------------------------------------------
+export interface AttendanceMissingGroup {
+  class: string;
+  section: string;
+  studentCount: number;
+  markedCount: number;
+  status: "marked" | "partial" | "missing";
+}
+
+export interface AttendanceMissingReport {
+  date: string;
+  totalGroups: number;
+  markedGroups: number;
+  partialGroups: number;
+  missingGroups: number;
+  totalStudents: number;
+  markedStudents: number;
+  groups: AttendanceMissingGroup[];
+}
+
+export interface AbsentStreakEntry {
+  studentId: number;
+  name: string;
+  class: string;
+  section: string;
+  admissionNo: string;
+  contact: string;
+  consecutiveAbsent: number;
+  lastAbsentDate: string;
+  lastPresentDate: string | null;
+  streakDates: string[];
+}
+
+type ReportStudent = {
+  id: number;
+  name: string;
+  class: string;
+  section: string;
+  admissionNo: string;
+  contact: string;
+};
+
+type ReportAttendanceRow = {
+  studentId: number;
+  date: string;
+  status: string;
+};
+
+function groupKeyOf(student: { class: string; section: string }): string {
+  return `${student.class}\x00${student.section}`;
+}
+
+export function computeMissingReport(
+  students: ReportStudent[],
+  markedStudentIds: Set<number>,
+  date: string,
+): AttendanceMissingReport {
+  const byGroup = new Map<string, AttendanceMissingGroup>();
+  for (const student of students) {
+    const key = groupKeyOf(student);
+    let group = byGroup.get(key);
+    if (!group) {
+      group = {
+        class: student.class,
+        section: student.section,
+        studentCount: 0,
+        markedCount: 0,
+        status: "missing",
+      };
+      byGroup.set(key, group);
+    }
+    group.studentCount += 1;
+    if (markedStudentIds.has(student.id)) group.markedCount += 1;
+  }
+  const groups = Array.from(byGroup.values());
+  for (const group of groups) {
+    group.status =
+      group.markedCount === 0
+        ? "missing"
+        : group.markedCount >= group.studentCount
+          ? "marked"
+          : "partial";
+  }
+  const statusRank = { missing: 0, partial: 1, marked: 2 } as const;
+  groups.sort(
+    (a, b) =>
+      statusRank[a.status as keyof typeof statusRank] - statusRank[b.status as keyof typeof statusRank] ||
+      a.class.localeCompare(b.class) ||
+      a.section.localeCompare(b.section),
+  );
+  return {
+    date,
+    totalGroups: groups.length,
+    markedGroups: groups.filter((g) => g.status === "marked").length,
+    partialGroups: groups.filter((g) => g.status === "partial").length,
+    missingGroups: groups.filter((g) => g.status === "missing").length,
+    totalStudents: groups.reduce((sum, g) => sum + g.studentCount, 0),
+    markedStudents: groups.reduce((sum, g) => sum + g.markedCount, 0),
+    groups,
+  };
+}
+
+export function computeAbsentStreak(
+  students: ReportStudent[],
+  rows: ReportAttendanceRow[],
+  days: number,
+): AbsentStreakEntry[] {
+  const wanted = Math.max(1, Math.floor(days) || 1);
+  const rowsByStudent = new Map<number, Map<string, string>>();
+  for (const row of rows) {
+    let byDate = rowsByStudent.get(row.studentId);
+    if (!byDate) {
+      byDate = new Map();
+      rowsByStudent.set(row.studentId, byDate);
+    }
+    byDate.set(row.date, row.status);
+  }
+
+  const studentsByGroup = new Map<string, ReportStudent[]>();
+  for (const student of students) {
+    const key = groupKeyOf(student);
+    const list = studentsByGroup.get(key) ?? [];
+    list.push(student);
+    studentsByGroup.set(key, list);
+  }
+
+  const entries: AbsentStreakEntry[] = [];
+  for (const groupStudents of Array.from(studentsByGroup.values())) {
+    // Is group ki attendance-dates: kisi bhi group-student ki row wali dates.
+    const dateSet = new Set<string>();
+    for (const student of groupStudents) {
+      const byDate = rowsByStudent.get(student.id);
+      if (byDate) for (const d of Array.from(byDate.keys())) dateSet.add(d);
+    }
+    const groupDates = Array.from(dateSet).sort();
+    // Kam data = koi daawa nahi (paribhasha upar).
+    if (groupDates.length < wanted) continue;
+    const windowDates = groupDates.slice(groupDates.length - wanted);
+
+    for (const student of groupStudents) {
+      const byDate = rowsByStudent.get(student.id);
+      if (!byDate) continue;
+      // Shart: aakhri `days` group-dates me HAR date par khud 'absent'.
+      const qualifies = windowDates.every(
+        (d) => byDate.get(d) === "absent",
+      );
+      if (!qualifies) continue;
+
+      // Asal lagatar ginti: sabse taaza group-date se peeche chalo.
+      let streak = 0;
+      const streakDates: string[] = [];
+      for (let i = groupDates.length - 1; i >= 0; i--) {
+        if (byDate.get(groupDates[i]) === "absent") {
+          streak += 1;
+          streakDates.unshift(groupDates[i]);
+        } else {
+          break;
+        }
+      }
+
+      let lastPresentDate: string | null = null;
+      for (const [d, status] of Array.from(byDate.entries())) {
+        if (
+          (status === "present" || status === "late" || status === "half_day") &&
+          (lastPresentDate == null || d > lastPresentDate)
+        ) {
+          lastPresentDate = d;
+        }
+      }
+
+      entries.push({
+        studentId: student.id,
+        name: student.name,
+        class: student.class,
+        section: student.section,
+        admissionNo: student.admissionNo,
+        contact: student.contact,
+        consecutiveAbsent: streak,
+        lastAbsentDate: groupDates[groupDates.length - 1],
+        lastPresentDate,
+        streakDates,
+      });
+    }
+  }
+
+  entries.sort(
+    (a, b) =>
+      b.consecutiveAbsent - a.consecutiveAbsent ||
+      a.name.localeCompare(b.name),
+  );
+  return entries;
+}
+
 // 1. Interface Definition
 // ---------------------------------------------------------------------------
 // Attendance summary helper (v1.5) — DatabaseStorage aur MockStorage dono
@@ -375,6 +764,18 @@ export interface IStorage {
   getMarksForStudents(examId: number, studentIds: number[]): Promise<Mark[]>;
   saveExamMarks(examId: number, schoolId: number, entries: Array<{ studentId: number; marksObtained: number | null; remarks?: string | null }>): Promise<Mark[]>;
   getStudentMarks(studentId: number): Promise<Mark[]>;
+  // Result approval (v1.7): exam ki results_status badalna — route
+  // sirf principal ko deta hai; storage bas likhta hai.
+  updateExamResultsStatus(id: number, status: string): Promise<Exam | undefined>;
+
+  // Timetable (v1.7) — getTimetableEntries hafta-bhar ki entries
+  // din/period kram me deta hai; upsert (school, class, day, period)
+  // par maujood entry update karta hai warna nayi banata hai
+  // (markAttendanceBulk wala hi pattern).
+  getTimetableEntries(schoolId: number, className: string): Promise<TimetableEntry[]>;
+  getTimetableEntry(id: number): Promise<TimetableEntry | undefined>;
+  upsertTimetableEntry(entry: InsertTimetableEntry): Promise<TimetableEntry>;
+  deleteTimetableEntry(id: number): Promise<void>;
 
   // Attendance (v1.5) — bulk mark/upsert saveExamMarks wale hi pattern
   // par: (student_id, date) par maujood row update, warna nayi row.
@@ -390,6 +791,11 @@ export interface IStorage {
     halfDay: number;
     percentage: number;
   }>;
+  // Office reports (v1.7) — paribhashayein upar computeMissingReport /
+  // computeAbsentStreak ke paas. Dono sirf ACTIVE students par chalte
+  // hain (getStudents ka default vyavhaar).
+  getAttendanceMissingReport(schoolId: number, date: string): Promise<AttendanceMissingReport>;
+  getAbsentStreakReport(schoolId: number, days: number): Promise<AbsentStreakEntry[]>;
 
   // Notices (§5.8 #70–72)
   getNotices(schoolId: number): Promise<Notice[]>;
@@ -397,6 +803,20 @@ export interface IStorage {
   createNotice(notice: InsertNotice): Promise<Notice>;
   updateNotice(id: number, notice: Partial<InsertNotice>): Promise<Notice>;
   deleteNotice(id: number): Promise<void>;
+
+  // Library (v1.7) — books catalog + issue/return. Uplabdh copies ka
+  // hisaab routes par hai (copiesTotal − active issues); storage sirf
+  // rows deta hai, countActiveLibraryIssues usi hisaab ka hissa hai.
+  getLibraryBooks(schoolId: number): Promise<LibraryBook[]>;
+  getLibraryBook(id: number): Promise<LibraryBook | undefined>;
+  createLibraryBook(book: InsertLibraryBook): Promise<LibraryBook>;
+  updateLibraryBook(id: number, book: Partial<InsertLibraryBook>): Promise<LibraryBook>;
+  deleteLibraryBook(id: number): Promise<void>;
+  getLibraryIssues(schoolId: number, filters?: { studentId?: number; studentIds?: number[]; activeOnly?: boolean }): Promise<LibraryIssue[]>;
+  getLibraryIssue(id: number): Promise<LibraryIssue | undefined>;
+  createLibraryIssue(issue: InsertLibraryIssue): Promise<LibraryIssue>;
+  returnLibraryIssue(id: number): Promise<LibraryIssue>;
+  countActiveLibraryIssues(bookId: number): Promise<number>;
 
   // Reports (§5.7 #61–62 + #63 dashboard)
   getPendingDuesTotal(schoolId: number): Promise<number>;
@@ -422,6 +842,17 @@ export interface IStorage {
     monthCollection: number;
     pendingDuesTotal: number;
   }>;
+
+  // ---------------------------------------------------------------------
+  // v1.7 FIN — Fee kishten + poora school export (upar wale shared
+  // impls par chalte hain; dono storage impls lazmi implement karengi).
+  // ---------------------------------------------------------------------
+  generateInstallmentDues(
+    schoolId: number,
+    className: string,
+    installments: FeeInstallmentInput[],
+  ): Promise<GenerateInstallmentsResult>;
+  getSchoolExport(schoolId: number): Promise<SchoolExportData>;
 } // <-- interface yahan band hona chahiye tha
 
 // 2. Database Implementation
@@ -917,6 +1348,52 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(marks).where(eq(marks.studentId, studentId));
   }
 
+  async updateExamResultsStatus(id: number, status: string): Promise<Exam | undefined> {
+    const [updated] = await db.update(exams)
+      .set({ resultsStatus: status, updatedAt: new Date() })
+      .where(eq(exams.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getTimetableEntries(schoolId: number, className: string): Promise<TimetableEntry[]> {
+    const rows = await db.select().from(timetableEntries)
+      .where(and(eq(timetableEntries.schoolId, schoolId), eq(timetableEntries.className, className)));
+    return rows.sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.periodNo - b.periodNo);
+  }
+
+  async getTimetableEntry(id: number): Promise<TimetableEntry | undefined> {
+    const [entry] = await db.select().from(timetableEntries).where(eq(timetableEntries.id, id));
+    return entry;
+  }
+
+  // Upsert: pehle (school, class, day, period) par select — maujood ho
+  // to subject/teacher update, warna insert. Schema me is chaar par
+  // unique index bhi hai, isliye dohra record DB star par bhi nahi
+  // ban sakta (attendance bulk wala hi usool).
+  async upsertTimetableEntry(entry: InsertTimetableEntry): Promise<TimetableEntry> {
+    const [existing] = await db.select().from(timetableEntries)
+      .where(and(
+        eq(timetableEntries.schoolId, entry.schoolId ?? 0),
+        eq(timetableEntries.className, entry.className),
+        eq(timetableEntries.dayOfWeek, entry.dayOfWeek),
+        eq(timetableEntries.periodNo, entry.periodNo),
+      ));
+    if (existing) {
+      const [updated] = await db.update(timetableEntries)
+        .set({ subject: entry.subject, teacherId: entry.teacherId ?? null, updatedAt: new Date() })
+        .where(eq(timetableEntries.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(timetableEntries).values(entry).returning();
+    return created;
+  }
+
+  async deleteTimetableEntry(id: number): Promise<void> {
+    await db.delete(timetableEntries).where(eq(timetableEntries.id, id));
+  }
+
   // Attendance bulk mark (v1.5) — saveExamMarks wala hi upsert pattern:
   // (student_id, date) par pehle select, maujood ho to update warna
   // insert. (Schema me is pair par unique index bhi hai — dohra record
@@ -971,6 +1448,30 @@ export class DatabaseStorage implements IStorage {
     return summarizeAttendance(monthPrefix, rows);
   }
 
+  // Office reports (v1.7) — hisaab shared pure helpers me hai; yahan
+  // sirf school-scoped data ikattha hota hai. getStudents pehle se
+  // sirf active students deta hai.
+  async getAttendanceMissingReport(schoolId: number, date: string): Promise<AttendanceMissingReport> {
+    const students = await this.getStudents(schoolId);
+    const rows = await db.select().from(attendance)
+      .where(and(eq(attendance.schoolId, schoolId), eq(attendance.date, date)));
+    return computeMissingReport(
+      students,
+      new Set(rows.map((row) => row.studentId)),
+      date,
+    );
+  }
+
+  async getAbsentStreakReport(schoolId: number, days: number): Promise<AbsentStreakEntry[]> {
+    const students = await this.getStudents(schoolId);
+    // Streak ke liye school ki saari attendance rows chahiye (group ki
+    // aakhri dates nikaalne ke liye). Chhote school ke scale par ye
+    // theek hai; bade hone par date-window wali query baad me aayegi.
+    const rows = await db.select().from(attendance)
+      .where(eq(attendance.schoolId, schoolId));
+    return computeAbsentStreak(students, rows, days);
+  }
+
   async getNotices(schoolId: number): Promise<Notice[]> {
     return await db.select().from(notices).where(eq(notices.schoolId, schoolId));
   }
@@ -992,6 +1493,65 @@ export class DatabaseStorage implements IStorage {
 
   async deleteNotice(id: number): Promise<void> {
     await db.delete(notices).where(eq(notices.id, id));
+  }
+
+  // Library (v1.7) — DatabaseStorage.
+  async getLibraryBooks(schoolId: number): Promise<LibraryBook[]> {
+    return await db.select().from(libraryBooks).where(eq(libraryBooks.schoolId, schoolId));
+  }
+
+  async getLibraryBook(id: number): Promise<LibraryBook | undefined> {
+    const [book] = await db.select().from(libraryBooks).where(eq(libraryBooks.id, id));
+    return book;
+  }
+
+  async createLibraryBook(book: InsertLibraryBook): Promise<LibraryBook> {
+    const [created] = await db.insert(libraryBooks).values(book).returning();
+    return created;
+  }
+
+  async updateLibraryBook(id: number, bookUpdate: Partial<InsertLibraryBook>): Promise<LibraryBook> {
+    const [book] = await db.update(libraryBooks).set(bookUpdate).where(eq(libraryBooks.id, id)).returning();
+    return book;
+  }
+
+  async deleteLibraryBook(id: number): Promise<void> {
+    await db.delete(libraryBooks).where(eq(libraryBooks.id, id));
+  }
+
+  async getLibraryIssues(schoolId: number, filters?: { studentId?: number; studentIds?: number[]; activeOnly?: boolean }): Promise<LibraryIssue[]> {
+    let rows = await db.select().from(libraryIssues).where(eq(libraryIssues.schoolId, schoolId));
+    if (filters?.studentId != null) rows = rows.filter((row) => row.studentId === filters.studentId);
+    if (filters?.studentIds) {
+      const wanted = new Set(filters.studentIds);
+      rows = rows.filter((row) => wanted.has(row.studentId));
+    }
+    if (filters?.activeOnly) rows = rows.filter((row) => row.returnedAt == null);
+    // Nayi issue pehle (list screen ke liye).
+    return rows.sort((a, b) => b.id - a.id);
+  }
+
+  async getLibraryIssue(id: number): Promise<LibraryIssue | undefined> {
+    const [issue] = await db.select().from(libraryIssues).where(eq(libraryIssues.id, id));
+    return issue;
+  }
+
+  async createLibraryIssue(issue: InsertLibraryIssue): Promise<LibraryIssue> {
+    const [created] = await db.insert(libraryIssues).values(issue).returning();
+    return created;
+  }
+
+  async returnLibraryIssue(id: number): Promise<LibraryIssue> {
+    const [issue] = await db.update(libraryIssues)
+      .set({ returnedAt: new Date(), updatedAt: new Date() })
+      .where(eq(libraryIssues.id, id))
+      .returning();
+    return issue;
+  }
+
+  async countActiveLibraryIssues(bookId: number): Promise<number> {
+    const rows = await db.select().from(libraryIssues).where(eq(libraryIssues.bookId, bookId));
+    return rows.filter((row) => row.returnedAt == null).length;
   }
 
   // student_dues table me school_id column NAHI hai — dues student se
@@ -1106,6 +1666,21 @@ export class DatabaseStorage implements IStorage {
       pendingDuesTotal,
     };
   }
+
+  // v1.7 FIN — DatabaseStorage: asal kaam upar wale shared impls me
+  // hai (generateInstallmentDuesImpl / buildSchoolExportImpl), yahan
+  // sirf unhi ko is class ke getters se chalana hai.
+  async generateInstallmentDues(
+    schoolId: number,
+    className: string,
+    installments: FeeInstallmentInput[],
+  ): Promise<GenerateInstallmentsResult> {
+    return generateInstallmentDuesImpl(this, schoolId, className, installments);
+  }
+
+  async getSchoolExport(schoolId: number): Promise<SchoolExportData> {
+    return buildSchoolExportImpl(this, schoolId);
+  }
 }
 
 // 3. Mock Storage
@@ -1126,6 +1701,8 @@ export class MockStorage implements IStorage {
       admissionPrefix: "SCHOOL",
       admissionYear: null,
       admissionStart: 1,
+      plan: "Basic",
+      licenseExpiry: null,
       isActive: 1,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -1142,6 +1719,7 @@ export class MockStorage implements IStorage {
   private examsData: Exam[] = [];
   private marksData: Mark[] = [];
   private attendanceData: Attendance[] = [];
+  private timetableEntriesData: TimetableEntry[] = [];
   private transportRoutesData: TransportRoute[] = [];
   private additionalFeesData: AdditionalFee[] = [];
   private salaryPaymentsData: SalaryPayment[] = [];
@@ -1149,6 +1727,8 @@ export class MockStorage implements IStorage {
   private studentDocumentsData: StudentDocument[] = [];
   private staffDocumentsData: StaffDocument[] = [];
   private noticesData: Notice[] = [];
+  private libraryBooksData: LibraryBook[] = [];
+  private libraryIssuesData: LibraryIssue[] = [];
 
   private nextUserId = 1;
   private nextSchoolId = 2;
@@ -1160,6 +1740,7 @@ export class MockStorage implements IStorage {
   private nextExamId = 1;
   private nextMarkId = 1;
   private nextAttendanceId = 1;
+  private nextTimetableEntryId = 1;
   private nextTransportRouteId = 1;
   private nextAdditionalFeeId = 1;
   private nextSalaryPaymentId = 1;
@@ -1167,6 +1748,8 @@ export class MockStorage implements IStorage {
   private nextStudentDocumentId = 1;
   private nextStaffDocumentId = 1;
   private nextNoticeId = 1;
+  private nextLibraryBookId = 1;
+  private nextLibraryIssueId = 1;
 
   async getUser(id: number): Promise<User | undefined> {
     return this.usersData.find((item) => item.id === id);
@@ -1278,6 +1861,8 @@ export class MockStorage implements IStorage {
       admissionPrefix: school.admissionPrefix ?? "SCHOOL",
       admissionYear: school.admissionYear ?? null,
       admissionStart: school.admissionStart ?? 1,
+      plan: school.plan ?? "Basic",
+      licenseExpiry: school.licenseExpiry ?? null,
       isActive: school.isActive ?? 1,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -1652,7 +2237,12 @@ export class MockStorage implements IStorage {
       examName: exam.examName, examType: exam.examType ?? null,
       class: exam.class, section: exam.section ?? null,
       subject: exam.subject ?? null, maxMarks: exam.maxMarks ?? 100,
-      passingMarks: exam.passingMarks ?? null, examDate: exam.examDate ?? null,
+      passingMarks: exam.passingMarks ?? null,
+      // DB column ka default 'approved' hai (purani rows ke liye);
+      // route naye exam par 'draft' khud bhejta hai — yahan jo aaya
+      // wahi, na aaya ho to default wali 'approved'.
+      resultsStatus: exam.resultsStatus ?? "approved",
+      examDate: exam.examDate ?? null,
       session: exam.session ?? null, createdAt: new Date(), updatedAt: new Date(),
     };
     this.examsData.push(created);
@@ -1696,6 +2286,53 @@ export class MockStorage implements IStorage {
 
   async getStudentMarks(studentId: number): Promise<Mark[]> {
     return this.marksData.filter((item) => item.studentId === studentId);
+  }
+
+  async updateExamResultsStatus(id: number, status: string): Promise<Exam | undefined> {
+    const index = this.examsData.findIndex((item) => item.id === id);
+    if (index < 0) return undefined;
+    const updated: Exam = { ...this.examsData[index], resultsStatus: status, updatedAt: new Date() };
+    this.examsData[index] = updated;
+    return updated;
+  }
+
+  async getTimetableEntries(schoolId: number, className: string): Promise<TimetableEntry[]> {
+    return this.timetableEntriesData
+      .filter((item) => item.schoolId === schoolId && item.className === className)
+      .sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.periodNo - b.periodNo);
+  }
+
+  async getTimetableEntry(id: number): Promise<TimetableEntry | undefined> {
+    return this.timetableEntriesData.find((item) => item.id === id);
+  }
+
+  async upsertTimetableEntry(entry: InsertTimetableEntry): Promise<TimetableEntry> {
+    const existing = this.timetableEntriesData.find(
+      (item) =>
+        item.schoolId === (entry.schoolId ?? null) &&
+        item.className === entry.className &&
+        item.dayOfWeek === entry.dayOfWeek &&
+        item.periodNo === entry.periodNo,
+    );
+    if (existing) {
+      existing.subject = entry.subject;
+      existing.teacherId = entry.teacherId ?? null;
+      existing.updatedAt = new Date();
+      return existing;
+    }
+    const created: TimetableEntry = {
+      id: this.nextTimetableEntryId++, schoolId: entry.schoolId ?? null,
+      className: entry.className, dayOfWeek: entry.dayOfWeek,
+      periodNo: entry.periodNo, subject: entry.subject,
+      teacherId: entry.teacherId ?? null,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    this.timetableEntriesData.push(created);
+    return created;
+  }
+
+  async deleteTimetableEntry(id: number): Promise<void> {
+    this.timetableEntriesData = this.timetableEntriesData.filter((item) => item.id !== id);
   }
 
   async markAttendanceBulk(schoolId: number, markedBy: number, date: string, entries: Array<{ studentId: number; status: string; remarks?: string | null }>): Promise<Attendance[]> {
@@ -1752,6 +2389,26 @@ export class MockStorage implements IStorage {
     return summarizeAttendance(monthPrefix, rows);
   }
 
+  // Office reports (v1.7) — DatabaseStorage wala hi vyavhaar, in-memory
+  // arrays par (shared pure helpers hi hisaab karte hain).
+  async getAttendanceMissingReport(schoolId: number, date: string): Promise<AttendanceMissingReport> {
+    const students = await this.getStudents(schoolId);
+    const rows = this.attendanceData.filter(
+      (item) => item.schoolId === schoolId && item.date === date,
+    );
+    return computeMissingReport(
+      students,
+      new Set(rows.map((row) => row.studentId)),
+      date,
+    );
+  }
+
+  async getAbsentStreakReport(schoolId: number, days: number): Promise<AbsentStreakEntry[]> {
+    const students = await this.getStudents(schoolId);
+    const rows = this.attendanceData.filter((item) => item.schoolId === schoolId);
+    return computeAbsentStreak(students, rows, days);
+  }
+
   async getNotices(schoolId: number): Promise<Notice[]> {
     return this.noticesData.filter((item) => item.schoolId === schoolId);
   }
@@ -1781,6 +2438,80 @@ export class MockStorage implements IStorage {
 
   async deleteNotice(id: number): Promise<void> {
     this.noticesData = this.noticesData.filter((item) => item.id !== id);
+  }
+
+  // Library (v1.7) — MockStorage (DatabaseStorage wale hi semantics).
+  async getLibraryBooks(schoolId: number): Promise<LibraryBook[]> {
+    return this.libraryBooksData.filter((item) => item.schoolId === schoolId);
+  }
+
+  async getLibraryBook(id: number): Promise<LibraryBook | undefined> {
+    return this.libraryBooksData.find((item) => item.id === id);
+  }
+
+  async createLibraryBook(book: InsertLibraryBook): Promise<LibraryBook> {
+    const created: LibraryBook = {
+      id: this.nextLibraryBookId++, schoolId: book.schoolId ?? null,
+      title: book.title, author: book.author ?? null,
+      copiesTotal: book.copiesTotal ?? 1,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    this.libraryBooksData.push(created);
+    return created;
+  }
+
+  async updateLibraryBook(id: number, bookUpdate: Partial<InsertLibraryBook>): Promise<LibraryBook> {
+    const index = this.libraryBooksData.findIndex((item) => item.id === id);
+    if (index < 0) throw new Error("Library book not found");
+    const updated: LibraryBook = { ...this.libraryBooksData[index], ...bookUpdate };
+    this.libraryBooksData[index] = updated;
+    return updated;
+  }
+
+  async deleteLibraryBook(id: number): Promise<void> {
+    this.libraryBooksData = this.libraryBooksData.filter((item) => item.id !== id);
+  }
+
+  async getLibraryIssues(schoolId: number, filters?: { studentId?: number; studentIds?: number[]; activeOnly?: boolean }): Promise<LibraryIssue[]> {
+    let rows = this.libraryIssuesData.filter((item) => item.schoolId === schoolId);
+    if (filters?.studentId != null) rows = rows.filter((item) => item.studentId === filters.studentId);
+    if (filters?.studentIds) rows = rows.filter((item) => filters.studentIds!.includes(item.studentId));
+    if (filters?.activeOnly) rows = rows.filter((item) => item.returnedAt == null);
+    return rows.sort((a, b) => b.id - a.id);
+  }
+
+  async getLibraryIssue(id: number): Promise<LibraryIssue | undefined> {
+    return this.libraryIssuesData.find((item) => item.id === id);
+  }
+
+  async createLibraryIssue(issue: InsertLibraryIssue): Promise<LibraryIssue> {
+    const created: LibraryIssue = {
+      id: this.nextLibraryIssueId++, schoolId: issue.schoolId ?? null,
+      bookId: issue.bookId, studentId: issue.studentId,
+      issueDate: issue.issueDate, dueDate: issue.dueDate,
+      returnedAt: issue.returnedAt ?? null,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    this.libraryIssuesData.push(created);
+    return created;
+  }
+
+  async returnLibraryIssue(id: number): Promise<LibraryIssue> {
+    const index = this.libraryIssuesData.findIndex((item) => item.id === id);
+    if (index < 0) throw new Error("Library issue not found");
+    const updated: LibraryIssue = {
+      ...this.libraryIssuesData[index],
+      returnedAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.libraryIssuesData[index] = updated;
+    return updated;
+  }
+
+  async countActiveLibraryIssues(bookId: number): Promise<number> {
+    return this.libraryIssuesData.filter(
+      (item) => item.bookId === bookId && item.returnedAt == null,
+    ).length;
   }
 
   async getPendingDuesTotal(schoolId: number): Promise<number> {
@@ -1889,6 +2620,20 @@ export class MockStorage implements IStorage {
       monthCollection,
       pendingDuesTotal,
     };
+  }
+
+  // v1.7 FIN — MockStorage: DatabaseStorage wale hi shared impls
+  // (vyavhaar me farak mumkin hi nahi — smoke test isi par chalta hai).
+  async generateInstallmentDues(
+    schoolId: number,
+    className: string,
+    installments: FeeInstallmentInput[],
+  ): Promise<GenerateInstallmentsResult> {
+    return generateInstallmentDuesImpl(this, schoolId, className, installments);
+  }
+
+  async getSchoolExport(schoolId: number): Promise<SchoolExportData> {
+    return buildSchoolExportImpl(this, schoolId);
   }
 }
 

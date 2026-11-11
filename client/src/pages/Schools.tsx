@@ -21,6 +21,13 @@ import {
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Building2,
   Plus,
   RefreshCw,
@@ -76,6 +83,12 @@ interface SchoolRow {
   session: string | null;
   admissionPrefix: string | null;
   admissionYear: string | null;
+  // Plans/License (v1.7): plan "Basic" | "Pro"; licenseExpiry
+  // "YYYY-MM-DD" ya null (null = koi expiry nahi). Expiry beet jaye
+  // to us school ke users ke data-API band ho jate hain (server par
+  // license guard) — isActive wala purana switch isse alag hai.
+  plan: string | null;
+  licenseExpiry: string | null;
   // DB me 0/1 (integer) — hamesha !! se padho.
   isActive: number | boolean;
   createdAt: string | null;
@@ -172,6 +185,12 @@ export default function Schools() {
     schoolName: string;
     temporaryPassword: string;
   } | null>(null);
+  // Plan/license ki chal rahi editing (v1.7) — school id ke hisaab se;
+  // entry na ho to school ki asal values hi dikhti hain.
+  const [licenseEdits, setLicenseEdits] = useState<
+    Record<number, { plan: string; licenseExpiry: string }>
+  >({});
+  const [licenseBusyId, setLicenseBusyId] = useState<number | null>(null);
 
   const fetchSchools = async () => {
     setLoading(true);
@@ -397,6 +416,63 @@ export default function Schools() {
     return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("en-IN");
   };
 
+  // Plan/license save (v1.7) — maujooda PUT /api/schools/:id se hi
+  // hota hai: updateSchoolSchema insertSchoolSchema.partial() hai,
+  // isliye plan/licenseExpiry fields usi me aa gaye hain (server par
+  // sirf super_admin inhe badal sakta hai — principal ke bheje hue
+  // ye fields server hata deta hai).
+  const licenseEditFor = (school: SchoolRow) =>
+    licenseEdits[school.id] ?? {
+      plan: school.plan || "Basic",
+      licenseExpiry: school.licenseExpiry || "",
+    };
+
+  const setLicenseEdit = (
+    school: SchoolRow,
+    patch: Partial<{ plan: string; licenseExpiry: string }>,
+  ) => {
+    setLicenseEdits((prev) => ({
+      ...prev,
+      [school.id]: { ...licenseEditFor(school), ...patch },
+    }));
+  };
+
+  const isLicenseExpiredRow = (school: SchoolRow) => {
+    if (!school.licenseExpiry) return false;
+    return school.licenseExpiry < new Date().toISOString().slice(0, 10);
+  };
+
+  const handleSaveLicense = async (school: SchoolRow) => {
+    const edit = licenseEditFor(school);
+    setLicenseBusyId(school.id);
+    try {
+      await apiPut(`/api/schools/${school.id}`, {
+        plan: edit.plan,
+        // Khaali tareekh = koi expiry nahi (null).
+        licenseExpiry: edit.licenseExpiry ? edit.licenseExpiry : null,
+      });
+      toast({
+        title: "Plan/License save ho gaya",
+        description: `${school.name}: ${edit.plan}${edit.licenseExpiry ? `, expiry ${edit.licenseExpiry}` : ", koi expiry nahi"}`,
+      });
+      setLicenseEdits((prev) => {
+        const next = { ...prev };
+        delete next[school.id];
+        return next;
+      });
+      await fetchSchools();
+    } catch (e) {
+      console.error(e);
+      toast({
+        title: "Error",
+        description:
+          e instanceof ApiError ? e.message : "Plan/License save nahi hua",
+        variant: "destructive",
+      });
+    }
+    setLicenseBusyId(null);
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
       <div className="flex justify-between items-center">
@@ -459,6 +535,7 @@ export default function Schools() {
                 <TableHead>Contact</TableHead>
                 <TableHead>Session</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Plan / License</TableHead>
                 <TableHead>Banaya gaya</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
@@ -466,13 +543,13 @@ export default function Schools() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={7} className="text-center py-8 text-gray-500">
                     List load ho rahi hai…
                   </TableCell>
                 </TableRow>
               ) : schools.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={7} className="text-center py-8 text-gray-500">
                     Abhi koi school nahi bana. "Naya School" se pehla school banao.
                   </TableCell>
                 </TableRow>
@@ -510,6 +587,75 @@ export default function Schools() {
                         <Badge variant={active ? "default" : "secondary"}>
                           {active ? "Active" : "Inactive"}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {/* Plan / License (v1.7): plan select + expiry
+                            date + Save — PUT /api/schools/:id se. */}
+                        {(() => {
+                          const edit = licenseEditFor(school);
+                          const expired = isLicenseExpiredRow(school);
+                          const dirty =
+                            edit.plan !== (school.plan || "Basic") ||
+                            edit.licenseExpiry !==
+                              (school.licenseExpiry || "");
+                          return (
+                            <div className="space-y-2 min-w-[210px]">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Select
+                                  value={edit.plan}
+                                  onValueChange={(v) =>
+                                    setLicenseEdit(school, { plan: v })
+                                  }
+                                >
+                                  <SelectTrigger className="h-8 w-[104px]">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="Basic">
+                                      Basic
+                                    </SelectItem>
+                                    <SelectItem value="Pro">Pro</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <Input
+                                  type="date"
+                                  className="h-8 w-[150px]"
+                                  value={edit.licenseExpiry}
+                                  onChange={(e) =>
+                                    setLicenseEdit(school, {
+                                      licenseExpiry: e.target.value,
+                                    })
+                                  }
+                                />
+                                <Button
+                                  size="sm"
+                                  className="h-8"
+                                  disabled={
+                                    !dirty || licenseBusyId === school.id
+                                  }
+                                  onClick={() =>
+                                    void handleSaveLicense(school)
+                                  }
+                                >
+                                  {licenseBusyId === school.id
+                                    ? "Save ho raha…"
+                                    : "Save"}
+                                </Button>
+                              </div>
+                              <div className="text-[11px] text-gray-500">
+                                {school.licenseExpiry
+                                  ? `Expiry: ${school.licenseExpiry}`
+                                  : "Koi expiry nahi set hai"}
+                                {expired && (
+                                  <span className="ml-2 font-bold text-red-600">
+                                    License Khatm — school ke users band
+                                    hain
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell>{formatDate(school.createdAt)}</TableCell>
                       <TableCell className="text-right">

@@ -32,8 +32,36 @@ import {
   CalendarCheck,
   ZoomIn,
   ZoomOut,
-  RotateCcw
+  RotateCcw,
+  CreditCard,
+  Award
 } from "lucide-react";
+// 🪪📜 v1.7: ID Card + Certificates (TC/Bonafide)
+import {
+  IdCardDialog,
+  type IdCardSchool,
+  type IdCardStudent,
+} from "@/components/IdCard";
+import {
+  CertificateDialog,
+  type CertificateStudent,
+  type CertificateType,
+} from "@/components/Certificates";
+
+// Card/Certificate ke liye school ka saaf shape (Students.tsx wala hi
+// helper — branding API ya auth ke school, dono ek hi row hain).
+function normalizeSchool(raw: any): IdCardSchool | null {
+  if (!raw?.name) return null;
+  return {
+    name: String(raw.name),
+    address: raw.address ?? null,
+    phone: raw.phone ?? null,
+    email: raw.email ?? null,
+    logo: raw.logo ?? null,
+    session: raw.session ?? null,
+    primaryColor: raw.primaryColor ?? null,
+  };
+}
 
 const DOC_TYPES = [
   { key: "photo", label: "Student Photo", icon: FileImage },
@@ -52,7 +80,7 @@ export default function StudentProfile() {
   // "Failed to load student." toast milta tha. Isliye SA par
   // search/load hi nahi chalate — Settings wala no-school card
   // dikhega.
-  const { user } = useAuth();
+  const { user, school } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
 
   const [admNo, setAdmNo] = useState("");
@@ -78,6 +106,61 @@ export default function StudentProfile() {
 
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
+
+  // 🪪📜 v1.7: ID Card / Certificate ki state + school branding
+  // (ReportCards wala pattern: /api/branding; fallback auth ka school).
+  const [branding, setBranding] = useState<any>(null);
+  const [isIdCardOpen, setIsIdCardOpen] = useState(false);
+  const [certType, setCertType] = useState<CertificateType>("tc");
+  const [isCertOpen, setIsCertOpen] = useState(false);
+  const schoolForCards = normalizeSchool(branding ?? school);
+
+  useEffect(() => {
+    if (isSuperAdmin) return;
+    (async () => {
+      try {
+        const info = await apiGet<any>("/api/branding");
+        if (info) setBranding(info);
+      } catch {
+        /* auth wala school fallback pehle se hai */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Profile ka adapted student (snake_case + raw camelCase dono maujood).
+  const idCardStudent: IdCardStudent | null = student
+    ? {
+        id: student.id,
+        name: student.name,
+        class: student.class,
+        section: student.section,
+        admissionNo: student.admission_no ?? student.admissionNo ?? "",
+        fatherName: student.father_name ?? student.fatherName ?? "",
+        contact: student.contact ?? "",
+        rollNo: student.rollNo ?? null,
+        dob: student.dob ?? null,
+        photo: student.photo ?? null,
+      }
+    : null;
+
+  const certificateStudent: CertificateStudent | null = student
+    ? {
+        name: student.name,
+        fatherName: student.father_name ?? student.fatherName ?? "",
+        motherName: student.motherName ?? null,
+        class: student.class,
+        section: student.section,
+        admissionNo: student.admission_no ?? student.admissionNo ?? "",
+        dob: student.dob ?? null,
+        contact: student.contact ?? null,
+      }
+    : null;
+
+  const openCertificate = (type: CertificateType) => {
+    setCertType(type);
+    setIsCertOpen(true);
+  };
 
   // --- REST adapters (Phase 3 Batch C) ---------------------------------
   const adaptStudentRow = (raw: any) => ({
@@ -481,6 +564,33 @@ export default function StudentProfile() {
                 <div className="border-b pb-1"><b>Contact:</b> <span className="float-right font-mono text-slate-700">{student.contact}</span></div>
                 <div className="border-b pb-1"><b>TC Status:</b> <span className={`float-right font-bold ${student.tc_submitted ? 'text-green-600' : 'text-red-500'}`}>{student.tc_submitted ? "Submitted" : "Pending"}</span></div>
               </div>
+              {/* 🪪📜 v1.7: ID Card + Certificates — data isi student se
+                  auto bharata hai, print components khud karte hain. */}
+              <div className="flex flex-wrap gap-2 mt-4">
+                <Button
+                  size="sm"
+                  className="bg-indigo-600 hover:bg-indigo-700 min-h-[40px]"
+                  onClick={() => setIsIdCardOpen(true)}
+                >
+                  <CreditCard className="h-4 w-4 mr-2" /> ID Card
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="min-h-[40px] text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+                  onClick={() => openCertificate("tc")}
+                >
+                  <Award className="h-4 w-4 mr-2" /> TC Certificate
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="min-h-[40px] text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+                  onClick={() => openCertificate("bonafide")}
+                >
+                  <Award className="h-4 w-4 mr-2" /> Bonafide
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -645,6 +755,21 @@ export default function StudentProfile() {
 
       </>
       )}
+
+      {/* 🪪📜 v1.7: ID Card + Certificate dialogs */}
+      <IdCardDialog
+        open={isIdCardOpen}
+        onOpenChange={setIsIdCardOpen}
+        student={idCardStudent}
+        school={schoolForCards}
+      />
+      <CertificateDialog
+        open={isCertOpen}
+        onOpenChange={setIsCertOpen}
+        initialType={certType}
+        student={certificateStudent}
+        school={schoolForCards}
+      />
 
       {/* v1.3: Photo viewer — default fit, Zoom − / % / + / Reset ke saath.
           Zoom img ki chaudai (zoom × 100%) se lagta hai taaki container

@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
-import { randomBytes } from "crypto";
+import { randomBytes, createHmac, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { storage } from "./storage";
 import {
@@ -12,6 +12,8 @@ import {
   userRoleSchema,
   noticeAudienceSchema,
   attendanceStatusSchema,
+  resultStatusSchema,
+  schoolPlanSchema,
   type User,
   type UserRole,
   type Student,
@@ -28,6 +30,7 @@ import {
   revokeAllRefreshTokensForUser,
   requireAuth,
   requireRole,
+  verifyAccessToken,
 } from "./auth";
 
 // ---------------------------------------------------------------------------
@@ -343,13 +346,115 @@ const markAttendanceBodySchema = z.object({
     .min(1),
 });
 
+// Result approval (v1.7) — POST /api/exams/:id/results-status ka body.
+const resultsStatusBodySchema = z.object({
+  status: resultStatusSchema,
+});
+
+// Timetable upsert (v1.7) — din 1=Mon..6=Sat, period 1..8 (page par
+// 8 period ka grid hai; isse bahar ki entry ka koi matlab nahi).
+const upsertTimetableBodySchema = z.object({
+  className: z.string().min(1),
+  dayOfWeek: z.number().int().min(1).max(6),
+  periodNo: z.number().int().min(1).max(8),
+  subject: z.string().min(1),
+  teacherId: z.number().int().positive().nullable().optional(),
+});
+
 const createNoticeBodySchema = z.object({
   title: z.string().min(1),
   body: z.string().optional(),
   audience: noticeAudienceSchema.optional(),
 });
 
+// Library (v1.7) — book catalog + issue/return ke body schemas.
+// Tareekhein attendance wali hi parampara: "YYYY-MM-DD" text.
+const createLibraryBookBodySchema = z.object({
+  title: z.string().min(1),
+  author: z.string().min(1).nullable().optional(),
+  copiesTotal: z.number().int().nonnegative().optional(),
+});
+
+const updateLibraryBookBodySchema = createLibraryBookBodySchema.partial();
+
+const createLibraryIssueBodySchema = z.object({
+  bookId: z.number().int().positive(),
+  studentId: z.number().int().positive(),
+  issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+// Online payment (Razorpay, v1.7) — order sirf rakam + student leta
+// hai; verify Razorpay ke teeno ids ke saath wahi payment jaankari
+// leta hai jo manual POST /api/payments leta hai (breakdown wagera),
+// taaki safal online adaygi ka record bilkul aam fee payment jaisa bane.
+const onlineOrderBodySchema = z.object({
+  studentId: z.number().int().positive(),
+  amount: z.number().int().positive(),
+});
+
+const onlineVerifyBodySchema = z.object({
+  razorpay_order_id: z.string().min(1),
+  razorpay_payment_id: z.string().min(1),
+  razorpay_signature: z.string().min(1),
+  studentId: z.number().int().positive(),
+  amount: z.number().int().positive(),
+  month: z.string().min(1).optional(),
+  year: z.number().int().optional(),
+  remarks: z.string().optional(),
+  breakdown: z
+    .union([z.string(), z.array(z.any()), z.record(z.any())])
+    .nullable()
+    .optional(),
+  isAdmission: z.boolean().optional(),
+  dueSettlements: z
+    .array(
+      z.object({
+        dueId: z.number().int().positive(),
+        amount: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
+});
+
+// License expiry ki jaanch (v1.7) — licenseExpiry "YYYY-MM-DD" text
+// hai; us tareekh TAK license chaalu hai, uske BAAD wala pehla din hi
+// band hai. String tulna hi kaafi hai (dono ek hi format me hain).
+// null/khaali = koi expiry nahi — kabhi band nahi hoga.
+export function isLicenseExpired(
+  licenseExpiry: string | null | undefined,
+  today?: string,
+): boolean {
+  if (!licenseExpiry) return false;
+  const now = today ?? new Date().toISOString().slice(0, 10);
+  return licenseExpiry < now;
+}
+
 const updateNoticeBodySchema = createNoticeBodySchema.partial();
+
+// ---------------------------------------------------------------------------
+// v1.7 FIN — Fee kishten (installments) ka request schema.
+// POST /api/fees/installments/generate ka body:
+//   { className, installments: [{ title, amount, dueDate }] }
+// title hi student_dues.feeName bankar source-marker ka kaam karega
+// (storage.ts ke v1.7 block me poora design note hai). dueDate
+// "YYYY-MM-DD" text hai — baaki dates (attendance) wali hi parampara.
+// Ek baar me zyada se zyada 24 kishten (saal ke 12 mahine × 2 bhi
+// aaram se aa jayein; isse zyada matlab galat input hai).
+// ---------------------------------------------------------------------------
+const generateInstallmentsBodySchema = z.object({
+  className: z.string().min(1),
+  installments: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(120),
+        amount: z.number().int().positive(),
+        dueDate: z.string().regex(DATE_TEXT_RE),
+      }),
+    )
+    .min(1)
+    .max(24),
+});
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const parseOptionalId = (value: unknown) => {
@@ -563,6 +668,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // =======================================================================
+  // License guard (v1.7, NICHOD #15) — expiry beet jane par school ke
+  // users ke DATA-API jawab 403 { code: "LICENSE_EXPIRED" }.
+  //
+  // Jagah jaan-boojh kar yahi hai: auth routes (login/refresh/logout/
+  // me/change-password) isse PEHLE register hue hain, isliye wo khule
+  // rehte hain — user lock dekh sakta hai, /api/auth/me se apne school
+  // ki expiry jaan sakta hai aur logout kar sakta hai. Iske BAAD wale
+  // saare /api raste (schools/users/students/fees/library/…) guard se
+  // guzrenge. /api/branding bhi neeche register hai, isliye use yahan
+  // khaas taur par chhod diya hai (lock screen par school ka naam/logo
+  // dikhna chahiye).
+  //
+  // Guard khud token verify karke school dekhta hai (requireAuth har
+  // route par alag se laga hai — guard usse pehle chalta hai, isliye
+  // req.user yahan nahi milta). Token na ho/galat ho to guard chup
+  // chaap aage badha deta hai — asli 401 route ka requireAuth dega.
+  // super_admin exempt hai (uska koi school hi nahi; wo Schools screen
+  // se expiry theek kar sakta hai). isActive wala purana on/off switch
+  // isse bilkul alag hai — use haath nahi lagaya.
+  // =======================================================================
+  app.use("/api", async (req, res, next) => {
+    try {
+      const fullPath = (req.originalUrl ?? "").split("?")[0];
+      if (fullPath === "/api/branding") return next();
+      const header = req.headers.authorization;
+      if (!header || !header.startsWith("Bearer ")) return next();
+      const payload = verifyAccessToken(header.slice("Bearer ".length).trim());
+      if (!payload) return next();
+      if (payload.role === "super_admin" || payload.schoolId == null) {
+        return next();
+      }
+      const school = await storage.getSchool(payload.schoolId);
+      if (school && isLicenseExpired(school.licenseExpiry)) {
+        return res.status(403).json({
+          code: "LICENSE_EXPIRED",
+          message:
+            "Aapke school ka license khatm ho gaya hai — kripya apne seller/Super Admin se sampark karein",
+        });
+      }
+      return next();
+    } catch {
+      // Guard ki apni galti par app band nahi hona chahiye — asli
+      // faisla route ke requireAuth/roles par chhod do.
+      return next();
+    }
+  });
+
+  // =======================================================================
   // Schools & branding (§5.2)
   // =======================================================================
 
@@ -648,6 +801,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const updates: Record<string, unknown> = { ...result.data };
       // School band/chaalu karna sirf Super Admin ka kaam hai (#10).
       if (req.user!.role !== "super_admin") delete updates.isActive;
+      // Plan/license bhi sirf Super Admin badal sakta hai (v1.7) —
+      // Principal apne school ka plan ya expiry khud nahi badhega.
+      if (req.user!.role !== "super_admin") {
+        delete updates.plan;
+        delete updates.licenseExpiry;
+      }
+      // Plan sirf Basic/Pro me se ek; expiry ya to khaali (null = koi
+      // expiry nahi) ya "YYYY-MM-DD" — galat value DB tak nahi jayegi.
+      if (updates.plan !== undefined && updates.plan !== null) {
+        const planCheck = schoolPlanSchema.safeParse(updates.plan);
+        if (!planCheck.success) {
+          return res
+            .status(400)
+            .json({ message: "Plan sirf Basic ya Pro ho sakta hai" });
+        }
+      }
+      if (
+        updates.licenseExpiry !== undefined &&
+        updates.licenseExpiry !== null &&
+        updates.licenseExpiry !== "" &&
+        !DATE_TEXT_RE.test(String(updates.licenseExpiry))
+      ) {
+        return res
+          .status(400)
+          .json({ message: "licenseExpiry must be YYYY-MM-DD" });
+      }
+      if (updates.licenseExpiry === "") updates.licenseExpiry = null;
       const school = await storage.updateSchool(id, {
         ...(updates as typeof result.data),
         updatedAt: new Date(),
@@ -2219,10 +2399,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // #64 — exams list. Parent ko sirf apne baccho ki class wale exams
   // dikhenge (exam class-level hota hai, student-level nahi).
+  // v1.7: (a) "accountant" joda gaya — Broadsheet office screen hai aur
+  // accountant ko exams ki list padhni padti hai (marks wala GET bhi
+  // neeche usi wajah se khula hai; likhna ab bhi principal/teacher hi).
+  // (b) Parent ko sirf APPROVED exams dikhte hain — draft exam parent
+  // ke liye "hai hi nahi" (baaki parent-filter wala † usool). Purani
+  // rows par resultsStatus null/na ho to 'approved' mana jata hai
+  // (column ka default hi wahi hai).
   app.get(
     "/api/exams",
     requireAuth,
-    requireRole("principal", "teacher", "staff", "parent"),
+    requireRole("principal", "teacher", "staff", "parent", "accountant"),
     async (req, res) => {
       const schoolId = requireSchoolId(req, res);
       if (schoolId == null) return;
@@ -2234,7 +2421,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const student = await storage.getStudent(studentId);
           if (student) classNames.add(student.class);
         }
-        examList = examList.filter((exam) => classNames.has(exam.class));
+        examList = examList.filter(
+          (exam) =>
+            classNames.has(exam.class) &&
+            (exam.resultsStatus ?? "approved") === "approved",
+        );
       }
       res.json(examList);
     },
@@ -2252,6 +2443,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!result.success) return res.status(400).json(result.error);
       const exam = await storage.createExam({
         schoolId,
+        // v1.7: naya exam HAMESHA 'draft' se shuru hota hai — marks
+        // bhar kar principal approve kare tabhi parent ko dikhega.
+        // (Column ka DB default 'approved' sirf purani live rows ke
+        // liye hai; yahan default par bharosa NAHI kiya gaya.)
+        resultsStatus: "draft",
         examName: result.data.examName,
         examType: result.data.examType ?? null,
         class: result.data.class,
@@ -2279,14 +2475,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
+  // #66b — Result approval (v1.7): exam ki results_status badalna.
+  // SIRF principal — teacher marks bharta hai, approve principal
+  // karta hai (Skuul wala workflow). Jawab updated exam hai, taaki
+  // client badge turant badal sake.
+  app.post(
+    "/api/exams/:id/results-status",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const loaded = await loadExamInScope(req, res);
+      if (!loaded) return;
+      const result = resultsStatusBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const updated = await storage.updateExamResultsStatus(
+        loaded.exam.id,
+        result.data.status,
+      );
+      if (!updated) {
+        return res.status(404).json({ message: "Exam not found" });
+      }
+      res.json(updated);
+    },
+  );
+
   // #67 — ek exam ke marks. Parent: sirf apne linked baccho ke marks.
   app.get(
     "/api/exams/:id/marks",
     requireAuth,
-    requireRole("principal", "teacher", "parent"),
+    requireRole("principal", "teacher", "parent", "accountant"),
     async (req, res) => {
       const loaded = await loadExamInScope(req, res);
       if (!loaded) return;
+      // v1.7: parent ke liye draft exam ke marks "hain hi nahi" —
+      // 404, bilkul dusri-school wale exam jaisa (§3.1.4 ka † usool).
+      if (
+        req.user!.role === "parent" &&
+        (loaded.exam.resultsStatus ?? "approved") !== "approved"
+      ) {
+        return res.status(404).json({ message: "Exam not found" });
+      }
       if (req.user!.role === "parent") {
         const linkedIds = await parentLinkedStudentIds(req);
         const rows = await storage.getMarksForStudents(
@@ -2354,10 +2582,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
             maxMarks: exam?.maxMarks ?? null,
             passingMarks: exam?.passingMarks ?? null,
             examDate: exam?.examDate ?? null,
+            // v1.7: office roles ko badge ke liye haalat saath jati
+            // hai (purani rows = 'approved')...
+            resultsStatus: exam?.resultsStatus ?? "approved",
           };
         }),
       );
-      res.json(enriched);
+      // ...lekin parent ko draft exam ki rows jawab me JATI HI NAHI
+      // (ReportCards ka data-rasta bhi yahi hai — wahan alag se kuch
+      // karna nahi padta, khaali list par page apna sandesh dikhata
+      // hai). Principal/teacher ko sab dikhta hai.
+      const visible =
+        req.user!.role === "parent"
+          ? enriched.filter((row) => row.resultsStatus === "approved")
+          : enriched;
+      res.json(visible);
     },
   );
 
@@ -2454,6 +2693,65 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })),
       );
       res.json(saved);
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Attendance office reports (v1.7 #77–78) — NICHOD ABHI #4:
+  // (a) RosarioSIS "Teacher Completion" — kis class ki hajri NAHI lagi;
+  // (b) Gibbon "Consecutive Absences" — lagatar absent baccho ki list,
+  // parent ko phone karne ke liye contact ke saath.
+  // Padhna: principal/teacher/accountant (office ke teeno kaam ke log).
+  // Staff/parent ko ye reports nahi miltin — parent apne bacche ka
+  // summary pehle ki tarah Student Profile se dekhta hai. Hisaab aur
+  // paribhashayein storage ke compute* helpers me hain.
+  // Dhyaan: ye literal paths /api/attendance (GET/POST) ke baad aur
+  // /api/students/:id/attendance se pehle hain — koi ":id" wala route
+  // /api/attendance/* par hai hi nahi, isliye takraav nahi.
+  // ---------------------------------------------------------------------
+
+  // #77 — ek date par kin class+section groups ki hajri lagi / nahi
+  // lagi (ginti ke saath). date na diya to aaj (server ki tareekh).
+  app.get(
+    "/api/attendance/reports/missing",
+    requireAuth,
+    requireRole("principal", "teacher", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const date =
+        typeof req.query.date === "string"
+          ? req.query.date
+          : new Date().toISOString().slice(0, 10);
+      if (!DATE_TEXT_RE.test(date)) {
+        return res.status(400).json({ message: "date must be YYYY-MM-DD" });
+      }
+      const report = await storage.getAttendanceMissingReport(schoolId, date);
+      res.json(report);
+    },
+  );
+
+  // #78 — lagatar absent list. days query: default 3, 1–30 ke beech;
+  // isse bahar ho to 400 (chup-chaap clamp karke galat report nahi).
+  app.get(
+    "/api/attendance/reports/absent-streak",
+    requireAuth,
+    requireRole("principal", "teacher", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      let days = 3;
+      if (typeof req.query.days === "string") {
+        const parsed = parseInt(req.query.days, 10);
+        if (!Number.isFinite(parsed) || parsed < 1 || parsed > 30) {
+          return res
+            .status(400)
+            .json({ message: "days must be an integer between 1 and 30" });
+        }
+        days = parsed;
+      }
+      const entries = await storage.getAbsentStreakReport(schoolId, days);
+      res.json({ days, count: entries.length, entries });
     },
   );
 
@@ -2623,6 +2921,681 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       await storage.deleteNotice(loaded.notice.id);
       res.json({ message: "Notice deleted" });
+    },
+  );
+
+  // =======================================================================
+  // v1.7 FIN — Fee kishten (installments) + Backup/Export
+  //
+  // Dono endpoints is alag block me hain taaki dusre workstreams ke
+  // saath merge saaf rahe. Niyam purane hi hain: schoolId sirf token
+  // se (requireSchoolId), dusri school ka data kabhi nahi.
+  // =======================================================================
+
+  // #77 — Ek class ke SAARE active students ke liye kishten ek saath
+  // banao (Frappe fee-schedule wala kaam, humare student_dues par).
+  // Har kisht ek student_dues row hai — isliye bani hui kishten Fees
+  // page ki Pending Dues me apne aap dikhengi aur maujooda
+  // dueSettlements wala settlement unpar bilkul pehle jaisa chalega
+  // (use yahan chheda hi nahi gaya hai).
+  // Dobara wahi request bhejne par pehle se maujood kishten (title +
+  // dueDate wali pehchan, storage v1.7 note) SKIP hoti hain — jawab
+  // me { created, skipped } ki sachhi ginti aati hai, aadhi safalta
+  // chhupti nahi.
+  app.post(
+    "/api/fees/installments/generate",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = generateInstallmentsBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const installments: Array<{ title: string; amount: number; dueDate: Date }> = [];
+      for (const inst of result.data.installments) {
+        const dueDate = new Date(inst.dueDate);
+        if (Number.isNaN(dueDate.getTime())) {
+          return res
+            .status(400)
+            .json({ message: `Invalid dueDate: ${inst.dueDate}` });
+        }
+        installments.push({
+          title: inst.title.trim(),
+          amount: inst.amount,
+          dueDate,
+        });
+      }
+      const outcome = await storage.generateInstallmentDues(
+        schoolId,
+        result.data.className,
+        installments,
+      );
+      res.status(201).json({
+        className: result.data.className,
+        studentCount: outcome.studentCount,
+        installmentCount: installments.length,
+        created: outcome.created,
+        skipped: outcome.skipped,
+      });
+    },
+  );
+
+  // #78 — Poora school data ek JSON me (backup). SIRF principal:
+  // jawab me salary ki rakam aur saare students ka personal data
+  // hota hai, isliye accountant/teacher ko bhi nahi. Seedha JSON
+  // response hai (koi zip library nahi) — client use file banakar
+  // download karta hai. Users/password-hash isme kabhi nahi jate
+  // (storage ke SchoolExportData ka design note dekho).
+  app.get(
+    "/api/export/school",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const data = await storage.getSchoolExport(schoolId);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="school-backup-${schoolId}.json"`,
+      );
+      res.json(data);
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Timetable (v1.7 #77–79) — saada haath-se-bana class timetable.
+  // Dekhna: school ke sab roles; parent sirf APNE bacche ki class ka
+  // (className dusri class ka maange to khaali list — payments wale
+  // parent-filter jaisa; className na de to bacche ki class khud
+  // lag jati hai). Badalna: sirf principal/teacher (hajri/marks
+  // wala hi usool — class ka kaam class-teacher/principal ka hai).
+  // Jawab me teacherName saath jata hai kyunki parent GET /api/staff
+  // nahi padh sakta — bina naam ke use "Teacher #5" dikhta.
+  // ---------------------------------------------------------------------
+
+  const withTeacherName = async (
+    rows: Awaited<ReturnType<typeof storage.getTimetableEntries>>,
+  ) => {
+    const out = [];
+    for (const row of rows) {
+      let teacherName: string | null = null;
+      if (row.teacherId != null) {
+        const member = await storage.getStaffMember(row.teacherId);
+        // Dusri school ke staff id par naam kabhi nahi (scope jaanch).
+        if (member && member.schoolId === row.schoolId) {
+          teacherName = member.name;
+        }
+      }
+      out.push({ ...row, teacherName });
+    }
+    return out;
+  };
+
+  // #77 — ek class ka poora hafta (din/period kram me, storage deta hai).
+  app.get(
+    "/api/timetable",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff", "parent"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      let className =
+        typeof req.query.className === "string"
+          ? req.query.className
+          : undefined;
+
+      if (req.user!.role === "parent") {
+        const linkedIds = await parentLinkedStudentIds(req);
+        const childClasses = new Set<string>();
+        for (const studentId of linkedIds) {
+          const student = await storage.getStudent(studentId);
+          if (student) childClasses.add(student.class);
+        }
+        if (className != null) {
+          // Dusri class maangi — parent ke liye wo "hai hi nahi".
+          if (!childClasses.has(className)) return res.json([]);
+        } else {
+          // Class na di ho to pehle linked bacche ki class.
+          className = Array.from(childClasses)[0];
+          if (!className) return res.json([]);
+        }
+      }
+
+      if (!className) {
+        return res
+          .status(400)
+          .json({ message: "className query parameter is required" });
+      }
+      const rows = await storage.getTimetableEntries(schoolId, className);
+      res.json(await withTeacherName(rows));
+    },
+  );
+
+  // #78 — ek entry upsert: (school, class, day, period) par maujood
+  // ho to wahi entry badalti hai, warna nayi banti hai. teacherId
+  // aaya ho to wo staff ISI school ka hona lazmi (warna 400).
+  app.post(
+    "/api/timetable",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = upsertTimetableBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      if (result.data.teacherId != null) {
+        const member = await storage.getStaffMember(result.data.teacherId);
+        if (!member || member.schoolId !== schoolId) {
+          return res
+            .status(400)
+            .json({ message: "Teacher does not belong to this school" });
+        }
+      }
+      const saved = await storage.upsertTimetableEntry({
+        schoolId,
+        className: result.data.className,
+        dayOfWeek: result.data.dayOfWeek,
+        periodNo: result.data.periodNo,
+        subject: result.data.subject,
+        teacherId: result.data.teacherId ?? null,
+      });
+      res.json((await withTeacherName([saved]))[0]);
+    },
+  );
+
+  // #79 — entry delete. Dusri school ki entry = 404 (§3.1.4).
+  app.delete(
+    "/api/timetable/:id",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const entry = await storage.getTimetableEntry(id);
+      if (!entry || entry.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Timetable entry not found" });
+      }
+      await storage.deleteTimetableEntry(id);
+      res.json({ message: "Timetable entry deleted" });
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Library (v1.7 #85–91, NICHOD #12) — saada catalog + issue/return.
+  // Prabandh (banana/badla/issue/return) = principal/accountant/
+  // teacher; dekhna = saare school roles; parent = sirf apne linked
+  // baccho ki issued kitabein (payments wala † niyam — dusre bacche
+  // ki kitab parent ke liye hai hi nahi).
+  // Uplabdh copies = copiesTotal − active (returned_at null) issues;
+  // issue ki jaanch SERVER par hai — client ki ginti par bharosa nahi.
+  // ---------------------------------------------------------------------
+
+  const withBookAvailability = async (
+    book: NonNullable<Awaited<ReturnType<typeof storage.getLibraryBook>>>,
+  ) => {
+    const active = await storage.countActiveLibraryIssues(book.id);
+    return {
+      ...book,
+      issuedCopies: active,
+      availableCopies: Math.max(0, (book.copiesTotal ?? 0) - active),
+    };
+  };
+
+  const enrichLibraryIssue = async (
+    issue: Awaited<ReturnType<typeof storage.getLibraryIssues>>[number],
+  ) => {
+    const [book, student] = await Promise.all([
+      storage.getLibraryBook(issue.bookId),
+      storage.getStudent(issue.studentId),
+    ]);
+    return {
+      ...issue,
+      bookTitle: book?.title ?? null,
+      bookAuthor: book?.author ?? null,
+      studentName: student?.name ?? null,
+      studentClass: student?.class ?? null,
+      studentSection: student?.section ?? null,
+    };
+  };
+
+  const loadLibraryBookInScope = async (
+    req: Request,
+    res: Response,
+  ): Promise<{
+    schoolId: number;
+    book: NonNullable<Awaited<ReturnType<typeof storage.getLibraryBook>>>;
+  } | null> => {
+    const schoolId = requireSchoolId(req, res);
+    if (schoolId == null) return null;
+    const id = parsePathId(req);
+    if (id == null) {
+      res.status(400).json({ message: "Invalid ID" });
+      return null;
+    }
+    const book = await storage.getLibraryBook(id);
+    if (!book || book.schoolId !== schoolId) {
+      res.status(404).json({ message: "Book not found" });
+      return null;
+    }
+    return { schoolId, book };
+  };
+
+  // #85 — kitabon ki list (har kitab ke saath uplabdh ginti).
+  app.get(
+    "/api/library/books",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const books = await storage.getLibraryBooks(schoolId);
+      res.json(await Promise.all(books.map(withBookAvailability)));
+    },
+  );
+
+  // #86 — nayi kitab.
+  app.post(
+    "/api/library/books",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createLibraryBookBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const book = await storage.createLibraryBook({
+        schoolId,
+        title: result.data.title,
+        author: result.data.author ?? null,
+        copiesTotal: result.data.copiesTotal ?? 1,
+      });
+      res.status(201).json(await withBookAvailability(book));
+    },
+  );
+
+  // #87 — kitab badlo. Copies kul ginti active issues se kam nahi ho
+  // sakti (bahar gayi kitab ko "gayab" nahi dikha sakte).
+  app.put(
+    "/api/library/books/:id",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher"),
+    async (req, res) => {
+      const loaded = await loadLibraryBookInScope(req, res);
+      if (!loaded) return;
+      const result = updateLibraryBookBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      if (result.data.copiesTotal !== undefined) {
+        const active = await storage.countActiveLibraryIssues(loaded.book.id);
+        if (result.data.copiesTotal < active) {
+          return res.status(400).json({
+            message: `Is kitab ki ${active} copies abhi issue hain — kul copies isse kam nahi ho sakti`,
+          });
+        }
+      }
+      const book = await storage.updateLibraryBook(loaded.book.id, {
+        ...(result.data.title !== undefined
+          ? { title: result.data.title }
+          : {}),
+        ...(result.data.author !== undefined
+          ? { author: result.data.author }
+          : {}),
+        ...(result.data.copiesTotal !== undefined
+          ? { copiesTotal: result.data.copiesTotal }
+          : {}),
+        updatedAt: new Date(),
+      });
+      res.json(await withBookAvailability(book));
+    },
+  );
+
+  // #88 — kitab delete. Issue ka record (active ya purana) ho to
+  // delete nahi — warna history ka FK tootega aur hisaab bigdega.
+  app.delete(
+    "/api/library/books/:id",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher"),
+    async (req, res) => {
+      const loaded = await loadLibraryBookInScope(req, res);
+      if (!loaded) return;
+      const allIssues = await storage.getLibraryIssues(loaded.schoolId);
+      if (allIssues.some((issue) => issue.bookId === loaded.book.id)) {
+        return res.status(400).json({
+          message:
+            "Is kitab ka issue record hai — pehle saari copies wapas aayein, kitab delete nahi hogi (record suraksha ke liye)",
+        });
+      }
+      await storage.deleteLibraryBook(loaded.book.id);
+      res.json({ message: "Book deleted" });
+    },
+  );
+
+  // #89 — issued kitabon ki list. ?studentId= filter; ?status=active
+  // sirf bahar gayi hui. Parent: studentId diya ho aur linked na ho
+  // to khaali list (payments wala † niyam); na diya ho to sirf apne
+  // linked baccho ki kitabein.
+  app.get(
+    "/api/library/issues",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff", "parent"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const studentId = parseOptionalId(req.query.studentId);
+      const activeOnly = req.query.status === "active";
+      if (req.user!.role === "parent") {
+        const linkedIds = await parentLinkedStudentIds(req);
+        if (studentId != null && !linkedIds.includes(studentId)) {
+          return res.json([]);
+        }
+        const rows = await storage.getLibraryIssues(schoolId, {
+          studentIds: studentId != null ? [studentId] : linkedIds,
+          activeOnly,
+        });
+        return res.json(await Promise.all(rows.map(enrichLibraryIssue)));
+      }
+      const rows = await storage.getLibraryIssues(schoolId, {
+        studentId: studentId ?? undefined,
+        activeOnly,
+      });
+      res.json(await Promise.all(rows.map(enrichLibraryIssue)));
+    },
+  );
+
+  // #90 — kitab issue karo. Uplabdh jaanch SERVER par: active issues
+  // copiesTotal ke barabar/zyada hon to 400 — do copies wali kitab ki
+  // teesri issue kabhi nahi banegi, client kuch bhi dikhaye.
+  app.post(
+    "/api/library/issues",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createLibraryIssueBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const book = await storage.getLibraryBook(result.data.bookId);
+      if (!book || book.schoolId !== schoolId) {
+        return res.status(400).json({ message: "Book does not belong to this school" });
+      }
+      const student = await storage.getStudent(result.data.studentId);
+      if (!student || student.schoolId !== schoolId) {
+        return res.status(400).json({ message: "Student does not belong to this school" });
+      }
+      const active = await storage.countActiveLibraryIssues(book.id);
+      if (active >= (book.copiesTotal ?? 0)) {
+        return res.status(400).json({
+          message: "Is kitab ki saari copies pehle se issue hain — uplabdh copies khatm",
+        });
+      }
+      const issueDate =
+        result.data.issueDate ?? new Date().toISOString().slice(0, 10);
+      // Due date na aaye to issue se 14 din baad (aam library niyam).
+      const dueDate =
+        result.data.dueDate ??
+        new Date(new Date(`${issueDate}T00:00:00Z`).getTime() + 14 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .slice(0, 10);
+      const issue = await storage.createLibraryIssue({
+        schoolId,
+        bookId: book.id,
+        studentId: student.id,
+        issueDate,
+        dueDate,
+        returnedAt: null,
+      });
+      res.status(201).json(await enrichLibraryIssue(issue));
+    },
+  );
+
+  // #91 — kitab wapas (return). Pehle se wapas aa chuki ho to 400 —
+  // dohra return hisaab bigad dega.
+  app.post(
+    "/api/library/issues/:id/return",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const issue = await storage.getLibraryIssue(id);
+      if (!issue || issue.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Issue not found" });
+      }
+      if (issue.returnedAt != null) {
+        return res.status(400).json({ message: "Ye kitab pehle hi wapas aa chuki hai" });
+      }
+      const returned = await storage.returnLibraryIssue(issue.id);
+      res.json(await enrichLibraryIssue(returned));
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Online Payment — Razorpay (v1.7 #92–94, NICHOD #9 ki jagah is
+  // batch ka #11). IMAANDAAR design:
+  //  - Keys (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET env) na hon to
+  //    config enabled:false deta hai aur order 503 — koi nakli
+  //    safalta, koi test-mode jhooth NAHI hai.
+  //  - Order asal Razorpay Orders API se banta hai (global fetch,
+  //    koi nayi dependency nahi).
+  //  - Fee payment ka record TABHI banta hai jab verify me
+  //    HMAC-SHA256 signature asal secret se mil jaye — galat
+  //    signature par 400 aur record bilkul NAHI banta.
+  //  - Parent sirf apne linked bacche ke liye; principal/accountant
+  //    apne school ke kisi bhi student ke liye.
+  // ---------------------------------------------------------------------
+
+  const razorpayKeys = () => {
+    const keyId = process.env.RAZORPAY_KEY_ID?.trim();
+    const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim();
+    return keyId && keySecret ? { keyId, keySecret } : null;
+  };
+
+  // Online raste ke liye student scope (loadStudentInScope params.id
+  // par hai, yahan studentId body se aata hai — isliye alag helper,
+  // niyam bilkul wahi: dusri school/dusra baccha = 404).
+  const loadOnlineStudent = async (
+    req: Request,
+    res: Response,
+    studentId: number,
+  ): Promise<{ schoolId: number; student: Student } | null> => {
+    const schoolId = requireSchoolId(req, res);
+    if (schoolId == null) return null;
+    const student = await storage.getStudent(studentId);
+    if (!student || student.schoolId !== schoolId) {
+      res.status(404).json({ message: "Student not found" });
+      return null;
+    }
+    if (req.user!.role === "parent") {
+      const links = await storage.getParentStudentLinks(req.user!.id);
+      if (!links.some((link) => link.studentId === student.id)) {
+        res.status(404).json({ message: "Student not found" });
+        return null;
+      }
+    }
+    return { schoolId, student };
+  };
+
+  // #92 — online payment chalu hai ya nahi (Fees page ka button yahi
+  // pehle poochta hai). keyId public jaankari hai (checkout me wahi
+  // jata hai); secret kabhi jawab me NAHI jata.
+  app.get(
+    "/api/payments/online/config",
+    requireAuth,
+    requireRole("principal", "accountant", "parent"),
+    async (req, res) => {
+      const keys = razorpayKeys();
+      if (!keys) return res.json({ enabled: false });
+      res.json({ enabled: true, keyId: keys.keyId });
+    },
+  );
+
+  // #93 — Razorpay order banao. Rakam rupaye me aati hai, Razorpay
+  // ko paise me jati hai. Receipt number humara apna pattern
+  // (getNextReceiptNo) — order ke saath bandha rehta hai.
+  app.post(
+    "/api/payments/online/order",
+    requireAuth,
+    requireRole("principal", "accountant", "parent"),
+    async (req, res) => {
+      const keys = razorpayKeys();
+      if (!keys) {
+        return res.status(503).json({
+          code: "ONLINE_PAYMENT_NOT_CONFIGURED",
+          message:
+            "Is school ne online payment chalu nahi kiya hai — server par Razorpay keys set nahi hain",
+        });
+      }
+      const result = onlineOrderBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const loaded = await loadOnlineStudent(req, res, result.data.studentId);
+      if (!loaded) return;
+      const receipt = await storage.getNextReceiptNo(loaded.schoolId);
+      let order: { id?: unknown } | null = null;
+      try {
+        const rzpRes = await fetch("https://api.razorpay.com/v1/orders", {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${keys.keyId}:${keys.keySecret}`).toString("base64")}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            amount: result.data.amount * 100,
+            currency: "INR",
+            receipt,
+            payment_capture: 1,
+          }),
+        });
+        if (!rzpRes.ok) {
+          return res.status(502).json({
+            code: "RAZORPAY_ORDER_FAILED",
+            message:
+              "Razorpay par order nahi ban paya — koi rakam nahi kati. Thodi der baad dobara koshish karein.",
+          });
+        }
+        order = (await rzpRes.json()) as { id?: unknown };
+      } catch {
+        return res.status(502).json({
+          code: "RAZORPAY_ORDER_FAILED",
+          message:
+            "Razorpay se sampark nahi ho paya — koi rakam nahi kati. Internet/server jaanch kar dobara koshish karein.",
+        });
+      }
+      if (!order || typeof order.id !== "string") {
+        return res.status(502).json({
+          code: "RAZORPAY_ORDER_FAILED",
+          message:
+            "Razorpay ne order ki pehchan nahi di — koi rakam nahi kati. Dobara koshish karein.",
+        });
+      }
+      res.json({ orderId: order.id, amount: result.data.amount, keyId: keys.keyId });
+    },
+  );
+
+  // #94 — signature jaanch ke BAAD hi asal fee payment record.
+  // Signature = HMAC-SHA256("<order_id>|<payment_id>", secret) —
+  // Razorpay ka dastavezi tareeka. Ek akshar bhi idhar-udhar ho to
+  // timingSafeEqual fail aur record NAHI banta.
+  app.post(
+    "/api/payments/online/verify",
+    requireAuth,
+    requireRole("principal", "accountant", "parent"),
+    async (req, res) => {
+      const keys = razorpayKeys();
+      if (!keys) {
+        return res.status(503).json({
+          code: "ONLINE_PAYMENT_NOT_CONFIGURED",
+          message:
+            "Is school ne online payment chalu nahi kiya hai — server par Razorpay keys set nahi hain",
+        });
+      }
+      const result = onlineVerifyBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const data = result.data;
+
+      const expected = createHmac("sha256", keys.keySecret)
+        .update(`${data.razorpay_order_id}|${data.razorpay_payment_id}`)
+        .digest("hex");
+      const givenBuf = Buffer.from(data.razorpay_signature);
+      const expectedBuf = Buffer.from(expected);
+      if (
+        givenBuf.length !== expectedBuf.length ||
+        !timingSafeEqual(givenBuf, expectedBuf)
+      ) {
+        return res.status(400).json({
+          code: "PAYMENT_VERIFICATION_FAILED",
+          message:
+            "Payment ki jaanch (signature) fail ho gayi — koi record NAHI bana. Agar rakam kat gayi ho to school se sampark karein.",
+        });
+      }
+
+      const loaded = await loadOnlineStudent(req, res, data.studentId);
+      if (!loaded) return;
+
+      // Due settlements ki pehle-jaanch POST /api/payments wali hi hai:
+      // ek bhi due galat to payment bane hi nahi.
+      const settlements: Array<{ due: StudentDues; amount: number }> = [];
+      if (data.dueSettlements && data.dueSettlements.length > 0) {
+        const merged: Array<{ dueId: number; amount: number }> = [];
+        for (const settlement of data.dueSettlements) {
+          if (settlement.amount <= 0) continue;
+          const existing = merged.find((m) => m.dueId === settlement.dueId);
+          if (existing) existing.amount += settlement.amount;
+          else merged.push({ dueId: settlement.dueId, amount: settlement.amount });
+        }
+        for (const { dueId, amount } of merged) {
+          const due = await storage.getStudentDue(dueId);
+          if (!due || due.studentId == null || due.studentId !== data.studentId) {
+            return res
+              .status(400)
+              .json({ message: "Due does not belong to this student" });
+          }
+          const dueStudent = await storage.getStudent(due.studentId);
+          if (!dueStudent || dueStudent.schoolId !== loaded.schoolId) {
+            return res
+              .status(400)
+              .json({ message: "Due does not belong to this student" });
+          }
+          if (due.isPaid === 1) continue;
+          settlements.push({ due, amount });
+        }
+      }
+
+      const breakdownText = normalizePaymentBreakdown(
+        data.breakdown,
+        data.isAdmission,
+      );
+      const receiptNo = await storage.getNextReceiptNo(loaded.schoolId);
+      const payment = await storage.createFeePayment({
+        studentId: data.studentId,
+        schoolId: loaded.schoolId,
+        amount: data.amount,
+        month: data.month ?? "Misc",
+        year: data.year ?? new Date().getFullYear(),
+        receiptNo,
+        paymentMethod: "Online (Razorpay)",
+        remarks:
+          data.remarks ?? `Razorpay online payment ${data.razorpay_payment_id}`,
+        ...(breakdownText !== undefined ? { breakdown: breakdownText } : {}),
+      });
+
+      for (const { due, amount } of settlements) {
+        if (amount >= due.amount) {
+          await storage.updateStudentDue(due.id, {
+            isPaid: 1,
+            updatedAt: new Date(),
+          });
+        } else {
+          await storage.updateStudentDue(due.id, {
+            amount: due.amount - amount,
+            updatedAt: new Date(),
+          });
+        }
+      }
+
+      res.status(201).json(payment);
     },
   );
 

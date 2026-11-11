@@ -51,6 +51,10 @@ export interface ApiUser {
 export interface ApiSchool {
   id: number;
   name: string;
+  // Plans/License (v1.7): plan = "Basic" | "Pro"; licenseExpiry
+  // "YYYY-MM-DD" ya null (null = koi expiry nahi).
+  plan?: string | null;
+  licenseExpiry?: string | null;
   [key: string]: unknown;
 }
 
@@ -123,21 +127,43 @@ export function clearSession(): void {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  // Server ka machine-readable code (jaise "LICENSE_EXPIRED") — v1.7 se.
+  // Har error me nahi hota; jahan server deta hai wahan page usi se
+  // khaas bartav chun sakta hai (sirf message ke bharose nahi).
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
+// License band hone ka code (server routes.ts ka license guard, v1.7).
+export const LICENSE_EXPIRED_CODE = "LICENSE_EXPIRED";
+
 async function readError(res: Response): Promise<ApiError> {
   let message = `Request fail (${res.status})`;
+  let code: string | undefined;
   try {
     const data = await res.json();
     if (data && typeof data.message === "string") message = data.message;
+    if (data && typeof data.code === "string") code = data.code;
   } catch {
     // JSON nahi aaya — status wala message hi kaafi hai.
   }
-  return new ApiError(res.status, message);
+  const error = new ApiError(res.status, message, code);
+  // License khatm: App ko turant lock screen par jana hai — event se
+  // AuthProvider ko khabar do (sg:logout wala hi pattern). Session
+  // saaf NAHI karte: logout/login ke raste khule rehte hain, sirf
+  // data band hai.
+  if (res.status === 403 && code === LICENSE_EXPIRED_CODE) {
+    try {
+      window.dispatchEvent(new CustomEvent("sg:license-expired"));
+    } catch {
+      // ignore
+    }
+  }
+  return error;
 }
 
 // ---------------------------------------------------------------------------

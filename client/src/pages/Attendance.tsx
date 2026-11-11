@@ -21,6 +21,8 @@ import {
   Save,
   RefreshCw,
   CheckCheck,
+  ClipboardList,
+  Phone,
 } from "lucide-react";
 
 // 📅 Attendance (v1.5) — roz ki hajri.
@@ -75,6 +77,40 @@ interface MonthSummary {
   percentage: number;
 }
 
+// Office reports (v1.7) — server ke jawab ke shape (storage.ts ke
+// AttendanceMissingReport / AbsentStreakEntry se mel).
+interface MissingGroup {
+  class: string;
+  section: string;
+  studentCount: number;
+  markedCount: number;
+  status: "marked" | "partial" | "missing";
+}
+
+interface MissingReport {
+  date: string;
+  totalGroups: number;
+  markedGroups: number;
+  partialGroups: number;
+  missingGroups: number;
+  totalStudents: number;
+  markedStudents: number;
+  groups: MissingGroup[];
+}
+
+interface StreakEntry {
+  studentId: number;
+  name: string;
+  class: string;
+  section: string;
+  admissionNo: string;
+  contact: string;
+  consecutiveAbsent: number;
+  lastAbsentDate: string;
+  lastPresentDate: string | null;
+  streakDates: string[];
+}
+
 function todayText(): string {
   const now = new Date();
   const mm = String(now.getMonth() + 1).padStart(2, "0");
@@ -92,6 +128,13 @@ export default function Attendance() {
   const isSuperAdmin = user?.role === "super_admin";
   const isParent = user?.role === "parent";
   const canMark = user?.role === "principal" || user?.role === "teacher";
+  // 📋 Office reports (v1.7): server par bhi yahi teen roles hain
+  // (GET /api/attendance/reports/*). Staff ko reports nahi dikhtin —
+  // wo sirf hajri dekh sakta hai, pehle ki tarah.
+  const canViewReports =
+    user?.role === "principal" ||
+    user?.role === "teacher" ||
+    user?.role === "accountant";
 
   const [className, setClassName] = useState<string>("1");
   const [section, setSection] = useState<string>("ALL");
@@ -107,6 +150,15 @@ export default function Attendance() {
   const [summaryMonth, setSummaryMonth] = useState<string>(currentMonthText());
   const [summary, setSummary] = useState<MonthSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+
+  // Office reports (v1.7) — missing wali date roster wali date se
+  // ALAG rakhi hai taaki report dekhne se upar ki hajri screen na badle.
+  const [reportDate, setReportDate] = useState<string>(todayText());
+  const [missingReport, setMissingReport] = useState<MissingReport | null>(null);
+  const [missingLoading, setMissingLoading] = useState(false);
+  const [streakDays, setStreakDays] = useState<string>("3");
+  const [streakEntries, setStreakEntries] = useState<StreakEntry[] | null>(null);
+  const [streakLoading, setStreakLoading] = useState(false);
 
   const loadRoster = async () => {
     if (isSuperAdmin || isParent) return;
@@ -200,6 +252,53 @@ export default function Attendance() {
       });
     } finally {
       setSummaryLoading(false);
+    }
+  };
+
+  const loadMissingReport = async () => {
+    setMissingLoading(true);
+    try {
+      const data = await apiGet<MissingReport>(
+        `/api/attendance/reports/missing?date=${reportDate}`,
+      );
+      setMissingReport(data);
+    } catch (e) {
+      setMissingReport(null);
+      toast({
+        title: "Report nahi aayi",
+        description: "Missing-classes report load nahi hui — dobara koshish karein.",
+        variant: "destructive",
+      });
+    } finally {
+      setMissingLoading(false);
+    }
+  };
+
+  const loadStreakReport = async () => {
+    const days = parseInt(streakDays, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 30) {
+      toast({
+        title: "Din ki ginti galat hai",
+        description: "Lagatar absent ke din 1 se 30 ke beech rakhein.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setStreakLoading(true);
+    try {
+      const data = await apiGet<{ days: number; count: number; entries: StreakEntry[] }>(
+        `/api/attendance/reports/absent-streak?days=${days}`,
+      );
+      setStreakEntries(data?.entries || []);
+    } catch (e) {
+      setStreakEntries(null);
+      toast({
+        title: "Report nahi aayi",
+        description: "Lagatar-absent list load nahi hui — dobara koshish karein.",
+        variant: "destructive",
+      });
+    } finally {
+      setStreakLoading(false);
     }
   };
 
@@ -431,6 +530,194 @@ export default function Attendance() {
           )}
         </CardContent>
       </Card>
+
+      {canViewReports && (
+        <Card className="border-t-4 border-t-rose-600">
+          <CardHeader className="py-3">
+            <CardTitle className="flex items-center gap-2 text-base text-rose-800">
+              <ClipboardList className="h-5 w-5" /> Office Reports
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* (a) Kis class ki hajri NAHI lagi */}
+            <div className="space-y-3">
+              <h3 className="font-semibold text-sm text-gray-800">
+                Kis class ki hajri NAHI lagi?
+              </h3>
+              <div className="grid grid-cols-1 min-w-0 gap-3 sm:grid-cols-3">
+                <div className="space-y-1 min-w-0">
+                  <Label>Date</Label>
+                  <Input
+                    type="date"
+                    value={reportDate}
+                    onChange={(e) => setReportDate(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-[44px] w-full sm:w-auto"
+                    onClick={() => void loadMissingReport()}
+                    disabled={missingLoading}
+                  >
+                    {missingLoading ? "Aa raha hai…" : "Report Dekhein"}
+                  </Button>
+                </div>
+              </div>
+
+              {missingReport && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-2 text-sm">
+                    <span className="rounded-full bg-red-100 text-red-800 px-3 py-1 font-medium">
+                      Hajri nahi lagi: {missingReport.missingGroups}
+                    </span>
+                    <span className="rounded-full bg-amber-100 text-amber-800 px-3 py-1 font-medium">
+                      Aadhi lagi: {missingReport.partialGroups}
+                    </span>
+                    <span className="rounded-full bg-green-100 text-green-800 px-3 py-1 font-medium">
+                      Poori lagi: {missingReport.markedGroups}
+                    </span>
+                    <span className="rounded-full bg-slate-100 text-slate-700 px-3 py-1 font-medium">
+                      Students mark: {missingReport.markedStudents}/
+                      {missingReport.totalStudents}
+                    </span>
+                  </div>
+                  {missingReport.groups.length === 0 ? (
+                    <p className="text-sm text-gray-500">
+                      School me koi active student nahi hai.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {missingReport.groups.map((g) => (
+                        <div
+                          key={`${g.class}-${g.section}`}
+                          className={`flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm ${
+                            g.status === "missing"
+                              ? "border-red-200 bg-red-50"
+                              : g.status === "partial"
+                                ? "border-amber-200 bg-amber-50"
+                                : "border-green-200 bg-green-50"
+                          }`}
+                        >
+                          <span className="font-semibold text-gray-800 min-w-0">
+                            Class {g.class} - {g.section}
+                          </span>
+                          <span className="text-xs font-medium shrink-0">
+                            {g.status === "missing" ? (
+                              <span className="text-red-700">
+                                ❌ Hajri NAHI lagi (0/{g.studentCount})
+                              </span>
+                            ) : g.status === "partial" ? (
+                              <span className="text-amber-700">
+                                ⚠️ Aadhi lagi ({g.markedCount}/{g.studentCount})
+                              </span>
+                            ) : (
+                              <span className="text-green-700">
+                                ✅ Poori lagi ({g.markedCount}/{g.studentCount})
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t" />
+
+            {/* (b) Lagatar absent — parent ko phone karne ki list */}
+            <div className="space-y-3">
+              <h3 className="font-semibold text-sm text-gray-800">
+                Lagatar absent bacche (phone karne ki list)
+              </h3>
+              <p className="text-xs text-gray-500">
+                Wo students jo apni class ki aakhri hajri-dates par
+                lagatar absent hain. Jis class me itne din hajri lagi hi
+                nahi, wo is list me nahi aati.
+              </p>
+              <div className="grid grid-cols-1 min-w-0 gap-3 sm:grid-cols-3">
+                <div className="space-y-1 min-w-0">
+                  <Label>Lagatar kitne din absent?</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={streakDays}
+                    onChange={(e) => setStreakDays(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-[44px] w-full sm:w-auto"
+                    onClick={() => void loadStreakReport()}
+                    disabled={streakLoading}
+                  >
+                    {streakLoading ? "Aa raha hai…" : "List Dekhein"}
+                  </Button>
+                </div>
+              </div>
+
+              {streakEntries !== null &&
+                (streakEntries.length === 0 ? (
+                  <p className="text-sm text-gray-500">
+                    Koi student itne din lagatar absent nahi hai — ya
+                    classes me abhi itne din ki hajri lagi hi nahi hai.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {streakEntries.map((entry) => (
+                      <div
+                        key={entry.studentId}
+                        className="rounded-md border border-red-200 bg-white px-3 py-2 space-y-1"
+                      >
+                        <div className="flex flex-wrap items-baseline justify-between gap-2 min-w-0">
+                          <span className="font-semibold text-sm text-gray-800 min-w-0 truncate">
+                            {entry.name}
+                            <span className="font-normal text-gray-500">
+                              {" "}
+                              • {entry.class}-{entry.section} • Adm{" "}
+                              {entry.admissionNo}
+                            </span>
+                          </span>
+                          <span className="rounded-full bg-red-100 text-red-800 px-2.5 py-0.5 text-xs font-bold shrink-0">
+                            {entry.consecutiveAbsent} din lagatar absent
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600">
+                          <span>
+                            Aakhri baar aaya:{" "}
+                            {entry.lastPresentDate
+                              ? entry.lastPresentDate
+                              : "record me kabhi present nahi"}
+                          </span>
+                          {entry.contact ? (
+                            <a
+                              href={`tel:${entry.contact.replace(/[^+\d]/g, "")}`}
+                              className="inline-flex items-center gap-1 font-semibold text-blue-700 min-h-[32px]"
+                            >
+                              <Phone className="h-3.5 w-3.5" /> {entry.contact}
+                            </a>
+                          ) : (
+                            <span className="text-gray-400">
+                              Contact number nahi hai
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="border-t-4 border-t-violet-600">
         <CardHeader className="py-3">

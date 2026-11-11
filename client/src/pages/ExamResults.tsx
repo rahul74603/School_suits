@@ -22,7 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
-import { Save, CheckCircle, XCircle, Calculator, School } from "lucide-react";
+import { Save, CheckCircle, XCircle, Calculator, School, Undo2 } from "lucide-react";
 
 const SUBJECTS: Record<string, string[]> = {
   "1-5": ["Hindi", "English", "Math", "EVS", "GK"],
@@ -36,6 +36,8 @@ const SUBJECTS: Record<string, string[]> = {
 function adaptExam(e: any) {
   return {
     ...e,
+    // v1.7: result approval haalat (purani rows = 'approved').
+    results_status: e.resultsStatus ?? "approved",
     exam_name: e.examName,
     exam_type: e.examType,
     class_name: e.class,
@@ -77,6 +79,36 @@ export default function ExamResults() {
   // dikhega.
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  // v1.7: parent ko server sirf approved exams deta hai — draft exam
+  // is list me ayega hi nahi. Approve sirf principal (server bhi wahi).
+  const isParent = user?.role === "parent";
+  const isPrincipal = user?.role === "principal";
+  const [togglingStatus, setTogglingStatus] = useState(false);
+
+  // v1.7: yahi page se approve/draft (Exams page par bhi yahi button hai).
+  const toggleResultsStatus = async () => {
+    if (!selectedExam) return;
+    const next = selectedExam.results_status === "approved" ? "draft" : "approved";
+    setTogglingStatus(true);
+    try {
+      await apiPost(`/api/exams/${selectedExam.id}/results-status`, { status: next });
+      setSelectedExam({ ...selectedExam, results_status: next });
+      setExams((prev: any[]) =>
+        prev.map((e: any) => (e.id === selectedExam.id ? { ...e, results_status: next } : e)),
+      );
+      toast({
+        title: next === "approved" ? "Result Approved ✅" : "Wapas Draft kar diya",
+        description:
+          next === "approved"
+            ? "Ab parent ko is exam ka result dikhega."
+            : "Ab parent ko is exam ka result NAHI dikhega.",
+      });
+    } catch (e) {
+      toast({ title: "Error", description: "Result ki haalat nahi badli.", variant: "destructive" });
+    } finally {
+      setTogglingStatus(false);
+    }
+  };
   const [exams, setExams] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [selectedExam, setSelectedExam] = useState<any>(null);
@@ -264,6 +296,19 @@ export default function ExamResults() {
       ) : (
       <>
 
+      {isParent && (
+        <Card className="border-amber-300 bg-amber-50">
+          <CardContent className="pt-6">
+            <p className="text-amber-800 text-sm">
+              📢 <b>Result abhi school se approved nahi hua</b> — jo results
+              school ne approve kar diye hain, sirf wahi yahan aur Report
+              Cards me dikhte hain. Exam ho chuka hai aur result nahi dikh
+              raha, to school ke approve karne ka intezaar karein.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Select Exam */}
       <Card>
         <CardContent className="pt-6">
@@ -287,11 +332,41 @@ export default function ExamResults() {
       {selectedExam && (
         <Card>
           <CardHeader>
-            <CardTitle>
-              {selectedExam.exam_name} 
-              <span className="text-sm font-normal text-gray-500 ml-4">
+            <CardTitle className="flex flex-wrap items-center gap-3">
+              <span>{selectedExam.exam_name}</span>
+              <span className="text-sm font-normal text-gray-500">
                 (Max: {selectedExam.max_marks}, Passing: {selectedExam.passing_marks})
               </span>
+              {selectedExam.results_status === "approved" ? (
+                <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-medium">
+                  ✅ Approved — parent ko dikh raha hai
+                </span>
+              ) : (
+                <span className="bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs font-medium">
+                  📝 Draft — parent ko nahi dikhega
+                </span>
+              )}
+              {isPrincipal &&
+                (selectedExam.results_status === "approved" ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={togglingStatus}
+                    onClick={toggleResultsStatus}
+                    className="text-amber-700 border-amber-300"
+                  >
+                    <Undo2 className="h-4 w-4 mr-1" /> Wapas Draft
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={togglingStatus}
+                    onClick={toggleResultsStatus}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    <CheckCircle className="h-4 w-4 mr-1" /> Approve karo
+                  </Button>
+                ))}
             </CardTitle>
           </CardHeader>
           <CardContent>

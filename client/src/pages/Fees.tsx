@@ -6,10 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, CheckCircle2, School } from "lucide-react";
+import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, CheckCircle2, School, Download, Layers } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useReactToPrint } from "react-to-print";
-import { apiGet, apiPost, apiDel } from "@/lib/api";
+import { apiGet, apiPost, apiDel, ApiError } from "@/lib/api";
+import { downloadCsv, todayStamp } from "@/lib/exportCsv";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 
@@ -66,11 +67,45 @@ export default function Fees() {
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isAddDueOpen, setIsAddDueOpen] = useState(false);
   const [newDue, setNewDue] = useState({ name: "", amount: "" });
+
+  // --- Fee Kishten (installments) — v1.7 FIN -------------------------
+  // Frappe ke fee-schedule model par: ek class ke saare active
+  // students ke liye kishten ek saath banti hain (server:
+  // POST /api/fees/installments/generate). Bani hui kishten aam
+  // student_dues hi hain — Pending Dues me dikhengi aur maujooda
+  // settlement (dueSettlements) se hi vasool hongi.
+  // Sirf principal/accountant — server par bhi yahi role bandhan hai.
+  const canManageFees = user?.role === "principal" || user?.role === "accountant";
+  const INST_CLASSES = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+  const [isInstOpen, setIsInstOpen] = useState(false);
+  const [instClass, setInstClass] = useState("");
+  const [instTitle, setInstTitle] = useState("Fee Kisht");
+  const [instTotal, setInstTotal] = useState("");
+  const [instCount, setInstCount] = useState("3");
+  const [instFirstDate, setInstFirstDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [instStructures, setInstStructures] = useState<any[]>([]);
+  const [instStudentCount, setInstStudentCount] = useState<number | null>(null);
+  const [instBusy, setInstBusy] = useState(false);
+  const [instResult, setInstResult] = useState<{ studentCount: number; created: number; skipped: number } | null>(null);
+  const [instError, setInstError] = useState("");
   
   // Receipt State
   const [showReceipt, setShowReceipt] = useState(false);
   const [currentReceipt, setCurrentReceipt] = useState<any>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
+
+  // 💳 Online Payment (Razorpay, v1.7) — imaandaar design: server par
+  // keys na hon to config enabled:false deta hai aur yahan saaf likha
+  // dikhega; koi dummy/test safalta ka rasta NAHI hai. Asli safalta
+  // sirf Razorpay checkout → server verify (signature jaanch) ke
+  // baad hi record banti hai.
+  const [onlineConfig, setOnlineConfig] = useState<{
+    enabled: boolean;
+    keyId?: string;
+  } | null>(null);
+  const [onlineAmount, setOnlineAmount] = useState("");
+  const [onlineBusy, setOnlineBusy] = useState(false);
+  const [onlineMsg, setOnlineMsg] = useState<string | null>(null);
 
   useEffect(() => {
     // Super Admin: koi school nahi — branding call hi nahi karte.
@@ -100,6 +135,27 @@ export default function Fees() {
   });
 
   useEffect(() => { if (selectedStudent) loadStudentData(); }, [selectedStudent, year]);
+
+  // Online payment config — student chunte hi ek baar jaanch. Fail ho
+  // (purana server wagera) to enabled:false jaisa bartav: imaandaar
+  // sandesh dikhega, nakli button nahi chalega.
+  useEffect(() => {
+    if (!selectedStudent || isSuperAdmin) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await apiGet<{ enabled: boolean; keyId?: string }>(
+          "/api/payments/online/config",
+        );
+        if (!cancelled) setOnlineConfig(cfg);
+      } catch {
+        if (!cancelled) setOnlineConfig({ enabled: false });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStudent]);
   useEffect(() => { let total = 0; extraCharges.forEach(c => total += (c.amount || 0)); setTotalPayable(total); }, [extraCharges]);
 
   const loadStudentData = async () => {
@@ -117,6 +173,184 @@ export default function Fees() {
       const statusData = await apiGet<any>(`/api/students/${selectedStudent.id}/status?year=${parseInt(year)}`);
       if (statusData) setStatus(statusData);
     } catch (error) { console.error(error); }
+  };
+
+  // --- KISHTEN: helpers (v1.7 FIN) ---
+  // Mahina jodo, din mahine ke aakhir se aage na jaye
+  // (31 Jan + 1 mahina = 28/29 Feb, 31 Mar nahi).
+  const addMonthsClamped = (dateStr: string, monthsToAdd: number): string => {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    if (!y || !m || !d) return dateStr;
+    const firstOfTarget = new Date(y, m - 1 + monthsToAdd, 1);
+    const lastDay = new Date(firstOfTarget.getFullYear(), firstOfTarget.getMonth() + 1, 0).getDate();
+    const dt = new Date(firstOfTarget.getFullYear(), firstOfTarget.getMonth(), Math.min(d, lastDay));
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    return `${dt.getFullYear()}-${mm}-${dd}`;
+  };
+
+  // Class ki fee structure se default kul rakam: saal bhar ki
+  // tuition (monthly × 12) + admission + exam + annual/other.
+  // Ye sirf DEFAULT hai — form me rakam badli ja sakti hai.
+  const instStructure = instStructures.find((s: any) => s.class === instClass);
+  const instDefaultTotal = instStructure
+    ? (instStructure.monthlyFee || 0) * 12 +
+      (instStructure.admissionFee || 0) +
+      (instStructure.examFee || 0) +
+      (instStructure.otherFee || 0)
+    : null;
+
+  const onInstClassChange = async (cls: string) => {
+    setInstClass(cls);
+    setInstResult(null);
+    setInstError("");
+    setInstStudentCount(null);
+    const st = instStructures.find((s: any) => s.class === cls);
+    if (st) {
+      setInstTotal(
+        String(
+          (st.monthlyFee || 0) * 12 +
+            (st.admissionFee || 0) +
+            (st.examFee || 0) +
+            (st.otherFee || 0),
+        ),
+      );
+    }
+    if (cls) {
+      try {
+        // Preview ke liye class ki active student ginti (server ki
+        // GET /api/students pehle se sirf active deti hai).
+        const list = await apiGet<any[]>(`/api/students?class=${encodeURIComponent(cls)}`);
+        setInstStudentCount((list || []).length);
+      } catch {
+        setInstStudentCount(null);
+      }
+    }
+  };
+
+  const openInstDialog = async () => {
+    setInstResult(null);
+    setInstError("");
+    setInstStudentCount(null);
+    const preClass = selectedStudent?.class || "";
+    setInstClass(preClass);
+    setIsInstOpen(true);
+    try {
+      // REST: GET /api/fee-structures — default kul rakam ke liye.
+      const structures = await apiGet<any[]>("/api/fee-structures");
+      setInstStructures(structures || []);
+      if (preClass) {
+        const st = (structures || []).find((s: any) => s.class === preClass);
+        if (st) {
+          setInstTotal(
+            String(
+              (st.monthlyFee || 0) * 12 +
+                (st.admissionFee || 0) +
+                (st.examFee || 0) +
+                (st.otherFee || 0),
+            ),
+          );
+        }
+        try {
+          const list = await apiGet<any[]>(`/api/students?class=${encodeURIComponent(preClass)}`);
+          setInstStudentCount((list || []).length);
+        } catch {
+          setInstStudentCount(null);
+        }
+      }
+    } catch {
+      setInstStructures([]);
+    }
+  };
+
+  // Preview: kul rakam ka bantwara — har kisht barabar, rounding ka
+  // bacha hua hissa AAKHIRI kisht me judta hai (kul jod hamesha
+  // bilkul wahi jo upar bhara gaya). Due dates: pehli tareekh se
+  // har mahine ek.
+  const instTotalNum = parseInt(instTotal) || 0;
+  const instCountNum = parseInt(instCount) || 0;
+  const instPreview: { title: string; amount: number; dueDate: string }[] =
+    instTotalNum > 0 && instCountNum >= 1 && instCountNum <= 24 && instFirstDate
+      ? (() => {
+          const base = Math.floor(instTotalNum / instCountNum);
+          const remainder = instTotalNum - base * instCountNum;
+          const titleBase = instTitle.trim() || "Fee Kisht";
+          return Array.from({ length: instCountNum }, (_, i) => ({
+            title: `${titleBase} ${i + 1}/${instCountNum}`,
+            amount: i === instCountNum - 1 ? base + remainder : base,
+            dueDate: addMonthsClamped(instFirstDate, i),
+          }));
+        })()
+      : [];
+
+  const confirmInst = async () => {
+    if (!instClass || instPreview.length === 0) return;
+    setInstBusy(true);
+    setInstError("");
+    setInstResult(null);
+    try {
+      // REST: POST /api/fees/installments/generate — jawab me
+      // { studentCount, created, skipped } ki sachhi ginti aati hai;
+      // pehle se bani kishten server skip kar deta hai.
+      const res = await apiPost<any>("/api/fees/installments/generate", {
+        className: instClass,
+        installments: instPreview,
+      });
+      setInstResult({
+        studentCount: res.studentCount,
+        created: res.created,
+        skipped: res.skipped,
+      });
+      toast({
+        title: "Kishten ban gayi",
+        description: `${res.created} nayi kishten bani, ${res.skipped} pehle se thi (skip ho gayi).`,
+      });
+      // Khule hue student ki class yahi ho to uski dues list taza karo.
+      if (selectedStudent && selectedStudent.class === instClass) loadStudentData();
+    } catch (e: any) {
+      // Imaandar sandesh: server ne jo wajah bheji wahi dikhao,
+      // aadhi safalta kabhi safalta bankar nahi dikhegi.
+      setInstError(e?.message || "Kishten nahi ban payi — dobara koshish karein.");
+    }
+    setInstBusy(false);
+  };
+
+  // --- CSV EXPORTS (v1.7 FIN) — pehle se loaded data se hi ---
+  const exportPaymentsCsv = () => {
+    if (!selectedStudent || paymentHistory.length === 0) return;
+    downloadCsv(
+      `payments-${selectedStudent.admission_no}-${todayStamp()}.csv`,
+      ["Receipt No", "Date", "Student", "Admission No", "Class", "Month", "Year", "Amount", "Details"],
+      paymentHistory.map((p: any) => [
+        p.receipt_no ?? "",
+        p.payment_date ? new Date(p.payment_date).toLocaleDateString("en-IN") : "",
+        selectedStudent.name ?? "",
+        selectedStudent.admission_no ?? "",
+        selectedStudent.class ?? "",
+        p.month ?? "",
+        p.year ?? "",
+        p.amount ?? 0,
+        p.remarks ?? "",
+      ]),
+    );
+    toast({ title: "CSV download ho gaya", description: `${selectedStudent.name} ki ${paymentHistory.length} payment(s) export hui.` });
+  };
+
+  const exportDuesCsv = () => {
+    if (!selectedStudent || !status.pendingDues?.length) return;
+    downloadCsv(
+      `pending-dues-${selectedStudent.admission_no}-${todayStamp()}.csv`,
+      ["Student", "Admission No", "Class", "Fee", "Amount", "Due Date"],
+      status.pendingDues.map((d: any) => [
+        selectedStudent.name ?? "",
+        selectedStudent.admission_no ?? "",
+        selectedStudent.class ?? "",
+        d.fee_name ?? "",
+        d.amount ?? 0,
+        d.due_date ? new Date(d.due_date).toLocaleDateString("en-IN") : "",
+      ]),
+    );
+    toast({ title: "CSV download ho gaya", description: `${selectedStudent.name} ke ${status.pendingDues.length} pending due(s) export hue.` });
   };
 
   // --- ACTIONS ---
@@ -205,6 +439,138 @@ export default function Fees() {
       setShowReceipt(true);
 
     } catch (e) { toast({ title: "Error", description: "Failed", variant: "destructive" }); }
+  };
+
+  // Razorpay checkout.js dynamically load karo (pehle se loaded ho
+  // to dobara nahi). Script na aaye to imaandaar fail — aage nahi badhte.
+  const loadRazorpayCheckout = (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if ((window as any).Razorpay) return resolve(true);
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.onload = () => resolve(!!(window as any).Razorpay);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
+
+  // 💳 Online fee jama — asal pravah: (1) server se order banao,
+  // (2) Razorpay ka asal checkout kholo, (3) safalta par server se
+  // signature verify karwao — record TABHI banta hai. Beech me kahin
+  // bhi ruko/band karo to koi record NAHI banta aur wahi sach yahan
+  // likha dikhta hai.
+  const handleOnlinePay = async () => {
+    if (!selectedStudent) return;
+    const amount = parseInt(onlineAmount, 10) || totalPayable;
+    if (!amount || amount <= 0) {
+      setOnlineMsg(
+        "Pehle bill me rakam jodein ya upar rakam likhein — bina rakam ke online payment nahi hoga.",
+      );
+      return;
+    }
+    setOnlineBusy(true);
+    setOnlineMsg(null);
+    try {
+      const order = await apiPost<{
+        orderId: string;
+        amount: number;
+        keyId: string;
+      }>("/api/payments/online/order", {
+        studentId: selectedStudent.id,
+        amount,
+      });
+
+      const loadedScript = await loadRazorpayCheckout();
+      if (!loadedScript) {
+        setOnlineMsg(
+          "Razorpay ki payment window load nahi ho payi — internet jaanch kar dobara koshish karein. Koi rakam nahi kati.",
+        );
+        setOnlineBusy(false);
+        return;
+      }
+
+      // Bill ka sandarbh verify ke saath jayega taaki safal adaygi ka
+      // record manual payment jaisa hi bane (breakdown/dues samet).
+      const dueSettlements = extraCharges
+        .filter((c) => c.dueId && c.amount > 0)
+        .map((c) => ({ dueId: c.dueId as number, amount: c.amount }));
+
+      const rzp = new (window as any).Razorpay({
+        key: order.keyId,
+        order_id: order.orderId,
+        amount: order.amount * 100,
+        currency: "INR",
+        name: schoolInfo.name || school?.name || "School Guardian Suite",
+        description: `Fee — ${selectedStudent.name}`,
+        handler: async (resp: any) => {
+          try {
+            await apiPost("/api/payments/online/verify", {
+              razorpay_order_id: resp.razorpay_order_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature,
+              studentId: selectedStudent.id,
+              amount,
+              month:
+                extraCharges.map((c) => c.month).filter(Boolean).join(",") ||
+                "Misc",
+              year: parseInt(year),
+              remarks: extraCharges
+                .map((c) => `${c.name} (₹${c.amount})`)
+                .join(", "),
+              breakdown: { extras: extraCharges },
+              isAdmission: extraCharges.some(
+                (c) => c.type === "Admission Fee",
+              ),
+              dueSettlements: dueSettlements.length
+                ? dueSettlements
+                : undefined,
+            });
+            toast({
+              title: "Online Payment Safal",
+              description: `₹${amount} ki fee jama ho gayi (Razorpay se verify hokar).`,
+            });
+            setOnlineMsg(
+              "Payment safal — rakam school ke record me jama ho gayi hai.",
+            );
+            setOnlineAmount("");
+            loadStudentData();
+          } catch (e) {
+            // Razorpay par paisa kata ho par server verify fail ho to
+            // record NAHI bana — yahi sach saaf likhna hai.
+            setOnlineMsg(
+              e instanceof ApiError
+                ? `Payment ki server-jaanch fail: ${e.message}`
+                : "Payment ki server-jaanch fail ho gayi — record NAHI bana. Agar rakam kat gayi ho to school se sampark karein.",
+            );
+            toast({
+              title: "Verify Fail",
+              description:
+                "Online payment ka record nahi bana — school se sampark karein.",
+              variant: "destructive",
+            });
+          } finally {
+            setOnlineBusy(false);
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            setOnlineBusy(false);
+            setOnlineMsg(
+              "Payment pura nahi hua — window band kar di gayi. Koi record NAHI bana.",
+            );
+          },
+        },
+        theme: { color: "#1976D2" },
+      });
+      rzp.open();
+    } catch (e) {
+      setOnlineBusy(false);
+      setOnlineMsg(
+        e instanceof ApiError
+          ? e.message
+          : "Online payment shuru nahi ho paya — dobara koshish karein.",
+      );
+    }
   };
 
   const deleteReceipt = async (id: number) => {
@@ -305,6 +671,11 @@ export default function Fees() {
       <div className="flex flex-wrap gap-2 justify-between items-center shrink-0 bg-white p-3 rounded-xl shadow-sm border mb-3">
         <h1 className="text-2xl font-bold flex items-center gap-2 text-slate-800"><IndianRupee className="text-green-600" /> Fees Dashboard</h1>
         {selectedStudent && <div className="font-bold text-lg">{selectedStudent.name} ({selectedStudent.class}) - {selectedStudent.admission_no}</div>}
+        {canManageFees && (
+          <Button onClick={() => void openInstDialog()} className="bg-purple-600 hover:bg-purple-700 shrink-0">
+            <Layers className="h-4 w-4 mr-2" /> Kishten Banao
+          </Button>
+        )}
       </div>
 
       {/* Teeno columns par min-w-0 lazmi hai: bina iske grid ka baccha
@@ -372,7 +743,12 @@ export default function Fees() {
                     <Card className="border-l-4 border-l-purple-500 shadow-sm">
                         <CardHeader className="py-2 bg-purple-50 flex flex-row justify-between items-center">
                             <CardTitle className="text-sm text-purple-900 flex items-center gap-2"><Clock className="h-4 w-4"/> Pending Dues</CardTitle>
-                            <Button size="sm" variant="outline" className="h-7 bg-white text-purple-700" onClick={() => setIsAddDueOpen(true)}><Plus className="h-3 w-3 mr-1"/> Add</Button>
+                            <div className="flex items-center gap-2 shrink-0">
+                                {status.pendingDues?.length > 0 && (
+                                    <Button size="sm" variant="outline" className="h-7 bg-white text-purple-700" onClick={exportDuesCsv} title="Is student ke pending dues ki CSV download karein"><Download className="h-3 w-3 mr-1"/> CSV</Button>
+                                )}
+                                <Button size="sm" variant="outline" className="h-7 bg-white text-purple-700" onClick={() => setIsAddDueOpen(true)}><Plus className="h-3 w-3 mr-1"/> Add</Button>
+                            </div>
                         </CardHeader>
                         <CardContent className="p-0">
                             {(admDue || status.pendingDues?.length > 0) ? (
@@ -447,10 +823,13 @@ export default function Fees() {
 
                     {/* 🟢 RECENT TRANSACTIONS (FIXED: REMOVED TITLE PROPS) */}
                     <Card className="flex-1 overflow-hidden flex flex-col border-t-4 border-t-slate-600">
-                        <CardHeader className="py-2 bg-slate-100 border-b">
+                        <CardHeader className="py-2 bg-slate-100 border-b flex flex-row justify-between items-center">
                             <CardTitle className="text-sm font-bold text-slate-700 flex items-center gap-2">
                                 <Clock className="h-4 w-4"/> Recent Transactions
                             </CardTitle>
+                            {paymentHistory.length > 0 && (
+                                <Button size="sm" variant="outline" className="h-7 bg-white text-slate-700 shrink-0" onClick={exportPaymentsCsv} title="Is student ki payments ki CSV download karein"><Download className="h-3 w-3 mr-1"/> CSV</Button>
+                            )}
                         </CardHeader>
                         <CardContent className="p-0 flex-1 overflow-auto">
                             {paymentHistory.length === 0 ? (
@@ -505,6 +884,38 @@ export default function Fees() {
                     <div className="p-4 bg-white border-t">
                         <div className="flex justify-between mb-4 items-end"><span className="text-gray-500 font-medium">Total</span><span className="text-3xl font-bold text-green-700">₹{totalPayable}</span></div>
                         <Button className="w-full bg-green-600 hover:bg-green-700 h-12 text-lg shadow-md" onClick={() => setIsConfirmOpen(true)} disabled={totalPayable === 0}>Collect Payment</Button>
+
+                        {/* 💳 Online Fee Jama (Razorpay, v1.7) — student
+                            chuna ho tabhi dikhta hai. Config enabled na
+                            ho to wajah saaf likhi hai; koi nakli
+                            safalta wala rasta nahi hai. */}
+                        {selectedStudent && (
+                            <div className="mt-4 border-t pt-3 space-y-2">
+                                <div className="text-sm font-bold text-slate-700">Online Fee Jama (Razorpay)</div>
+                                {onlineConfig === null ? (
+                                    <p className="text-xs text-gray-400">Online payment ki jaanch ho rahi hai…</p>
+                                ) : !onlineConfig.enabled ? (
+                                    <>
+                                        <Button className="w-full h-11" variant="outline" disabled>Online Fee Jama</Button>
+                                        <p className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                                            Is school ne online payment chalu nahi kiya hai
+                                        </p>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-bold text-gray-400">₹</span>
+                                            <Input type="number" placeholder={totalPayable ? String(totalPayable) : "Rakam"} value={onlineAmount} onChange={(e) => setOnlineAmount(e.target.value)} className="h-10 text-right font-bold"/>
+                                        </div>
+                                        <Button className="w-full bg-blue-600 hover:bg-blue-700 h-11" onClick={() => void handleOnlinePay()} disabled={onlineBusy}>
+                                            {onlineBusy ? "Payment chal raha hai…" : "Online Fee Jama"}
+                                        </Button>
+                                        <p className="text-[11px] text-gray-400">Razorpay ki surakshit window khulegi. Record tabhi banega jab server payment ko verify kar lega.</p>
+                                    </>
+                                )}
+                                {onlineMsg && <p className="text-xs font-medium text-slate-700 bg-slate-50 border rounded px-2 py-1.5">{onlineMsg}</p>}
+                            </div>
+                        )}
                     </div>
                 </CardContent>
             </Card>
@@ -536,6 +947,156 @@ export default function Fees() {
                     </>
                 )}
             </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* --- KISHTEN BANAO DIALOG (v1.7 FIN) ---
+          Class chuno → kul rakam (fee structure se default, badli ja
+          sakti hai) → kishton ki sankhya + pehli due date (har mahine
+          ek kisht) → preview → Confirm. Server pehle se bani kishten
+          skip karta hai; nataija (bani/skip) yahin sach dikhta hai. */}
+      <Dialog open={isInstOpen} onOpenChange={setIsInstOpen}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Layers className="h-5 w-5 text-purple-600" /> Fee Kishten Banao
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Ek class ke <b>saare active students</b> ke liye ek saath kishten
+              banengi — har kisht ek pending due bankar student ki Fees screen
+              par dikhegi aur wahi se vasool hogi. Ek baar bani hui kisht
+              (wahi naam + wahi due date) dobara nahi banti — server use skip
+              kar deta hai.
+            </p>
+
+            <div className="space-y-2 min-w-0">
+              <Label>Class</Label>
+              <select
+                className="w-full border rounded-md p-2 bg-white"
+                value={instClass}
+                onChange={(e) => void onInstClassChange(e.target.value)}
+              >
+                <option value="">Class chunein</option>
+                {INST_CLASSES.map((c) => (
+                  <option key={c} value={c}>Class {c}</option>
+                ))}
+              </select>
+              {instClass && instStudentCount != null && (
+                <p className="text-[11px] text-gray-500">
+                  Is class me {instStudentCount} active student(s) hain — kishten inhi ke liye banengi.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2 min-w-0">
+              <Label>Kisht ka naam (sab kishton ke naam ki neev)</Label>
+              <Input
+                value={instTitle}
+                onChange={(e) => setInstTitle(e.target.value)}
+                placeholder="e.g. Fee Kisht"
+              />
+              <p className="text-[11px] text-gray-400">Har kisht ka poora naam iske aage number ke saath banega — jaise “{(instTitle.trim() || "Fee Kisht")} 1/{instCountNum || 3}”.</p>
+            </div>
+
+            <div className="space-y-2 min-w-0">
+              <Label>Kul Rakam (₹) — poori class ke har student par itni rakam ki kishten banengi</Label>
+              <Input
+                type="number"
+                value={instTotal}
+                onChange={(e) => setInstTotal(e.target.value)}
+                placeholder="e.g. 12000"
+              />
+              {instClass && (
+                instStructure ? (
+                  <p className="text-[11px] text-gray-500">
+                    Fee structure se default: Monthly ₹{instStructure.monthlyFee || 0} × 12
+                    + Admission ₹{instStructure.admissionFee || 0}
+                    + Exam ₹{instStructure.examFee || 0}
+                    + Annual/Other ₹{instStructure.otherFee || 0}
+                    {" "}= ₹{instDefaultTotal}. Chaahein to upar ki rakam badal dein.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-amber-700">
+                    Is class ki fee structure set nahi hai — kul rakam haath se bharein.
+                  </p>
+                )
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2 min-w-0">
+                <Label>Kishton ki sankhya (1–24)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={24}
+                  value={instCount}
+                  onChange={(e) => setInstCount(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2 min-w-0">
+                <Label>Pehli kisht ki due date</Label>
+                <Input
+                  type="date"
+                  value={instFirstDate}
+                  onChange={(e) => setInstFirstDate(e.target.value)}
+                />
+                <p className="text-[11px] text-gray-400">Baaki kishten har mahine usi tareekh par ayengi.</p>
+              </div>
+            </div>
+
+            {/* PREVIEW */}
+            {instPreview.length > 0 ? (
+              <div className="rounded-md border bg-slate-50 p-3 space-y-1">
+                <div className="text-xs font-bold text-slate-600 uppercase">Preview — har student ke liye ye kishten banengi</div>
+                {instPreview.map((item, i) => (
+                  <div key={i} className="flex flex-wrap gap-2 justify-between text-sm bg-white border rounded px-2 py-1.5">
+                    <span className="font-medium text-slate-700 min-w-0">{item.title}</span>
+                    <span className="text-gray-500 text-xs self-center">{new Date(`${item.dueDate}T00:00:00`).toLocaleDateString("en-IN")}</span>
+                    <span className="font-bold text-purple-700">₹{item.amount}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between text-sm font-bold pt-1">
+                  <span>Kul jod (har student)</span>
+                  <span>₹{instPreview.reduce((s, x) => s + x.amount, 0)}</span>
+                </div>
+                <p className="text-[11px] text-gray-400">Rounding ka bacha hua hissa aakhiri kisht me judta hai — kul jod hamesha upar bhari rakam ke barabar rehta hai.</p>
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed p-3 text-center text-xs text-gray-400">
+                Class, kul rakam (₹1 se zyada), kishton ki sankhya (1–24) aur pehli due date bharein — preview yahan dikhega.
+              </div>
+            )}
+
+            {instError && (
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                Kishten nahi bani: {instError}
+              </div>
+            )}
+            {instResult && (
+              <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-800 space-y-1">
+                <div className="font-bold">Ho gaya ✅</div>
+                <div>
+                  {instResult.studentCount} student(s) × {instPreview.length} kishten me se{" "}
+                  <b>{instResult.created} nayi bani</b> aur{" "}
+                  <b>{instResult.skipped} pehle se thi</b> (isliye skip ho gayi — dohra charge nahi laga).
+                </div>
+                <div className="text-xs text-green-700">Bani hui kishten har student ki Pending Dues me dikhengi.</div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsInstOpen(false)}>Band Karein</Button>
+            <Button
+              onClick={() => void confirmInst()}
+              className="bg-purple-600 hover:bg-purple-700"
+              disabled={instBusy || !instClass || instPreview.length === 0}
+            >
+              {instBusy ? "Ban rahi hain…" : "Pakka — Kishten Banao"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -23,6 +23,9 @@ import { Link } from "wouter";
 import { Printer, Search, FileText, Award, TrendingUp, Calendar, User, School } from "lucide-react";
 
 interface ExamResult {
+  // v1.7: result approval haalat — server parent ko draft rows deta
+  // hi nahi, isliye ye field asal me sirf office roles ko dikhegi.
+  results_status?: string;
   exam_name: string;
   exam_type: string;
   subject_marks: string;
@@ -79,6 +82,7 @@ function adaptResult(row: any, exam: any) {
   const percentage = maxMarks > 0 ? Number(((total * 100) / maxMarks).toFixed(2)) : 0;
   const subjectName = (row.subject || exam?.subject || "").trim() || "Marks";
   return {
+    results_status: row.resultsStatus ?? exam?.resultsStatus ?? "approved",
     exam_name: row.examName ?? exam?.examName ?? "",
     exam_type: row.examType ?? exam?.examType ?? "",
     class_name: exam?.class ?? "",
@@ -101,6 +105,7 @@ export default function ReportCards() {
   // no-school card dikhega.
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  const isParent = user?.role === "parent";
   const printRef = useRef<HTMLDivElement>(null);
   
   const [searchAdmNo, setSearchAdmNo] = useState("");
@@ -388,6 +393,11 @@ export default function ReportCards() {
                         <div>
                           <h4 className="font-bold text-lg">{result.exam_name}</h4>
                           <p className="text-sm text-gray-500">{result.exam_type} • Session {result.session}</p>
+                          {result.results_status === "draft" && (
+                            <span className="inline-block mt-1 bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-xs font-medium">
+                              📝 Draft — parent ko nahi dikh raha
+                            </span>
+                          )}
                         </div>
                         <div className="text-right">
                           <span className={`text-2xl font-bold ${getGradeClass(result.grade)}`}>
@@ -410,6 +420,20 @@ export default function ReportCards() {
                       </div>
                     </div>
                   ))}
+                </div>
+              ) : isParent ? (
+                <div className="text-center py-12 px-4">
+                  <Award className="h-12 w-12 mx-auto mb-3 text-amber-400" />
+                  <p className="font-semibold text-amber-700">
+                    📢 Result abhi school se approved nahi hua
+                  </p>
+                  <p className="text-gray-500 text-sm mt-2">
+                    Is student ka koi approved result abhi uplabdh nahi
+                    hai. Exam ho chuka hai to school ke Principal ke
+                    approve karte hi report card yahan dikhne lagega —
+                    kuch samay baad dobara dekhein, ya school se sampark
+                    karein.
+                  </p>
                 </div>
               ) : (
                 <div className="text-center py-12 text-gray-500">

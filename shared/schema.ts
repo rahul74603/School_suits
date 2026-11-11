@@ -17,6 +17,13 @@ export const schools = pgTable("schools", {
   admissionPrefix: text("admission_prefix").default("SCHOOL"),
   admissionYear: text("admission_year"),
   admissionStart: integer("admission_start").default(1),
+  // Plans/License (v1.7, NICHOD #15): plan sirf ek label hai is batch me —
+  // module-gating (plan-wise features band) abhi NAHI hai. licenseExpiry
+  // text "YYYY-MM-DD" hai (baaki dates wali parampara: examDate/dob bhi
+  // text hain) — is tareekh ke BAAD school ke data-API 403 denge
+  // (routes.ts ka license guard). null = koi expiry nahi (hamesha chaalu).
+  plan: text("plan").default("Basic"),
+  licenseExpiry: text("license_expiry"),
   isActive: integer("is_active").default(1),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -188,6 +195,14 @@ export const exams = pgTable("exams", {
   subject: text("subject"),
   maxMarks: integer("max_marks").default(100),
   passingMarks: integer("passing_marks"),
+  // Result approval (v1.7, Skuul se seekha): 'draft' = marks bhare
+  // gaye hain par parent ko abhi NAHI dikhenge; 'approved' = parent
+  // dekh sakta hai. Column ka DEFAULT 'approved' jaan-bujh kar hai:
+  // live DB ke purane exams (jo pehle se parent ko dikh rahe hain)
+  // is column ke judte hi 'approved' bhare jayenge — unka result
+  // achanak gayab nahi hoga. NAYE exam ke liye 'draft' route
+  // (POST /api/exams) khud likhta hai, default par nahi chhodta.
+  resultsStatus: text("results_status").default("approved"),
   // Baaki tables ki tarah date text string me hai ("2026-09-15").
   examDate: text("exam_date"),
   session: text("session"),
@@ -231,6 +246,35 @@ export const attendance = pgTable("attendance", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
   uniqueIndex("attendance_student_date_unique").on(table.studentId, table.date),
+]);
+
+// Result approval ki valid values (v1.7) — ATTENDANCE_STATUSES wala hi
+// pattern: DB me text, code me is enum se enforce.
+export const RESULT_STATUSES = ["draft", "approved"] as const;
+export type ResultStatus = (typeof RESULT_STATUSES)[number];
+export const resultStatusSchema = z.enum(RESULT_STATUSES);
+
+// §6.10c — Timetable (v1.7, saada haath-se-bana wala; auto-scheduler
+// NICHOD me saaf mana hai). Ek class ke ek din ke ek period ki EK hi
+// entry — (school_id, class_name, day_of_week, period_no) par unique
+// bandhan, attendance wale (student_id, date) bandhan jaisa hi; dobara
+// save karna = usi entry ka update (storage upsert yahi karta hai).
+// day_of_week: 1 = Monday .. 6 = Saturday (route par zod se bandha).
+// teacher_id staff table ko point karta hai — salary_payments.staff_id
+// wala hi pattern (teacher ek staff record hi hota hai); khaali period
+// ke liye null. subject saada text hai (fee/other naam ki tarah).
+export const timetableEntries = pgTable("timetable_entries", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  className: text("class_name").notNull(),
+  dayOfWeek: integer("day_of_week").notNull(),
+  periodNo: integer("period_no").notNull(),
+  subject: text("subject").notNull(),
+  teacherId: integer("teacher_id").references(() => staff.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  uniqueIndex("timetable_school_class_day_period_unique").on(table.schoolId, table.className, table.dayOfWeek, table.periodNo),
 ]);
 
 // §6.11 — Transport routes (students.transport_id isi ko point karta hai).
@@ -342,6 +386,44 @@ export const NOTICE_AUDIENCES = ["all", "teachers", "parents"] as const;
 export type NoticeAudience = (typeof NOTICE_AUDIENCES)[number];
 export const noticeAudienceSchema = z.enum(NOTICE_AUDIENCES);
 
+// School plans ki valid values (v1.7, NICHOD #15) — USER_ROLES wala hi
+// pattern: DB me text, code me is enum se enforce. Is batch me plan sirf
+// Super Admin ki screen par dikhta/badalt hai; kaunse modules kis plan
+// me milenge (entitlement) abhi tay NAHI hai — wo agla kadam hai.
+export const SCHOOL_PLANS = ["Basic", "Pro"] as const;
+export type SchoolPlan = (typeof SCHOOL_PLANS)[number];
+export const schoolPlanSchema = z.enum(SCHOOL_PLANS);
+
+// §6.16 — Library (v1.7, NICHOD #12): saada catalog + issue/return.
+// Attendance table ki shaili: school_id + timestamps har table me;
+// tareekhein text ("YYYY-MM-DD") taaki overdue ki tulna seedhi string
+// se ho jaye. Uplabdh copies koi column NAHI hai — hamesha
+// copies_total − (returned_at null wale issues) se banti hai (routes
+// jawab me availableCopies jod kar dete hain).
+export const libraryBooks = pgTable("library_books", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  title: text("title").notNull(),
+  author: text("author"),
+  copiesTotal: integer("copies_total").notNull().default(1),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const libraryIssues = pgTable("library_issues", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  bookId: integer("book_id").notNull().references(() => libraryBooks.id),
+  studentId: integer("student_id").notNull().references(() => students.id),
+  // issue/due tareekhein text hain (attendance.date wali parampara);
+  // returned_at asal timestamp hai — null = kitab abhi bahar hai.
+  issueDate: text("issue_date").notNull(),
+  dueDate: text("due_date").notNull(),
+  returnedAt: timestamp("returned_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Parent <-> student link (Phase 2 §6). Ek parent ke kai bacche,
 // ek bacche ke kai parents ho sakte hain.
 export const parentStudents = pgTable("parent_students", {
@@ -427,6 +509,11 @@ export const insertMarkSchema = createInsertSchema(marks).omit({
   createdAt: true,
 });
 
+export const insertTimetableEntrySchema = createInsertSchema(timetableEntries).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertAttendanceSchema = createInsertSchema(attendance).omit({
   id: true,
   createdAt: true,
@@ -473,6 +560,17 @@ export const insertNoticeSchema = createInsertSchema(notices).omit({
   audience: noticeAudienceSchema.default("all"),
 });
 
+// Library insert schemas (v1.7) — style upar walon jaisa hi.
+export const insertLibraryBookSchema = createInsertSchema(libraryBooks).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertLibraryIssueSchema = createInsertSchema(libraryIssues).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type School = typeof schools.$inferSelect;
 export type InsertSchool = z.infer<typeof insertSchoolSchema>;
@@ -510,6 +608,9 @@ export type InsertMark = z.infer<typeof insertMarkSchema>;
 export type Attendance = typeof attendance.$inferSelect;
 export type InsertAttendance = z.infer<typeof insertAttendanceSchema>;
 
+export type TimetableEntry = typeof timetableEntries.$inferSelect;
+export type InsertTimetableEntry = z.infer<typeof insertTimetableEntrySchema>;
+
 export type TransportRoute = typeof transportRoutes.$inferSelect;
 export type InsertTransportRoute = z.infer<typeof insertTransportRouteSchema>;
 
@@ -530,3 +631,9 @@ export type InsertStaffDocument = z.infer<typeof insertStaffDocumentSchema>;
 
 export type Notice = typeof notices.$inferSelect;
 export type InsertNotice = z.infer<typeof insertNoticeSchema>;
+
+export type LibraryBook = typeof libraryBooks.$inferSelect;
+export type InsertLibraryBook = z.infer<typeof insertLibraryBookSchema>;
+
+export type LibraryIssue = typeof libraryIssues.$inferSelect;
+export type InsertLibraryIssue = z.infer<typeof insertLibraryIssueSchema>;

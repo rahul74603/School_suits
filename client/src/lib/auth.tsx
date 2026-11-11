@@ -38,6 +38,12 @@ interface AuthContextValue {
   user: ApiUser | null;
   school: ApiSchool | null;
   loading: boolean;
+  // License band hai ya nahi (v1.7) — do raaston se pakka hota hai:
+  // (1) /api/auth/me ke school ki licenseExpiry beet chuki ho, ya
+  // (2) kisi data-API se 403 LICENSE_EXPIRED aaya ho (api.ts ka
+  // `sg:license-expired` event). App ka Gate isi par lock screen
+  // dikhata hai. super_admin par hamesha false.
+  licenseExpired: boolean;
   login: (username: string, password: string) => Promise<ApiUser>;
   logout: () => Promise<void>;
   changePassword: (
@@ -49,10 +55,21 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// License expiry beet gayi? (server isLicenseExpired wala hi niyam:
+// "YYYY-MM-DD" string tulna; expiry wale DIN tak chaalu, uske baad band.)
+export function isLicenseExpiredValue(
+  licenseExpiry: string | null | undefined,
+): boolean {
+  if (!licenseExpiry) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  return licenseExpiry < today;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ApiUser | null>(null);
   const [school, setSchool] = useState<ApiSchool | null>(null);
   const [loading, setLoading] = useState(true);
+  const [licenseBlocked, setLicenseBlocked] = useState(false);
   const bootedRef = useRef(false);
 
   const applyMe = useCallback(
@@ -68,6 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearSession();
     setUser(null);
     setSchool(null);
+    setLicenseBlocked(false);
     // Purane user ke cached data naye user ko kabhi na dikhe.
     queryClient.clear();
   }, []);
@@ -107,6 +125,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener("sg:logout", onExpired);
     return () => window.removeEventListener("sg:logout", onExpired);
   }, [endSession]);
+
+  // apiFetch ka license-expired signal (v1.7): koi data-API 403
+  // LICENSE_EXPIRED de to poori app lock screen par chali jaye.
+  useEffect(() => {
+    const onLicense = () => setLicenseBlocked(true);
+    window.addEventListener("sg:license-expired", onLicense);
+    return () => window.removeEventListener("sg:license-expired", onLicense);
+  }, []);
+
+  const licenseExpired =
+    user?.role !== "super_admin" &&
+    (licenseBlocked || isLicenseExpiredValue(school?.licenseExpiry));
 
   const login = useCallback(
     async (username: string, password: string) => {
@@ -156,7 +186,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, school, loading, login, logout, changePassword, refreshMe }}
+      value={{
+        user,
+        school,
+        loading,
+        licenseExpired,
+        login,
+        logout,
+        changePassword,
+        refreshMe,
+      }}
     >
       {children}
     </AuthContext.Provider>
