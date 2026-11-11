@@ -37,6 +37,8 @@ import {
 //    Profile me dekhta hai (is page par use wahi raasta dikhta hai).
 //  - Super Admin ka koi school nahi — Dashboard wala no-school card,
 //    koi API call nahi (server uske liye 403 deta hai).
+//  - v1.8: roster (students) aur hajri-status alag-alag load hote
+//    hain; date kabhi khaali request me nahi jati (NOTES dekho).
 
 const CLASSES = [
   "Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9",
@@ -66,6 +68,22 @@ interface RosterRow {
   section: string;
   status: string | null;
 }
+
+// GET /api/students ka jawab — v1.8 se roster (students ki list) ka
+// asal source yahi hai; hajri ke status uske UPAR alag se load hote
+// hain (neeche loadRoster dekho).
+interface StudentLite {
+  id: number;
+  name: string;
+  rollNo: string | null;
+  class: string;
+  section: string;
+}
+
+// Server ke DATE_TEXT_RE / MONTH_TEXT_RE wale hi pattern — khaali ya
+// aadhi-likhi tareekh ko request me bhejne se pehle yahin pakdo.
+const DATE_TEXT_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_TEXT_RE = /^\d{4}-\d{2}$/;
 
 interface MonthSummary {
   month: string;
@@ -144,6 +162,11 @@ export default function Attendance() {
   const [roster, setRoster] = useState<RosterRow[]>([]);
   const [statuses, setStatuses] = useState<Record<number, AttendanceStatus>>({});
   const [loadedOnce, setLoadedOnce] = useState(false);
+  // v1.8: students ki list aa gayi ho par us din ki lagi hui hajri
+  // (status overlay) load na hui ho to true — list dikhti rahegi,
+  // par Save band rahega (warna purani hajri "present" se upar
+  // likh jayegi). Refresh se dobara koshish hoti hai.
+  const [attendanceLoadFailed, setAttendanceLoadFailed] = useState(false);
 
   // Mahina-summary panel
   const [summaryStudentId, setSummaryStudentId] = useState<string>("");
@@ -160,32 +183,75 @@ export default function Attendance() {
   const [streakEntries, setStreakEntries] = useState<StreakEntry[] | null>(null);
   const [streakLoading, setStreakLoading] = useState(false);
 
+  // v1.8 — load do hisson me kata hai (pehle ek hi request thi, isliye
+  // hajri wali request ki koi bhi gadbad poore page ko laal toast ke
+  // saath khaali kar deti thi):
+  //  Kadam 1 — students ki list GET /api/students se. YAHI asal roster
+  //    hai; ye fail ho tabhi laal toast banta hai. Class khaali ho to
+  //    jawab 200 + khaali list hai — koi toast nahi, sirf empty-state.
+  //  Kadam 2 — us din ki lagi hui hajri GET /api/attendance se status
+  //    ke roop me list ke upar. Ye fail ho to list phir bhi dikhti
+  //    hai (sab default present), sirf Save band ho jata hai.
+  // Date kabhi khaali/galat request me nahi jati: Android par date ka
+  // dabba saaf karne se state "" ho jata tha aur purana code waisa hi
+  // "date=" bhej kar server se 400 khata tha — asal laal toast ki
+  // wajah yahi thi. Ab effectiveDate hamesha sahi YYYY-MM-DD hai.
   const loadRoster = async () => {
     if (isSuperAdmin || isParent) return;
     setLoading(true);
+    setAttendanceLoadFailed(false);
+    const effectiveDate = DATE_TEXT_RE.test(date) ? date : todayText();
+
+    let students: StudentLite[];
     try {
       const params = new URLSearchParams();
       params.set("class", className);
       if (section !== "ALL") params.set("section", section);
-      params.set("date", date);
-      const rows = await apiGet<RosterRow[]>(`/api/attendance?${params.toString()}`);
-      const list = rows || [];
-      setRoster(list);
-      const next: Record<number, AttendanceStatus> = {};
-      for (const row of list) {
-        next[row.studentId] = (row.status as AttendanceStatus) || "present";
-      }
-      setStatuses(next);
-      setLoadedOnce(true);
+      students =
+        (await apiGet<StudentLite[]>(`/api/students?${params.toString()}`)) ||
+        [];
     } catch (e) {
       toast({
         title: "Failed to load attendance",
         description: "Student list nahi aayi — dobara koshish karein.",
         variant: "destructive",
       });
-    } finally {
       setLoading(false);
+      return;
     }
+
+    const base: RosterRow[] = students.map((student) => ({
+      studentId: student.id,
+      name: student.name,
+      rollNo: student.rollNo ?? null,
+      class: student.class,
+      section: student.section,
+      status: null,
+    }));
+    setRoster(base);
+    const next: Record<number, AttendanceStatus> = {};
+    for (const row of base) next[row.studentId] = "present";
+
+    try {
+      const params = new URLSearchParams();
+      params.set("class", className);
+      if (section !== "ALL") params.set("section", section);
+      params.set("date", effectiveDate);
+      const rows =
+        (await apiGet<RosterRow[]>(`/api/attendance?${params.toString()}`)) ||
+        [];
+      for (const row of rows) {
+        if (row.status) {
+          next[row.studentId] = row.status as AttendanceStatus;
+        }
+      }
+    } catch (e) {
+      setAttendanceLoadFailed(true);
+    }
+
+    setStatuses(next);
+    setLoadedOnce(true);
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -209,11 +275,14 @@ export default function Attendance() {
   };
 
   const saveAttendance = async () => {
-    if (!canMark || roster.length === 0) return;
+    // attendanceLoadFailed par save NAHI — purani hajri load hue bina
+    // save karna use "sab present" se badal dega.
+    if (!canMark || roster.length === 0 || attendanceLoadFailed) return;
+    const effectiveDate = DATE_TEXT_RE.test(date) ? date : todayText();
     setSaving(true);
     try {
       await apiPost("/api/attendance", {
-        date,
+        date: effectiveDate,
         entries: roster.map((row) => ({
           studentId: row.studentId,
           status: statuses[row.studentId] || "present",
@@ -221,7 +290,7 @@ export default function Attendance() {
       });
       toast({
         title: "Attendance saved",
-        description: `${date} — Class ${className}${section !== "ALL" ? `-${section}` : ""}: ${counts.present} present, ${counts.absent} absent, ${counts.late} late, ${counts.half_day} half day.`,
+        description: `${effectiveDate} — Class ${className}${section !== "ALL" ? `-${section}` : ""}: ${counts.present} present, ${counts.absent} absent, ${counts.late} late, ${counts.half_day} half day.`,
       });
       void loadRoster();
     } catch (e) {
@@ -238,9 +307,14 @@ export default function Attendance() {
   const loadSummary = async () => {
     if (!summaryStudentId) return;
     setSummaryLoading(true);
+    // Mahina khaali/galat ho to chal raha mahina — "month=" bhej kar
+    // server se 400 khane ki jagah (date wali hi galti, v1.8).
+    const effectiveMonth = MONTH_TEXT_RE.test(summaryMonth)
+      ? summaryMonth
+      : currentMonthText();
     try {
       const data = await apiGet<MonthSummary>(
-        `/api/students/${summaryStudentId}/attendance/summary?month=${summaryMonth}`,
+        `/api/students/${summaryStudentId}/attendance/summary?month=${effectiveMonth}`,
       );
       setSummary(data);
     } catch (e) {
@@ -257,9 +331,12 @@ export default function Attendance() {
 
   const loadMissingReport = async () => {
     setMissingLoading(true);
+    const effectiveDate = DATE_TEXT_RE.test(reportDate)
+      ? reportDate
+      : todayText();
     try {
       const data = await apiGet<MissingReport>(
-        `/api/attendance/reports/missing?date=${reportDate}`,
+        `/api/attendance/reports/missing?date=${effectiveDate}`,
       );
       setMissingReport(data);
     } catch (e) {
@@ -402,10 +479,25 @@ export default function Attendance() {
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
+                onBlur={() => {
+                  // Dabba saaf/khaali chhod diya ho to aaj ki tareekh
+                  // wapas — khaali date state me rahe hi na (v1.8).
+                  if (!DATE_TEXT_RE.test(date)) setDate(todayText());
+                }}
                 className="w-full"
               />
             </div>
           </div>
+
+          {attendanceLoadFailed && (
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+              Is din ki pehle se lagi hui hajri load nahi ho payi — list
+              abhi sab ko Present dikha rahi hai. <strong>Refresh</strong>{" "}
+              dabakar dobara koshish karein; jab tak hajri load nahi
+              hoti, Save band rahega taaki purani hajri galti se Present
+              se na badal jaye.
+            </p>
+          )}
 
           {!canMark && (
             <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
@@ -448,7 +540,9 @@ export default function Attendance() {
                   type="button"
                   className="min-h-[44px] bg-blue-600 hover:bg-blue-700"
                   onClick={saveAttendance}
-                  disabled={saving || loading || roster.length === 0}
+                  disabled={
+                    saving || loading || roster.length === 0 || attendanceLoadFailed
+                  }
                 >
                   <Save className="h-4 w-4 mr-2" />
                   {saving ? "Save ho raha hai…" : "Attendance Save Karein"}
@@ -551,6 +645,10 @@ export default function Attendance() {
                     type="date"
                     value={reportDate}
                     onChange={(e) => setReportDate(e.target.value)}
+                    onBlur={() => {
+                      if (!DATE_TEXT_RE.test(reportDate))
+                        setReportDate(todayText());
+                    }}
                     className="w-full"
                   />
                 </div>
@@ -754,6 +852,10 @@ export default function Attendance() {
                 type="month"
                 value={summaryMonth}
                 onChange={(e) => setSummaryMonth(e.target.value)}
+                onBlur={() => {
+                  if (!MONTH_TEXT_RE.test(summaryMonth))
+                    setSummaryMonth(currentMonthText());
+                }}
                 className="w-full"
               />
             </div>

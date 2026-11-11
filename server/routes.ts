@@ -2627,10 +2627,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const section =
         typeof req.query.section === "string" ? req.query.section : undefined;
+      // v1.8 hotfix: date aaya hi na ho YA khaali string ho — dono
+      // haalat me aaj ki tareekh. Android par date ka dabba saaf
+      // karne se client "date=" (khaali) bhej deta tha aur ye handler
+      // 400 de raha tha, jabki date asal me OPTIONAL (default aaj)
+      // hai. 400 ab sirf tab hai jab kuch likha ho aur wo
+      // YYYY-MM-DD na ho.
+      const rawDate =
+        typeof req.query.date === "string" ? req.query.date.trim() : "";
       const date =
-        typeof req.query.date === "string"
-          ? req.query.date
-          : new Date().toISOString().slice(0, 10);
+        rawDate === "" ? new Date().toISOString().slice(0, 10) : rawDate;
       if (!DATE_TEXT_RE.test(date)) {
         return res.status(400).json({ message: "date must be YYYY-MM-DD" });
       }
@@ -2719,10 +2725,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     async (req, res) => {
       const schoolId = requireSchoolId(req, res);
       if (schoolId == null) return;
+      // v1.8 hotfix: upar wale roster handler wala hi niyam —
+      // khaali date ("date=") ka matlab "aaj" hai, 400 nahi.
+      const rawDate =
+        typeof req.query.date === "string" ? req.query.date.trim() : "";
       const date =
-        typeof req.query.date === "string"
-          ? req.query.date
-          : new Date().toISOString().slice(0, 10);
+        rawDate === "" ? new Date().toISOString().slice(0, 10) : rawDate;
       if (!DATE_TEXT_RE.test(date)) {
         return res.status(400).json({ message: "date must be YYYY-MM-DD" });
       }

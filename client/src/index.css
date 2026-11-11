@@ -23,7 +23,21 @@
   
   --accent: 210 40% 96%;
   --accent-foreground: 222 47% 11%;
-  
+
+  /* v1.8 hotfix: --card / --popover variables pehle DEFINED hi nahi
+     the, jabki tailwind.config unse rang banata hai (bg-card,
+     bg-popover...). Variable gayab = rang invalid = Card ka aur
+     khaas taur par Select/Dropdown/Popover ke khule panels ka
+     background PAR-DARSHI (transparent) ho jata tha — peeche ka
+     content dikhta tha. Ye dono set hamesha yahan rehne chahiye. */
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --card-border: 214 32% 91%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --popover-border: 214 32% 91%;
+
   --destructive: 0 84% 60%;
   --destructive-foreground: 210 40% 98%;
 
@@ -49,7 +63,18 @@
   
   --accent: 217 19% 27%;
   --accent-foreground: 210 40% 98%;
-  
+
+  /* v1.8 hotfix: upar wale hi card/popover variables, dark ke liye.
+     Popover card se ek shade upar rakha hai taaki khula panel
+     peeche ke cards se alag dikhe. */
+  --card: 222 47% 13%;
+  --card-foreground: 210 40% 98%;
+  --card-border: 217 19% 27%;
+
+  --popover: 222 47% 16%;
+  --popover-foreground: 210 40% 98%;
+  --popover-border: 217 19% 27%;
+
   --destructive: 0 62% 30%;
   --destructive-foreground: 210 40% 98%;
   
