@@ -1,0 +1,80 @@
+name: Android APK (debug)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code lo
+        uses: actions/checkout@v4
+
+      - name: Node lagao
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Dependencies install karo
+        run: npm ci
+
+      - name: Binary files wapas lao (Capacitor template se)
+        run: |
+          rm -rf /tmp/cap-template && mkdir -p /tmp/cap-template
+          tar -xzf node_modules/@capacitor/cli/assets/android-template.tar.gz \
+            -C /tmp/cap-template
+          cd /tmp/cap-template
+          find . \( -name '*.jar' -o -name '*.png' \) \
+            -exec cp --parents {} "$GITHUB_WORKSPACE/android/" \;
+          cd "$GITHUB_WORKSPACE"
+          test -f android/gradle/wrapper/gradle-wrapper.jar
+          test -f android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+          chmod +x android/gradlew
+          echo "Binary files restore ho gayi:"
+          find android \( -name '*.jar' -o -name '*.png' \) | wc -l
+
+      - name: Web build (vite)
+        env:
+          VITE_API_URL: https://school-guardian-api.onrender.com
+        run: npx vite build
+
+      - name: Capacitor sync (web build -> android project)
+        run: npx cap sync android
+
+      - name: Java lagao (Gradle ke liye)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Debug APK banao
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      - name: APK ka saaf naam rakho
+        id: apk
+        run: |
+          VERSION="${GITHUB_REF_NAME:-manual}"
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "school-guardian-suite-${VERSION}.apk"
+          echo "file=school-guardian-suite-${VERSION}.apk" >> "$GITHUB_OUTPUT"
+
+      - name: APK artifact upload karo (har run par milega)
+        uses: actions/upload-artifact@v4
+        with:
+          name: school-guardian-suite-apk
+          path: ${{ steps.apk.outputs.file }}
+
+      - name: Tag par GitHub Release banao (direct download link)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.file }}
+          generate_release_notes: true
