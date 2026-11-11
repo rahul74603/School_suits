@@ -3,6 +3,26 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
+
+// CORS (Phase 2 design §1): PC (Electron) aur Android (Capacitor) clients
+// browser nahi hain aur JWT Authorization header me bhejte hain, isliye
+// header-based CORS kaafi hai. CORS_ORIGIN env set ho to wahi origin,
+// warna request ka apna Origin echo hota hai.
+app.use((req, res, next) => {
+  const origin = process.env.CORS_ORIGIN || req.headers.origin;
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -52,7 +72,7 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   server.listen(PORT, "0.0.0.0", () => {
     log(`serving on port ${PORT}`);
   });

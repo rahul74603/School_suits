@@ -1,9 +1,11 @@
 import { 
     users, schools, students, feeStructures, feePayments, staff, studentDues,
+    parentStudents,
     type User, type InsertUser, type School, type InsertSchool,
     type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
     type FeePayment, type InsertFeePayment, type Staff, type InsertStaff,
-    type StudentDues, type InsertStudentDues
+    type StudentDues, type InsertStudentDues,
+    type ParentStudent, type InsertParentStudent
  } from "@shared/schema";
 import { eq, ilike, and } from "drizzle-orm";
 import { db } from "./db";
@@ -14,6 +16,17 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  // Phase 2 batch 2 — auth/provisioning helpers (§2, §5.2, §5.3)
+  getUsers(): Promise<User[]>;
+  getUsersBySchool(schoolId: number): Promise<User[]>;
+  getUserByPhone(phone: string): Promise<User | undefined>;
+  updateUser(id: number, user: Partial<InsertUser>): Promise<User>;
+  updateUserPassword(id: number, passwordHash: string): Promise<User>;
+  setMustChangePassword(id: number, value: number): Promise<void>;
+  updateLastLogin(id: number): Promise<void>;
+  linkParentStudent(link: InsertParentStudent): Promise<ParentStudent>;
+  getParentStudentLinks(parentUserId: number): Promise<ParentStudent[]>;
+  replaceParentStudentLinks(parentUserId: number, studentIds: number[], relation?: string | null): Promise<ParentStudent[]>;
 
   getSchools(): Promise<School[]>;
   getSchool(id: number): Promise<School | undefined>;
@@ -73,6 +86,57 @@ export class DatabaseStorage implements IStorage {
   async createUser(insertUser: InsertUser): Promise<User> {
     const [user] = await db.insert(users).values(insertUser).returning();
     return user;
+  }
+
+  async getUsers(): Promise<User[]> {
+    return await db.select().from(users);
+  }
+
+  async getUsersBySchool(schoolId: number): Promise<User[]> {
+    return await db.select().from(users).where(eq(users.schoolId, schoolId));
+  }
+
+  async getUserByPhone(phone: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.phone, phone));
+    return user;
+  }
+
+  async updateUser(id: number, userUpdate: Partial<InsertUser>): Promise<User> {
+    const [user] = await db.update(users).set(userUpdate).where(eq(users.id, id)).returning();
+    return user;
+  }
+
+  async updateUserPassword(id: number, passwordHash: string): Promise<User> {
+    const [user] = await db.update(users).set({ password: passwordHash }).where(eq(users.id, id)).returning();
+    return user;
+  }
+
+  async setMustChangePassword(id: number, value: number): Promise<void> {
+    await db.update(users).set({ mustChangePassword: value }).where(eq(users.id, id));
+  }
+
+  async updateLastLogin(id: number): Promise<void> {
+    await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, id));
+  }
+
+  async linkParentStudent(link: InsertParentStudent): Promise<ParentStudent> {
+    const [created] = await db.insert(parentStudents).values(link).onConflictDoNothing().returning();
+    if (created) return created;
+    const [existing] = await db.select().from(parentStudents)
+      .where(and(eq(parentStudents.parentUserId, link.parentUserId), eq(parentStudents.studentId, link.studentId)));
+    return existing;
+  }
+
+  async getParentStudentLinks(parentUserId: number): Promise<ParentStudent[]> {
+    return await db.select().from(parentStudents).where(eq(parentStudents.parentUserId, parentUserId));
+  }
+
+  async replaceParentStudentLinks(parentUserId: number, studentIds: number[], relation?: string | null): Promise<ParentStudent[]> {
+    await db.delete(parentStudents).where(eq(parentStudents.parentUserId, parentUserId));
+    for (const studentId of studentIds) {
+      await this.linkParentStudent({ parentUserId, studentId, relation: relation ?? null });
+    }
+    return await this.getParentStudentLinks(parentUserId);
   }
 
   async getSchools(): Promise<School[]> {
@@ -274,6 +338,7 @@ export class DatabaseStorage implements IStorage {
 // 3. Mock Storage
 export class MockStorage implements IStorage {
   private usersData: User[] = [];
+  private parentStudentsData: ParentStudent[] = [];
   private schoolsData: School[] = [
     {
       id: 1,
@@ -284,8 +349,13 @@ export class MockStorage implements IStorage {
       email: null,
       primaryColor: "#1976D2",
       secondaryColor: "#FF9800",
+      session: null,
+      admissionPrefix: "SCHOOL",
+      admissionYear: null,
+      admissionStart: 1,
       isActive: 1,
       createdAt: new Date(),
+      updatedAt: new Date(),
     },
   ];
   private studentsData: Student[] = [];
@@ -316,11 +386,76 @@ export class MockStorage implements IStorage {
       password: user.password,
       role: user.role ?? "staff",
       name: user.name,
+      phone: user.phone ?? null,
+      mustChangePassword: user.mustChangePassword ?? 0,
+      lastLoginAt: null,
       isActive: user.isActive ?? 1,
       createdAt: new Date(),
     };
     this.usersData.push(created);
     return created;
+  }
+
+  async getUsers(): Promise<User[]> {
+    return [...this.usersData];
+  }
+
+  async getUsersBySchool(schoolId: number): Promise<User[]> {
+    return this.usersData.filter((item) => item.schoolId === schoolId);
+  }
+
+  async getUserByPhone(phone: string): Promise<User | undefined> {
+    return this.usersData.find((item) => item.phone === phone);
+  }
+
+  async updateUser(id: number, user: Partial<InsertUser>): Promise<User> {
+    const index = this.usersData.findIndex((item) => item.id === id);
+    if (index < 0) throw new Error("User not found");
+    const updated: User = { ...this.usersData[index], ...user };
+    this.usersData[index] = updated;
+    return updated;
+  }
+
+  async updateUserPassword(id: number, passwordHash: string): Promise<User> {
+    return this.updateUser(id, { password: passwordHash });
+  }
+
+  async setMustChangePassword(id: number, value: number): Promise<void> {
+    const user = this.usersData.find((item) => item.id === id);
+    if (user) user.mustChangePassword = value;
+  }
+
+  async updateLastLogin(id: number): Promise<void> {
+    const user = this.usersData.find((item) => item.id === id);
+    if (user) user.lastLoginAt = new Date();
+  }
+
+  async linkParentStudent(link: InsertParentStudent): Promise<ParentStudent> {
+    const existing = this.parentStudentsData.find(
+      (item) => item.parentUserId === link.parentUserId && item.studentId === link.studentId
+    );
+    if (existing) return existing;
+    const created: ParentStudent = {
+      parentUserId: link.parentUserId,
+      studentId: link.studentId,
+      relation: link.relation ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.parentStudentsData.push(created);
+    return created;
+  }
+
+  async getParentStudentLinks(parentUserId: number): Promise<ParentStudent[]> {
+    return this.parentStudentsData.filter((item) => item.parentUserId === parentUserId);
+  }
+
+  async replaceParentStudentLinks(parentUserId: number, studentIds: number[], relation?: string | null): Promise<ParentStudent[]> {
+    this.parentStudentsData = this.parentStudentsData.filter((item) => item.parentUserId !== parentUserId);
+    for (const studentId of studentIds) {
+      await this.linkParentStudent({ parentUserId, studentId, relation: relation ?? null });
+    }
+    return this.getParentStudentLinks(parentUserId);
   }
 
   async getSchools(): Promise<School[]> {
@@ -341,8 +476,13 @@ export class MockStorage implements IStorage {
       email: school.email ?? null,
       primaryColor: school.primaryColor ?? "#1976D2",
       secondaryColor: school.secondaryColor ?? "#FF9800",
+      session: school.session ?? null,
+      admissionPrefix: school.admissionPrefix ?? "SCHOOL",
+      admissionYear: school.admissionYear ?? null,
+      admissionStart: school.admissionStart ?? 1,
       isActive: school.isActive ?? 1,
       createdAt: new Date(),
+      updatedAt: new Date(),
     };
     this.schoolsData.push(created);
     return created;
