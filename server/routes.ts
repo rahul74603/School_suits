@@ -142,7 +142,45 @@ const createDocumentSchema = z.object({
   docType: z.string().min(1).optional(),
   fileName: z.string().min(1),
   filePath: z.string().min(1).optional(),
+  // Phase 3 Batch C — asli file content (base64). Optional hai taaki
+  // Phase 2 wale metadata-only clients bhi chalte rahen.
+  base64Data: z.string().min(1).optional(),
+  mimeType: z.string().min(1).optional(),
 });
+
+// Staff documents (Phase 3 Batch C) — Electron ka upload-staff-document
+// hamesha file content bhejta tha, isliye yahan base64Data lazmi hai.
+const createStaffDocumentSchema = z.object({
+  docType: z.string().min(1).optional(),
+  fileName: z.string().min(1),
+  filePath: z.string().min(1).optional(),
+  base64Data: z.string().min(1),
+  mimeType: z.string().min(1).optional(),
+});
+
+// Document file ki size limit (v1): asal file ~2MB. Base64 usse ~4/3
+// guna badi hoti hai, isliye ginna decoded size par hota hai.
+const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
+
+function estimateBase64Bytes(base64Data: string): number {
+  const clean = base64Data.replace(/\s+/g, "");
+  if (clean.length === 0) return 0;
+  const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
+}
+
+function documentTooLarge(base64Data: string): boolean {
+  return estimateBase64Bytes(base64Data) > MAX_DOCUMENT_BYTES;
+}
+
+// List/create ke jawab me file ka content (base64) KABHI nahi bhejta —
+// sirf metadata + hasFile. Content sirf /file wale endpoint se milta hai.
+function documentMeta<T extends { fileData?: string | null }>(
+  doc: T,
+): Omit<T, "fileData"> & { hasFile: boolean } {
+  const { fileData, ...rest } = doc;
+  return { ...rest, hasFile: Boolean(fileData) };
+}
 
 const createDueSchema = z.object({
   feeName: z.string().min(1),
@@ -223,6 +261,14 @@ const createSalaryPaymentBodySchema = z.object({
   month: z.string().min(1),
   year: z.number().int(),
   amount: z.number().int().nonnegative(),
+  // Phase 3 Batch C (GAP-B1) — breakup wale fields. Sab optional:
+  // purane clients (aur Batch B ka remarks-wala tareeka) bina inke
+  // bhejkar bhi chalte rahenge. `amount` hi net rakam hai — server
+  // use in fields se dobara NAHI ginta.
+  baseSalary: z.number().int().nonnegative().optional(),
+  bonus: z.number().int().nonnegative().optional(),
+  deduction: z.number().int().nonnegative().optional(),
+  paymentMode: z.string().min(1).optional(),
   paymentDate: z.string().min(1).optional(),
   remarks: z.string().optional(),
 });
@@ -1301,11 +1347,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const loaded = await loadStudentInScope(req, res);
       if (!loaded) return;
       const documents = await storage.getStudentDocuments(loaded.student.id);
-      res.json(documents);
+      res.json(documents.map(documentMeta));
     },
   );
 
-  // #29a — document metadata add.
+  // #29a — document add. Phase 3 Batch C: body me base64Data aaye to
+  // asli file content bhi save hota hai (limit ~2MB); bina uske ye
+  // pehle jaisa metadata-only document banta hai.
   app.post(
     "/api/students/:id/documents",
     requireAuth,
@@ -1315,14 +1363,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!loaded) return;
       const result = createDocumentSchema.safeParse(req.body);
       if (!result.success) return res.status(400).json(result.error);
+      if (
+        result.data.base64Data &&
+        documentTooLarge(result.data.base64Data)
+      ) {
+        return res.status(400).json({
+          message: "Document bahut bada hai — zyada se zyada 2MB ki file chalegi",
+        });
+      }
       const doc = await storage.createStudentDocument({
         schoolId: loaded.schoolId,
         studentId: loaded.student.id,
         docType: result.data.docType ?? null,
         fileName: result.data.fileName,
         filePath: result.data.filePath ?? null,
+        fileData: result.data.base64Data ?? null,
+        mimeType: result.data.mimeType ?? null,
       });
-      res.status(201).json(doc);
+      res.status(201).json(documentMeta(doc));
+    },
+  );
+
+  // #29c — document ki asli file (download/view ke liye). Metadata-only
+  // (Phase 2) wale documents ke paas content hai hi nahi — unpar 404.
+  app.get(
+    "/api/students/:id/documents/:docId/file",
+    requireAuth,
+    requireRole("principal", "staff", "parent"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const docId = parseInt(req.params.docId, 10);
+      if (Number.isNaN(docId)) {
+        return res.status(400).json({ message: "Invalid ID" });
+      }
+      const doc = await storage.getStudentDocument(docId);
+      if (!doc || doc.studentId !== loaded.student.id) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+      if (!doc.fileData) {
+        return res
+          .status(404)
+          .json({ message: "Is document ki file uplabdh nahi hai" });
+      }
+      res.json({
+        fileName: doc.fileName,
+        mimeType: doc.mimeType ?? null,
+        base64Data: doc.fileData,
+      });
     },
   );
 
@@ -1681,6 +1769,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
+  // Staff documents (Phase 3 Batch C) — Electron ke upload-staff-document
+  // ka REST roop. Roles: dekhna principal/accountant/staff, upload aur
+  // delete principal/staff (student documents wale usool par).
+  // Jawab me file content kabhi nahi jata — sirf metadata + hasFile;
+  // content ke liye /file wala endpoint hai.
+
+  // #54b — ek staff ke documents ki list (metadata).
+  app.get(
+    "/api/staff/:id/documents",
+    requireAuth,
+    requireRole("principal", "accountant", "staff"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      const documents = await storage.getStaffDocuments(loaded.member.id);
+      res.json(documents.map(documentMeta));
+    },
+  );
+
+  // #54c — staff document upload (base64 content ke saath, limit ~2MB).
+  app.post(
+    "/api/staff/:id/documents",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      const result = createStaffDocumentSchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      if (documentTooLarge(result.data.base64Data)) {
+        return res.status(400).json({
+          message: "Document bahut bada hai — zyada se zyada 2MB ki file chalegi",
+        });
+      }
+      const doc = await storage.createStaffDocument({
+        schoolId: loaded.schoolId,
+        staffId: loaded.member.id,
+        docType: result.data.docType ?? null,
+        fileName: result.data.fileName,
+        filePath: result.data.filePath ?? null,
+        fileData: result.data.base64Data,
+        mimeType: result.data.mimeType ?? null,
+      });
+      res.status(201).json(documentMeta(doc));
+    },
+  );
+
+  // #54d — staff document ki asli file (download/view ke liye).
+  app.get(
+    "/api/staff/:id/documents/:docId/file",
+    requireAuth,
+    requireRole("principal", "accountant", "staff"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      const docId = parseInt(req.params.docId, 10);
+      if (Number.isNaN(docId)) {
+        return res.status(400).json({ message: "Invalid ID" });
+      }
+      const doc = await storage.getStaffDocument(docId);
+      if (!doc || doc.staffId !== loaded.member.id) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+      if (!doc.fileData) {
+        return res
+          .status(404)
+          .json({ message: "Is document ki file uplabdh nahi hai" });
+      }
+      res.json({
+        fileName: doc.fileName,
+        mimeType: doc.mimeType ?? null,
+        base64Data: doc.fileData,
+      });
+    },
+  );
+
+  // #54e — staff document delete.
+  app.delete(
+    "/api/staff/:id/documents/:docId",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      const docId = parseInt(req.params.docId, 10);
+      if (Number.isNaN(docId)) {
+        return res.status(400).json({ message: "Invalid ID" });
+      }
+      const doc = await storage.getStaffDocument(docId);
+      if (!doc || doc.staffId !== loaded.member.id) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+      await storage.deleteStaffDocument(docId);
+      res.json({ message: "Document deleted" });
+    },
+  );
+
   // Pending salaries — YE route #55 (GET /api/salary-payments) se PEHLE
   // register hona lazmi hai (design §5.6 note): "pending" ek literal
   // segment hai, koi :id route use kha na le isliye order yahi rakha.
@@ -1762,12 +1947,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .status(400)
           .json({ message: "Staff does not belong to this school" });
       }
+      // GAP-B2 (Phase 3 Batch C) — ek staff ki ek mahine ki salary
+      // dusri baar nahi. Electron bhi yahi rokta tha; page ka catch
+      // "SALARY_ALREADY_PAID" message ko pehchankar khaas toast
+      // dikhata hai, isliye spelling bilkul yahi rakhi hai.
+      const monthPayments = await storage.getSalaryPayments(
+        schoolId,
+        result.data.month,
+        result.data.year,
+      );
+      if (
+        monthPayments.some((payment) => payment.staffId === result.data.staffId)
+      ) {
+        return res.status(409).json({ message: "SALARY_ALREADY_PAID" });
+      }
       const payment = await storage.createSalaryPayment({
         schoolId,
         staffId: result.data.staffId,
         month: result.data.month,
         year: result.data.year,
         amount: result.data.amount,
+        // GAP-B1 — breakup (na aaye to purani remarks-wali body bhi
+        // bilkul pehle jaise chalegi; bonus/deduction ka DB default 0).
+        baseSalary: result.data.baseSalary ?? null,
+        bonus: result.data.bonus ?? 0,
+        deduction: result.data.deduction ?? 0,
+        paymentMode: result.data.paymentMode ?? null,
         paymentDate: result.data.paymentDate ?? null,
         remarks: result.data.remarks ?? null,
       });

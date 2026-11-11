@@ -24,7 +24,11 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+// Phase 3 Batch C — documents base64 JSON body me aate hain (~2MB ki
+// file = ~2.7MB base64), isliye JSON limit 4mb rakhi hai. Isse badi
+// body Express 413 dega; asal 2MB wali limit routes me saaf message
+// ke saath lagti hai.
+app.use(express.json({ limit: "4mb" }));
 app.use(express.urlencoded({ extended: false }));
 
 app.use((req, res, next) => {

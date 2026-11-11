@@ -63,8 +63,10 @@ const DOC_TYPES = [
 // --- REST adapter (Phase 3 Batch A) ---------------------------------------
 // REST staff row camelCase hai: salary <- basicSalary, join_date <- joinDate,
 // employee_id <- employeeId, status <- isActive (1 = Active, 0 = Inactive).
-// father_name aur documents ke liye server ke staff table me column hi nahi
-// hai — page unke khali hone ko pehle se sambhal leta hai (NOTES.md).
+// father_name Batch A server fix me column bankar aa gaya. Documents
+// staff table me nahi hain — Batch C se wo alag staff_documents table
+// se aate hain aur View khulne par selectedStaff.documents me bhare
+// jate hain (openView dekho).
 function adaptStaffMember(m: any) {
   return {
     ...m,
@@ -247,9 +249,49 @@ export default function Staff() {
     setIsEditOpen(true);
   };
 
-  const openView = (staff: any) => {
-    setSelectedStaff(staff);
+  const openView = async (staff: any) => {
+    // REST (Batch C): documents staff_documents table se aate hain —
+    // View khulne par is staff ke documents laakar purane IPC wale
+    // shape (JSON string: [{type, fileName, filePath, uploadedAt}])
+    // me selectedStaff.documents me bharte hain, taaki dialog ka code
+    // bilkul pehle jaisa chale. filePath asal local path nahi —
+    // "sgstaffdoc:<id>" token hai jisse openStaffDocument file mangta hai.
+    let docsJson = "[]";
+    try {
+      const docs = await apiGet<any[]>(`/api/staff/${staff.id}/documents`);
+      docsJson = JSON.stringify((docs || []).map((d: any) => ({
+        type: d.docType,
+        fileName: d.fileName,
+        filePath: `sgstaffdoc:${d.id}`,
+        uploadedAt: d.createdAt,
+      })));
+    } catch (e) { /* documents na aaye to dialog khali documents ke saath khulega */ }
+    setSelectedStaff({ ...staff, documents: docsJson });
     setIsViewOpen(true);
+  };
+
+  const openStaffDocument = async (filePath: string) => {
+    try {
+      // REST: file ka content /file endpoint se aata hai aur blob URL
+      // se khulta hai (web/Android par yahi tareeka; na khule to
+      // download ho jata hai).
+      const docId = String(filePath || "").replace("sgstaffdoc:", "");
+      if (!selectedStaff?.id || !docId) return;
+      const file = await apiGet<any>(`/api/staff/${selectedStaff.id}/documents/${docId}/file`);
+      const bytes = Uint8Array.from(atob(file.base64Data), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: file.mimeType || "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank");
+      if (!win) {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file.fileName || "document";
+        a.click();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      toast({ title: "Error", description: "Failed to open document", variant: "destructive" });
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -268,19 +310,19 @@ export default function Staff() {
       const reader = new FileReader();
       reader.onload = async () => {
         const base64 = (reader.result?.toString() || "").split(",")[1];
-        // TODO-API-GAP: upload-staff-document — is channel ka REST jawab
-        // Phase 2 server me hai hi nahi (staff documents endpoint missing
-        // hai; sirf student documents ke metadata endpoints hain). Jab tak
-        // server par endpoint na bane, ye call IPC par hi rakhi hai.
-        await (window as any).electronAPI.invoke("upload-staff-document", {
-          staffId: selectedStaff.id,
-          employeeId: selectedStaff.employee_id,
+        // REST (Batch C): POST /api/staff/:id/documents — file
+        // content base64 me jata hai (server limit ~2MB). Upload ke
+        // baad list ke saath khule hue View dialog ke documents bhi
+        // taaza karte hain (openView dobara documents laata hai).
+        await apiPost(`/api/staff/${selectedStaff.id}/documents`, {
           docType,
           fileName: file.name,
           base64Data: base64,
+          mimeType: file.type || undefined,
         });
         toast({ title: "Uploaded", description: "Document uploaded successfully" });
         fetchStaff();
+        openView(selectedStaff);
       };
       reader.readAsDataURL(file);
     } catch (e) {
@@ -654,11 +696,11 @@ export default function Staff() {
                         {hasDoc ? (
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">Uploaded</span>
-                            {/* TODO-API-GAP: open-student-document — local file kholna REST ka kaam nahi; documents batch (Phase 3) me file URL wala tareeka ayega, tab tak IPC par hi hai. */}
+                            {/* REST (Batch C): file server se blob bankar khulti hai — openStaffDocument dekho. */}
                             <Button 
                               variant="ghost" 
                               size="sm" 
-                              onClick={() => (window as any).electronAPI.invoke("open-student-document", hasDoc.filePath)}
+                              onClick={() => openStaffDocument(hasDoc.filePath)}
                             >
                               <Eye className="h-4 w-4" />
                             </Button>
@@ -685,11 +727,11 @@ export default function Staff() {
                       {JSON.parse(selectedStaff.documents).map((doc: any, idx: number) => (
                         <div key={idx} className="flex items-center justify-between bg-white p-2 rounded border text-sm">
                           <span className="truncate flex-1">{doc.fileName}</span>
-                          {/* TODO-API-GAP: open-student-document — upar wali hi baat: local-file kaam, documents batch tak IPC par. */}
+                          {/* REST (Batch C): openStaffDocument se khulta hai. */}
                           <Button 
                             variant="ghost" 
                             size="sm"
-                            onClick={() => (window as any).electronAPI.invoke("open-student-document", doc.filePath)}
+                            onClick={() => openStaffDocument(doc.filePath)}
                           >
                             <Eye className="h-4 w-4" />
                           </Button>

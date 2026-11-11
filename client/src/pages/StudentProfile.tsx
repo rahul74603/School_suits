@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPost } from "@/lib/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Search,
@@ -45,8 +46,47 @@ export default function StudentProfile() {
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
 
+  // --- REST adapters (Phase 3 Batch C) ---------------------------------
+  const adaptStudentRow = (raw: any) => ({
+    ...raw,
+    admission_no: raw.admissionNo,
+    father_name: raw.fatherName,
+    tc_submitted: raw.tcSubmitted,
+  });
+
+  // Document row ko page ke IPC shape me: file_path asal local path
+  // nahi — "sgdoc:<id>" token hai, jisse openDoc server se file ka
+  // content mangta hai. Purani metadata-only rows (hasFile false) par
+  // open karne par "File not found" ayega — unke paas content hai hi nahi.
+  const adaptDoc = (d: any) => ({
+    ...d,
+    doc_type: d.docType,
+    file_name: d.fileName,
+    file_path: `sgdoc:${d.id}`,
+    uploaded_at: d.createdAt,
+  });
+
+  // REST: GET /api/students — "ALL" par param bhejte hi nahi (Batch A usool).
+  const fetchStudentList = async (searchText: string) => {
+    const params = new URLSearchParams();
+    if (searchText) params.set("search", searchText);
+    if (classFilter !== "ALL") params.set("class", classFilter);
+    if (sectionFilter !== "ALL") params.set("section", sectionFilter);
+    const qs = params.toString();
+    const rows = await apiGet<any[]>(`/api/students${qs ? `?${qs}` : ""}`);
+    return (rows || []).map(adaptStudentRow);
+  };
+
   const loadFullStudent = async (admissionNo: string) => {
-    const s = await (window as any).electronAPI.invoke("get-student-by-admno", admissionNo);
+    // REST: GET /api/students/by-admission-no/:no — na mile to 404;
+    // IPC null deta tha, isliye catch me null banaya.
+    let s: any = null;
+    try {
+      const raw = await apiGet<any>(`/api/students/by-admission-no/${encodeURIComponent(admissionNo)}`);
+      s = raw ? adaptStudentRow(raw) : null;
+    } catch (e) {
+      s = null;
+    }
 
     if (!s) {
       setStudent(null);
@@ -56,8 +96,8 @@ export default function StudentProfile() {
     }
 
     setStudent(s);
-    const docs = await (window as any).electronAPI.invoke("get-student-documents", s.id);
-    setDocuments(docs || []);
+    const docs = await apiGet<any[]>(`/api/students/${s.id}/documents`);
+    setDocuments((docs || []).map(adaptDoc));
     setSuggestions([]);
     toast({ title: "Success", description: `Student loaded: ${s.name}` });
   };
@@ -67,11 +107,7 @@ export default function StudentProfile() {
     setLoading(true);
 
     try {
-      const list = await (window as any).electronAPI.invoke("get-students", {
-        search: finalInput,
-        classStr: classFilter === "ALL" ? null : classFilter,
-        section: sectionFilter === "ALL" ? null : sectionFilter,
-      });
+      const list = await fetchStudentList(finalInput);
 
       if (!list || list.length === 0) {
         setStudent(null);
@@ -117,11 +153,7 @@ export default function StudentProfile() {
 
       try {
         setSearching(true);
-        const list = await (window as any).electronAPI.invoke("get-students", {
-            search: q,
-            classStr: classFilter === "ALL" ? null : classFilter,
-            section: sectionFilter === "ALL" ? null : sectionFilter,
-        });
+        const list = await fetchStudentList(q);
 
         if (list && list.length > 0) setSuggestions(list);
         else setSuggestions([]);
@@ -136,8 +168,8 @@ export default function StudentProfile() {
 
   const refreshDocs = async () => {
     if (!student?.id) return;
-    const docs = await (window as any).electronAPI.invoke("get-student-documents", student.id);
-    setDocuments(docs || []);
+    const docs = await apiGet<any[]>(`/api/students/${student.id}/documents`);
+    setDocuments((docs || []).map(adaptDoc));
   };
 
   const fileToBase64 = (file: File) => {
@@ -153,8 +185,11 @@ export default function StudentProfile() {
     if (!student?.id) return;
     try {
       const base64Data = await fileToBase64(file);
-      await (window as any).electronAPI.invoke("upload-student-document", {
-        studentId: student.id, admissionNo: student.admission_no, docType, fileName: file.name, base64Data,
+      // REST: POST /api/students/:id/documents — file content base64
+      // me jata hai aur server par save hota hai (limit ~2MB; badi
+      // file par server 400 dega aur neeche wala toast dikhega).
+      await apiPost(`/api/students/${student.id}/documents`, {
+        docType, fileName: file.name, base64Data, mimeType: file.type || undefined,
       });
       toast({ title: "Uploaded", description: "File uploaded successfully." });
       await refreshDocs();
@@ -165,10 +200,29 @@ export default function StudentProfile() {
 
   const openDoc = async (filePath: string) => {
     try {
-      const res = await (window as any).electronAPI.invoke("open-student-document", filePath);
-      if (!res?.success) toast({ title: "Error", description: "File not found", variant: "destructive" });
-    } catch (e) { 
-      toast({ title: "Error", description: "Failed to open", variant: "destructive" }); 
+      // REST: filePath asal path nahi, "sgdoc:<documentId>" token hai —
+      // file ka content /file endpoint se aata hai aur blob URL se
+      // khulta hai (web/Android par yahi tareeka chalta hai; na khule
+      // to download ho jata hai).
+      const docId = String(filePath || "").replace("sgdoc:", "");
+      if (!student?.id || !docId) {
+        toast({ title: "Error", description: "File not found", variant: "destructive" });
+        return;
+      }
+      const file = await apiGet<any>(`/api/students/${student.id}/documents/${docId}/file`);
+      const bytes = Uint8Array.from(atob(file.base64Data), (c) => c.charCodeAt(0));
+      const blob = new Blob([bytes], { type: file.mimeType || "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const win = window.open(url, "_blank");
+      if (!win) {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = file.fileName || "document";
+        a.click();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e: any) {
+      toast({ title: "Error", description: e?.status === 404 ? "File not found" : "Failed to open", variant: "destructive" });
     }
   };
 

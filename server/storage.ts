@@ -2,7 +2,7 @@ import {
     users, schools, students, feeStructures, feePayments, staff, studentDues,
     parentStudents,
     exams, marks, transportRoutes, additionalFees, salaryPayments, expenses,
-    studentDocuments, notices,
+    studentDocuments, staffDocuments, notices,
     type User, type InsertUser, type School, type InsertSchool,
     type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
     type FeePayment, type InsertFeePayment, type Staff, type InsertStaff,
@@ -14,6 +14,7 @@ import {
     type SalaryPayment, type InsertSalaryPayment,
     type Expense, type InsertExpense,
     type StudentDocument, type InsertStudentDocument,
+    type StaffDocument, type InsertStaffDocument,
     type Notice, type InsertNotice
  } from "@shared/schema";
 import { eq, ilike, and, or } from "drizzle-orm";
@@ -311,6 +312,13 @@ export interface IStorage {
   // Staff parity (§5.6 #51–53) — getStaff upar pehle se hai.
   getStaffMember(id: number): Promise<Staff | undefined>;
   updateStaff(id: number, staffUpdate: Partial<InsertStaff>): Promise<Staff>;
+
+  // Staff documents (Phase 3 Batch C) — student documents wali hi
+  // approach; file content fileData (base64) me rehta hai.
+  getStaffDocuments(staffId: number): Promise<StaffDocument[]>;
+  getStaffDocument(id: number): Promise<StaffDocument | undefined>;
+  createStaffDocument(doc: InsertStaffDocument): Promise<StaffDocument>;
+  deleteStaffDocument(id: number): Promise<void>;
 
   // Salary (§5.6 #54–57)
   getStaffSalaryHistory(staffId: number): Promise<SalaryPayment[]>;
@@ -668,6 +676,24 @@ export class DatabaseStorage implements IStorage {
     await db.delete(studentDocuments).where(eq(studentDocuments.id, id));
   }
 
+  async getStaffDocuments(staffId: number): Promise<StaffDocument[]> {
+    return await db.select().from(staffDocuments).where(eq(staffDocuments.staffId, staffId));
+  }
+
+  async getStaffDocument(id: number): Promise<StaffDocument | undefined> {
+    const [doc] = await db.select().from(staffDocuments).where(eq(staffDocuments.id, id));
+    return doc;
+  }
+
+  async createStaffDocument(doc: InsertStaffDocument): Promise<StaffDocument> {
+    const [created] = await db.insert(staffDocuments).values(doc).returning();
+    return created;
+  }
+
+  async deleteStaffDocument(id: number): Promise<void> {
+    await db.delete(staffDocuments).where(eq(staffDocuments.id, id));
+  }
+
   async updateFeeStructure(id: number, structureUpdate: Partial<InsertFeeStructure>): Promise<FeeStructure> {
     const [structure] = await db.update(feeStructures).set(structureUpdate).where(eq(feeStructures.id, id)).returning();
     return structure;
@@ -1012,6 +1038,7 @@ export class MockStorage implements IStorage {
   private salaryPaymentsData: SalaryPayment[] = [];
   private expensesData: Expense[] = [];
   private studentDocumentsData: StudentDocument[] = [];
+  private staffDocumentsData: StaffDocument[] = [];
   private noticesData: Notice[] = [];
 
   private nextUserId = 1;
@@ -1028,6 +1055,7 @@ export class MockStorage implements IStorage {
   private nextSalaryPaymentId = 1;
   private nextExpenseId = 1;
   private nextStudentDocumentId = 1;
+  private nextStaffDocumentId = 1;
   private nextNoticeId = 1;
 
   async getUser(id: number): Promise<User | undefined> {
@@ -1313,6 +1341,7 @@ export class MockStorage implements IStorage {
       id: this.nextStudentDocumentId++, schoolId: doc.schoolId ?? null,
       studentId: doc.studentId, docType: doc.docType ?? null,
       fileName: doc.fileName, filePath: doc.filePath ?? null,
+      fileData: doc.fileData ?? null, mimeType: doc.mimeType ?? null,
       createdAt: new Date(), updatedAt: new Date(),
     };
     this.studentDocumentsData.push(created);
@@ -1321,6 +1350,30 @@ export class MockStorage implements IStorage {
 
   async deleteStudentDocument(id: number): Promise<void> {
     this.studentDocumentsData = this.studentDocumentsData.filter((item) => item.id !== id);
+  }
+
+  async getStaffDocuments(staffId: number): Promise<StaffDocument[]> {
+    return this.staffDocumentsData.filter((item) => item.staffId === staffId);
+  }
+
+  async getStaffDocument(id: number): Promise<StaffDocument | undefined> {
+    return this.staffDocumentsData.find((item) => item.id === id);
+  }
+
+  async createStaffDocument(doc: InsertStaffDocument): Promise<StaffDocument> {
+    const created: StaffDocument = {
+      id: this.nextStaffDocumentId++, schoolId: doc.schoolId ?? null,
+      staffId: doc.staffId, docType: doc.docType ?? null,
+      fileName: doc.fileName, filePath: doc.filePath ?? null,
+      fileData: doc.fileData ?? null, mimeType: doc.mimeType ?? null,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    this.staffDocumentsData.push(created);
+    return created;
+  }
+
+  async deleteStaffDocument(id: number): Promise<void> {
+    this.staffDocumentsData = this.staffDocumentsData.filter((item) => item.id !== id);
   }
 
   async updateFeeStructure(id: number, structure: Partial<InsertFeeStructure>): Promise<FeeStructure> {
@@ -1428,7 +1481,12 @@ export class MockStorage implements IStorage {
     const created: SalaryPayment = {
       id: this.nextSalaryPaymentId++, schoolId: payment.schoolId ?? null,
       staffId: payment.staffId, month: payment.month, year: payment.year,
-      amount: payment.amount, paymentDate: payment.paymentDate ?? null,
+      amount: payment.amount,
+      baseSalary: payment.baseSalary ?? null,
+      bonus: payment.bonus ?? 0,
+      deduction: payment.deduction ?? 0,
+      paymentMode: payment.paymentMode ?? null,
+      paymentDate: payment.paymentDate ?? null,
       remarks: payment.remarks ?? null, createdAt: new Date(), updatedAt: new Date(),
     };
     this.salaryPaymentsData.push(created);

@@ -237,6 +237,13 @@ export const salaryPayments = pgTable("salary_payments", {
   month: text("month").notNull(),
   year: integer("year").notNull(),
   amount: integer("amount").notNull(),
+  // Phase 3 Batch C (GAP-B1) — salary ka breakup. `amount` hi net rakam
+  // hai (client jo net bheje wahi sach); ye columns sirf hisaab ki
+  // tafseel ke liye hain. Purani rows/clients ke liye sab optional/default.
+  baseSalary: integer("base_salary"),
+  bonus: integer("bonus").notNull().default(0),
+  deduction: integer("deduction").notNull().default(0),
+  paymentMode: text("payment_mode"),
   paymentDate: text("payment_date"),
   remarks: text("remarks"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -265,6 +272,28 @@ export const studentDocuments = pgTable("student_documents", {
   docType: text("doc_type"),
   fileName: text("file_name").notNull(),
   filePath: text("file_path"),
+  // Phase 3 Batch C — asli file content (base64), v1 ka storage yahi hai
+  // (route par ~2MB ki limit hai). Phase 2 ki metadata-only rows me ye
+  // null rahega — unke liye file download uplabdh nahi hai.
+  fileData: text("file_data"),
+  mimeType: text("mime_type"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// §6.14b — Staff documents (Phase 3 Batch C). Electron duniya me ye
+// staff.documents JSON column + local disk par the; REST me student
+// documents wali hi table-approach hai — file content base64 me
+// file_data column me (route par ~2MB limit).
+export const staffDocuments = pgTable("staff_documents", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  staffId: integer("staff_id").notNull().references(() => staff.id),
+  docType: text("doc_type"),
+  fileName: text("file_name").notNull(),
+  filePath: text("file_path"),
+  fileData: text("file_data"),
+  mimeType: text("mime_type"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -397,6 +426,11 @@ export const insertStudentDocumentSchema = createInsertSchema(studentDocuments).
   createdAt: true,
 });
 
+export const insertStaffDocumentSchema = createInsertSchema(staffDocuments).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertNoticeSchema = createInsertSchema(notices).omit({
   id: true,
   createdAt: true,
@@ -453,6 +487,9 @@ export type InsertExpense = z.infer<typeof insertExpenseSchema>;
 
 export type StudentDocument = typeof studentDocuments.$inferSelect;
 export type InsertStudentDocument = z.infer<typeof insertStudentDocumentSchema>;
+
+export type StaffDocument = typeof staffDocuments.$inferSelect;
+export type InsertStaffDocument = z.infer<typeof insertStaffDocumentSchema>;
 
 export type Notice = typeof notices.$inferSelect;
 export type InsertNotice = z.infer<typeof insertNoticeSchema>;
