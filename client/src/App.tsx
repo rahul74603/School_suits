@@ -25,6 +25,9 @@ import ReportCards from "@/pages/ReportCards";
 import StaffSalary from "@/pages/StaffSalary";
 import FinancialDashboard from "@/pages/FinancialDashboard";
 
+// 🏫 Super Admin: Schools management (sirf super_admin ko dikhta hai)
+import Schools from "@/pages/Schools";
+
 import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
@@ -41,15 +44,20 @@ import {
   Calculator,
   IndianRupee,      // 🟢 NEW ICON
   TrendingUp,       // 🟢 NEW ICON
+  Building2,        // 🏫 Super Admin: Schools
   LogOut            // 🔐 Phase 3: logout button
 } from "lucide-react";
 
 function Sidebar() {
   const [location] = useLocation();
   // 🔐 School ka naam login ke baad /api/auth/me se aata hai (branding).
-  const { school } = useAuth();
+  const { school, user } = useAuth();
 
   const links = [
+    // 🏫 Schools sirf Super Admin ko — dusre roles ke liye link hi nahi banta.
+    ...(user?.role === "super_admin"
+      ? [{ href: "/schools", label: "Schools", icon: Building2 }]
+      : []),
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/students", label: "Students", icon: Users },
     { href: "/admissions", label: "Admissions", icon: UserPlus },
@@ -165,6 +173,10 @@ function TopBar() {
 }
 
 function Router() {
+  // 🏫 Schools ka route bhi sirf super_admin ke liye register hota hai —
+  // dusra role /schools khole to NotFound milega (server bhi 403 dega).
+  const { user } = useAuth();
+
   return (
     <div className="flex h-screen bg-slate-50 font-sans">
       <Sidebar />
@@ -174,6 +186,9 @@ function Router() {
 
         <main className="flex-1 overflow-y-auto p-2">
           <Switch>
+            {user?.role === "super_admin" && (
+              <Route path="/schools" component={Schools} />
+            )}
             <Route path="/" component={Dashboard} />
             <Route path="/students" component={Students} />
             <Route path="/admissions" component={Admissions} />
