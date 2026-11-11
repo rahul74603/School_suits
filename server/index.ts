@@ -1,6 +1,7 @@
 import express, { type Request, type Response, type NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { ensureSuperAdmin } from "./seed";
 
 const app = express();
 
@@ -75,5 +76,23 @@ app.use((req, res, next) => {
   const PORT = Number(process.env.PORT) || 3000;
   server.listen(PORT, "0.0.0.0", () => {
     log(`serving on port ${PORT}`);
+
+    // Boot-time Super Admin seed (FREE RENDER DEPLOY): Render free
+    // plan par shell nahi milta, isliye seed CLI nahi chal sakta —
+    // pehla Super Admin yahin, listen ke turant baad banta hai.
+    // ensureSuperAdmin() idempotent hai (super_admin pehle se ho
+    // to no-op) aur andar se kabhi throw nahi karta; phir bhi
+    // yahan try/catch hai taaki seed ki koi bhi gadbad API server
+    // ko kabhi na giraye — server chalta rahega, bas log hoga.
+    void (async () => {
+      try {
+        await ensureSuperAdmin();
+      } catch (err) {
+        console.error(
+          "Super Admin boot-seed failed (server chalta rahega):",
+          err,
+        );
+      }
+    })();
   });
 })();

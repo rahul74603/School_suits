@@ -10,8 +10,11 @@ import {
   insertFeePaymentSchema,
   insertStaffSchema,
   userRoleSchema,
+  noticeAudienceSchema,
   type User,
   type UserRole,
+  type Student,
+  type Staff,
 } from "@shared/schema";
 import {
   hashPassword,
@@ -50,6 +53,16 @@ function serializeUser(user: User) {
     isActive: user.isActive,
     createdAt: user.createdAt,
   };
+}
+
+// Staff serializer (§3 footnote ‡): salary wali fields (basicSalary,
+// advanceGiven) sirf principal/accountant ko dikhengi. Teacher/staff
+// (aur koi bhi aur role) ko ye fields response me MILENGI HI NAHI —
+// value chhupana kaafi nahi, field hi gayab rahegi.
+function serializeStaffFor(member: Staff, role: string | undefined) {
+  if (role === "principal" || role === "accountant") return member;
+  const { basicSalary, advanceGiven, ...safe } = member;
+  return safe;
 }
 
 const loginSchema = z.object({
@@ -106,6 +119,105 @@ const updateUserSchema = z.object({
 const resetPasswordSchema = z.object({
   temporaryPassword: z.string().min(8).optional(),
 });
+
+// ---------------------------------------------------------------------------
+// Phase 2 parity (batch 2c, rollout steps 7–8) ke request schemas.
+// ---------------------------------------------------------------------------
+
+// Student update: insert schema ka partial roop (shared/routes.ts ke
+// contract jaisa). schoolId body se aaye to bhi route use ignore karega.
+const updateStudentBodySchema = insertStudentSchema.partial();
+
+const promoteStudentsSchema = z.object({
+  studentIds: z.array(z.number().int().positive()).min(1),
+  targetClass: z.string().min(1),
+});
+
+const studentTransportSchema = z.object({
+  // null bhejne par transport link hat jayega.
+  transportId: z.number().int().positive().nullable(),
+});
+
+const createDocumentSchema = z.object({
+  docType: z.string().min(1).optional(),
+  fileName: z.string().min(1),
+  filePath: z.string().min(1).optional(),
+});
+
+const createDueSchema = z.object({
+  feeName: z.string().min(1),
+  amount: z.number().int().nonnegative(),
+  // "2026-09-30" jaisi date string; route Date me badal kar store karega
+  // (student_dues.due_date timestamp column hai).
+  dueDate: z.string().min(1),
+  isPaid: z.number().int().min(0).max(1).optional(),
+});
+
+const updateFeeStructureBodySchema = insertFeeStructureSchema.partial();
+
+const createAdditionalFeeBodySchema = z.object({
+  class: z.string().min(1),
+  feeName: z.string().min(1),
+  amount: z.number().int().nonnegative(),
+  dueMonth: z.string().min(1).optional(),
+});
+
+const createTransportRouteBodySchema = z.object({
+  routeName: z.string().min(1),
+  amount: z.number().int().nonnegative(),
+});
+
+const updateStaffBodySchema = insertStaffSchema.partial();
+
+const createSalaryPaymentBodySchema = z.object({
+  staffId: z.number().int().positive(),
+  month: z.string().min(1),
+  year: z.number().int(),
+  amount: z.number().int().nonnegative(),
+  paymentDate: z.string().min(1).optional(),
+  remarks: z.string().optional(),
+});
+
+const createExpenseBodySchema = z.object({
+  title: z.string().min(1),
+  category: z.string().min(1).optional(),
+  amount: z.number().int().nonnegative(),
+  expenseDate: z.string().min(1).optional(),
+  remarks: z.string().optional(),
+});
+
+const createExamBodySchema = z.object({
+  examName: z.string().min(1),
+  examType: z.string().min(1).optional(),
+  class: z.string().min(1),
+  section: z.string().min(1).optional(),
+  subject: z.string().min(1).optional(),
+  maxMarks: z.number().int().positive().optional(),
+  passingMarks: z.number().int().nonnegative().optional(),
+  examDate: z.string().min(1).optional(),
+  session: z.string().min(1).optional(),
+});
+
+const saveMarksBodySchema = z.object({
+  marks: z
+    .array(
+      z.object({
+        studentId: z.number().int().positive(),
+        // null = is student ke marks abhi khaali karne hain / nahi bhare.
+        marksObtained: z.number().nullable(),
+        remarks: z.string().nullable().optional(),
+      }),
+    )
+    .min(1),
+});
+
+const createNoticeBodySchema = z.object({
+  title: z.string().min(1),
+  body: z.string().optional(),
+  audience: noticeAudienceSchema.optional(),
+});
+
+const updateNoticeBodySchema = createNoticeBodySchema.partial();
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const parseOptionalId = (value: unknown) => {
@@ -827,15 +939,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Staff
   // =======================================================================
 
+  // Roles design §5.6 #49 + §3 matrix ke hisaab se batch 2c me badhaye:
+  // teacher/staff bhi staff list padh sakte hain, lekin salary fields
+  // unhe kabhi nahi dikhengi (serializeStaffFor, §3 ‡).
   app.get(
     "/api/staff",
     requireAuth,
-    requireRole("principal", "accountant"),
+    requireRole("principal", "accountant", "teacher", "staff"),
     async (req, res) => {
       const schoolId = requireSchoolId(req, res);
       if (schoolId == null) return;
       const staffList = await storage.getStaff(schoolId);
-      res.json(staffList);
+      res.json(
+        staffList.map((member) => serializeStaffFor(member, req.user!.role)),
+      );
     },
   );
 
@@ -853,6 +970,1115 @@ export async function registerRoutes(app: Express): Promise<Server> {
         schoolId,
       });
       res.json(newStaff);
+    },
+  );
+
+  // =======================================================================
+  // Phase 2 parity — batch 2c (rollout steps 7–8, §5.4–§5.8)
+  //
+  // Niyam wahi purane (§3.1): schoolId sirf token se; dusri school ka
+  // record = 404; parent (†) sirf apne parent_students-linked bacche
+  // dekh sakta hai — dusra baccha uske liye "hai hi nahi" (404).
+  // =======================================================================
+
+  // :id wala student load karke school-scope (+ parent link) check.
+  // Fail ho to response yahi se chala jata hai aur null milta hai.
+  const loadStudentInScope = async (
+    req: Request,
+    res: Response,
+  ): Promise<{ schoolId: number; student: Student } | null> => {
+    const schoolId = requireSchoolId(req, res);
+    if (schoolId == null) return null;
+    const id = parsePathId(req);
+    if (id == null) {
+      res.status(400).json({ message: "Invalid ID" });
+      return null;
+    }
+    const student = await storage.getStudent(id);
+    if (!student || student.schoolId !== schoolId) {
+      res.status(404).json({ message: "Student not found" });
+      return null;
+    }
+    if (req.user!.role === "parent") {
+      const links = await storage.getParentStudentLinks(req.user!.id);
+      if (!links.some((link) => link.studentId === student.id)) {
+        res.status(404).json({ message: "Student not found" });
+        return null;
+      }
+    }
+    return { schoolId, student };
+  };
+
+  const loadStaffInScope = async (
+    req: Request,
+    res: Response,
+  ): Promise<{ schoolId: number; member: Staff } | null> => {
+    const schoolId = requireSchoolId(req, res);
+    if (schoolId == null) return null;
+    const id = parsePathId(req);
+    if (id == null) {
+      res.status(400).json({ message: "Invalid ID" });
+      return null;
+    }
+    const member = await storage.getStaffMember(id);
+    if (!member || member.schoolId !== schoolId) {
+      res.status(404).json({ message: "Staff not found" });
+      return null;
+    }
+    return { schoolId, member };
+  };
+
+  // Parent ke linked baccho ke IDs — parent-scope wale har handler me
+  // yahi set lagega († rule).
+  const parentLinkedStudentIds = async (req: Request): Promise<number[]> => {
+    const links = await storage.getParentStudentLinks(req.user!.id);
+    return links.map((link) => link.studentId);
+  };
+
+  // ---------------------------------------------------------------------
+  // Students parity (§5.4) — note: literal paths (/promote,
+  // /next-admission-no, ...) hamesha /api/students/:id se PEHLE register
+  // honge, warna Express ":id" unhe kha jayega.
+  // ---------------------------------------------------------------------
+
+  // #24 — agla admission number (school settings se banta hai, §6.7).
+  app.get(
+    "/api/students/next-admission-no",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const admissionNo = await storage.getNextAdmissionNo(schoolId);
+      res.json({ admissionNo });
+    },
+  );
+
+  // #25 — admission number pehle se hai kya?
+  app.get(
+    "/api/students/check-admission-no",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const no =
+        typeof req.query.no === "string" ? req.query.no : undefined;
+      if (!no) {
+        return res
+          .status(400)
+          .json({ message: "Query parameter 'no' is required" });
+      }
+      const existing = await storage.getStudentByAdmissionNo(schoolId, no);
+      res.json({
+        admissionNo: no,
+        exists: Boolean(existing),
+        ...(existing ? { studentId: existing.id } : {}),
+      });
+    },
+  );
+
+  // #26 — admission number se student.
+  app.get(
+    "/api/students/by-admission-no/:no",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const student = await storage.getStudentByAdmissionNo(
+        schoolId,
+        req.params.no,
+      );
+      if (!student) {
+        return res.status(404).json({ message: "Student not found" });
+      }
+      res.json(student);
+    },
+  );
+
+  // #23 — promote (contract shared/routes.ts me pehle se tha).
+  // Sirf wahi students promote honge jo is school ke hain — dusri
+  // school ke IDs chup-chaap ignore ho jayenge (leak bhi nahi, kaam
+  // bhi nahi).
+  app.post(
+    "/api/students/promote",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = promoteStudentsSchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const inSchool: number[] = [];
+      for (const studentId of result.data.studentIds) {
+        const student = await storage.getStudent(studentId);
+        if (student && student.schoolId === schoolId) {
+          inSchool.push(studentId);
+        }
+      }
+      await storage.promoteStudents(inSchool, result.data.targetClass);
+      res.json({
+        message: `${inSchool.length} student(s) promoted to ${result.data.targetClass}`,
+        promotedCount: inSchool.length,
+      });
+    },
+  );
+
+  // #20 — ek student (parent: sirf apna linked baccha).
+  app.get(
+    "/api/students/:id",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff", "parent"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      res.json(loaded.student);
+    },
+  );
+
+  // #21 — student update. schoolId body se kabhi nahi badlega.
+  app.put(
+    "/api/students/:id",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const result = updateStudentBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const { schoolId: _ignoredSchoolId, ...updates } = result.data;
+      const student = await storage.updateStudent(loaded.student.id, {
+        ...updates,
+        updatedAt: new Date(),
+      });
+      res.json(student);
+    },
+  );
+
+  // #22 — deactivate (hard delete NAHI; isActive = 0).
+  app.post(
+    "/api/students/:id/deactivate",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const student = await storage.updateStudent(loaded.student.id, {
+        isActive: 0,
+        updatedAt: new Date(),
+      });
+      res.json(student);
+    },
+  );
+
+  // #27 — student ki poori fee status (getStudentStatus pehle se tha;
+  // year query se, default current year; class student ki apni).
+  app.get(
+    "/api/students/:id/status",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff", "parent"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const year =
+        parseOptionalId(
+          typeof req.query.year === "string" ? req.query.year : undefined,
+        ) ?? new Date().getFullYear();
+      const status = await storage.getStudentStatus(
+        loaded.student.id,
+        loaded.student.class,
+        year,
+      );
+      res.json(status);
+    },
+  );
+
+  // #28 — documents list (metadata hi; file Phase 3 me ayegi).
+  app.get(
+    "/api/students/:id/documents",
+    requireAuth,
+    requireRole("principal", "staff", "parent"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const documents = await storage.getStudentDocuments(loaded.student.id);
+      res.json(documents);
+    },
+  );
+
+  // #29a — document metadata add.
+  app.post(
+    "/api/students/:id/documents",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const result = createDocumentSchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const doc = await storage.createStudentDocument({
+        schoolId: loaded.schoolId,
+        studentId: loaded.student.id,
+        docType: result.data.docType ?? null,
+        fileName: result.data.fileName,
+        filePath: result.data.filePath ?? null,
+      });
+      res.status(201).json(doc);
+    },
+  );
+
+  // #29b — document metadata delete.
+  app.delete(
+    "/api/students/:id/documents/:docId",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const docId = parseInt(req.params.docId, 10);
+      if (Number.isNaN(docId)) {
+        return res.status(400).json({ message: "Invalid ID" });
+      }
+      const doc = await storage.getStudentDocument(docId);
+      if (!doc || doc.studentId !== loaded.student.id) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+      await storage.deleteStudentDocument(docId);
+      res.json({ message: "Document deleted" });
+    },
+  );
+
+  // #39 — ek student ke dues (parent: sirf apne bacche ke).
+  app.get(
+    "/api/students/:id/dues",
+    requireAuth,
+    requireRole("principal", "accountant", "parent"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const dues = await storage.getStudentDues(loaded.student.id);
+      res.json(dues);
+    },
+  );
+
+  // #40 — student par due add (add-student-due).
+  app.post(
+    "/api/students/:id/dues",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const result = createDueSchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const dueDate = new Date(result.data.dueDate);
+      if (Number.isNaN(dueDate.getTime())) {
+        return res.status(400).json({ message: "Invalid dueDate" });
+      }
+      const due = await storage.createStudentDue({
+        studentId: loaded.student.id,
+        feeName: result.data.feeName,
+        amount: result.data.amount,
+        dueDate,
+        isPaid: result.data.isPaid ?? 0,
+      });
+      res.status(201).json(due);
+    },
+  );
+
+  // #41 — due delete. Due ka school uske student se check hoga
+  // (student_dues me school_id column hai hi nahi).
+  app.delete(
+    "/api/dues/:id",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const due = await storage.getStudentDue(id);
+      if (!due) return res.status(404).json({ message: "Due not found" });
+      const student = await storage.getStudent(due.studentId);
+      if (!student || student.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Due not found" });
+      }
+      await storage.deleteStudentDue(id);
+      res.json({ message: "Due deleted" });
+    },
+  );
+
+  // #48 — student ka transport route set/clear.
+  app.put(
+    "/api/students/:id/transport",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const result = studentTransportSchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const { transportId } = result.data;
+      if (transportId != null) {
+        const routes = await storage.getTransportRoutes(loaded.schoolId);
+        if (!routes.some((route) => route.id === transportId)) {
+          return res
+            .status(400)
+            .json({ message: "Transport route does not belong to this school" });
+        }
+      }
+      const student = await storage.updateStudent(loaded.student.id, {
+        transportId,
+        updatedAt: new Date(),
+      });
+      res.json(student);
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Fees parity (§5.5) — structures/payments ke bache hue writes,
+  // additional fees, transport routes.
+  // ---------------------------------------------------------------------
+
+  // #37 — agla receipt number.
+  app.get(
+    "/api/payments/next-receipt-no",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const receiptNo = await storage.getNextReceiptNo(schoolId);
+      res.json({ receiptNo });
+    },
+  );
+
+  // #36 — payment delete.
+  app.delete(
+    "/api/payments/:id",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const payments = await storage.getFeePayments(schoolId);
+      if (!payments.some((payment) => payment.id === id)) {
+        return res.status(404).json({ message: "Payment not found" });
+      }
+      await storage.deleteFeePayment(id);
+      res.json({ message: "Payment deleted" });
+    },
+  );
+
+  // #32 — fee structure update.
+  app.put(
+    "/api/fee-structures/:id",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const result = updateFeeStructureBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const structures = await storage.getFeeStructures(schoolId);
+      if (!structures.some((structure) => structure.id === id)) {
+        return res.status(404).json({ message: "Fee structure not found" });
+      }
+      const { schoolId: _ignoredSchoolId, ...updates } = result.data;
+      const structure = await storage.updateFeeStructure(id, {
+        ...updates,
+        updatedAt: new Date(),
+      });
+      res.json(structure);
+    },
+  );
+
+  // #33 — fee structure delete (sirf principal).
+  app.delete(
+    "/api/fee-structures/:id",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const structures = await storage.getFeeStructures(schoolId);
+      if (!structures.some((structure) => structure.id === id)) {
+        return res.status(404).json({ message: "Fee structure not found" });
+      }
+      await storage.deleteFeeStructure(id);
+      res.json({ message: "Fee structure deleted" });
+    },
+  );
+
+  // #42 — additional fees list.
+  app.get(
+    "/api/additional-fees",
+    requireAuth,
+    requireRole("principal", "accountant", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const fees = await storage.getAdditionalFees(schoolId);
+      res.json(fees);
+    },
+  );
+
+  // #43 — additional fee add.
+  app.post(
+    "/api/additional-fees",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createAdditionalFeeBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const fee = await storage.createAdditionalFee({
+        ...result.data,
+        dueMonth: result.data.dueMonth ?? null,
+        schoolId,
+      });
+      res.status(201).json(fee);
+    },
+  );
+
+  // #44 — additional fee delete.
+  app.delete(
+    "/api/additional-fees/:id",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const fee = await storage.getAdditionalFee(id);
+      if (!fee || fee.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Additional fee not found" });
+      }
+      await storage.deleteAdditionalFee(id);
+      res.json({ message: "Additional fee deleted" });
+    },
+  );
+
+  // #45 — transport routes list.
+  app.get(
+    "/api/transport-routes",
+    requireAuth,
+    requireRole("principal", "accountant", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const routes = await storage.getTransportRoutes(schoolId);
+      res.json(routes);
+    },
+  );
+
+  // #46 — transport route add.
+  app.post(
+    "/api/transport-routes",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createTransportRouteBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const route = await storage.createTransportRoute({
+        ...result.data,
+        schoolId,
+      });
+      res.status(201).json(route);
+    },
+  );
+
+  // #47 — transport route delete (sirf principal).
+  app.delete(
+    "/api/transport-routes/:id",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const routes = await storage.getTransportRoutes(schoolId);
+      if (!routes.some((route) => route.id === id)) {
+        return res.status(404).json({ message: "Transport route not found" });
+      }
+      await storage.deleteTransportRoute(id);
+      res.json({ message: "Transport route deleted" });
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Staff & salary (§5.6)
+  // ---------------------------------------------------------------------
+
+  // #51 — ek staff member (salary fields role ke hisaab se, §3 ‡).
+  app.get(
+    "/api/staff/:id",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      res.json(serializeStaffFor(loaded.member, req.user!.role));
+    },
+  );
+
+  // #52 — staff update (sirf principal).
+  app.put(
+    "/api/staff/:id",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      const result = updateStaffBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const { schoolId: _ignoredSchoolId, ...updates } = result.data;
+      const member = await storage.updateStaff(loaded.member.id, {
+        ...updates,
+        updatedAt: new Date(),
+      });
+      res.json(member);
+    },
+  );
+
+  // #53 — staff deactivate (soft delete; Electron ka delete-staff yahi
+  // karta tha — record rehta hai, list se gayab).
+  app.post(
+    "/api/staff/:id/deactivate",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      const member = await storage.updateStaff(loaded.member.id, {
+        isActive: 0,
+        updatedAt: new Date(),
+      });
+      res.json(member);
+    },
+  );
+
+  // #54 — ek staff ki salary history.
+  app.get(
+    "/api/staff/:id/salary-history",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      const history = await storage.getStaffSalaryHistory(loaded.member.id);
+      res.json(history);
+    },
+  );
+
+  // Pending salaries — YE route #55 (GET /api/salary-payments) se PEHLE
+  // register hona lazmi hai (design §5.6 note): "pending" ek literal
+  // segment hai, koi :id route use kha na le isliye order yahi rakha.
+  // Pending = active staff jinhone diye month/year me salary nahi payi,
+  // aur unka advance/balance hisaab.
+  app.get(
+    "/api/salary-payments/pending",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const now = new Date();
+      const CALENDAR_MONTHS = [
+        "January", "February", "March", "April", "May", "June", "July",
+        "August", "September", "October", "November", "December",
+      ];
+      const month =
+        typeof req.query.month === "string"
+          ? req.query.month
+          : CALENDAR_MONTHS[now.getMonth()];
+      const year =
+        parseOptionalId(
+          typeof req.query.year === "string" ? req.query.year : undefined,
+        ) ?? now.getFullYear();
+      const paid = await storage.getSalaryPayments(schoolId, month, year);
+      const paidStaffIds = new Set(paid.map((payment) => payment.staffId));
+      const activeStaff = await storage.getStaff(schoolId);
+      const pending = activeStaff
+        .filter((member) => !paidStaffIds.has(member.id))
+        .map((member) => {
+          const advance = member.advanceGiven ?? 0;
+          return {
+            staffId: member.id,
+            name: member.name,
+            designation: member.designation,
+            basicSalary: member.basicSalary,
+            advanceGiven: advance,
+            pendingAmount: Math.max(0, member.basicSalary - advance),
+            month,
+            year,
+          };
+        });
+      res.json(pending);
+    },
+  );
+
+  // #55 — salary payments list (month/year filter ke saath).
+  app.get(
+    "/api/salary-payments",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const month =
+        typeof req.query.month === "string" ? req.query.month : undefined;
+      const year = parseOptionalId(
+        typeof req.query.year === "string" ? req.query.year : undefined,
+      );
+      const payments = await storage.getSalaryPayments(schoolId, month, year);
+      res.json(payments);
+    },
+  );
+
+  // #56 — salary pay.
+  app.post(
+    "/api/salary-payments",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createSalaryPaymentBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const member = await storage.getStaffMember(result.data.staffId);
+      if (!member || member.schoolId !== schoolId) {
+        return res
+          .status(400)
+          .json({ message: "Staff does not belong to this school" });
+      }
+      const payment = await storage.createSalaryPayment({
+        schoolId,
+        staffId: result.data.staffId,
+        month: result.data.month,
+        year: result.data.year,
+        amount: result.data.amount,
+        paymentDate: result.data.paymentDate ?? null,
+        remarks: result.data.remarks ?? null,
+      });
+      res.status(201).json(payment);
+    },
+  );
+
+  // #57 — salary payment delete.
+  app.delete(
+    "/api/salary-payments/:id",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const payments = await storage.getSalaryPayments(schoolId);
+      if (!payments.some((payment) => payment.id === id)) {
+        return res.status(404).json({ message: "Salary payment not found" });
+      }
+      await storage.deleteSalaryPayment(id);
+      res.json({ message: "Salary payment deleted" });
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Expenses & reports (§5.7)
+  // ---------------------------------------------------------------------
+
+  // #58 — expenses list.
+  app.get(
+    "/api/expenses",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const expenseList = await storage.getExpenses(schoolId);
+      res.json(expenseList);
+    },
+  );
+
+  // #59 — expense add.
+  app.post(
+    "/api/expenses",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createExpenseBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const expense = await storage.createExpense({
+        schoolId,
+        title: result.data.title,
+        category: result.data.category ?? null,
+        amount: result.data.amount,
+        expenseDate: result.data.expenseDate ?? null,
+        remarks: result.data.remarks ?? null,
+      });
+      res.status(201).json(expense);
+    },
+  );
+
+  // #60 — expense delete.
+  app.delete(
+    "/api/expenses/:id",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const expense = await storage.getExpense(id);
+      if (!expense || expense.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Expense not found" });
+      }
+      await storage.deleteExpense(id);
+      res.json({ message: "Expense deleted" });
+    },
+  );
+
+  // #61 — financial summary (fees − salary − expenses + pending dues).
+  app.get(
+    "/api/reports/financial-summary",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const summary = await storage.getFinancialSummary(schoolId);
+      res.json(summary);
+    },
+  );
+
+  // #62 — month-wise financial trend.
+  app.get(
+    "/api/reports/financial-trend",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const trend = await storage.getFinancialTrend(schoolId);
+      res.json(trend);
+    },
+  );
+
+  // #63 — dashboard stats (counts + aaj/is mahine ki collection).
+  app.get(
+    "/api/reports/dashboard",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const stats = await storage.getDashboardStats(schoolId);
+      res.json(stats);
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Exams, marks, results (§5.8 #64–69)
+  // ---------------------------------------------------------------------
+
+  const loadExamInScope = async (
+    req: Request,
+    res: Response,
+  ): Promise<{ schoolId: number; exam: NonNullable<Awaited<ReturnType<typeof storage.getExam>>> } | null> => {
+    const schoolId = requireSchoolId(req, res);
+    if (schoolId == null) return null;
+    const id = parsePathId(req);
+    if (id == null) {
+      res.status(400).json({ message: "Invalid ID" });
+      return null;
+    }
+    const exam = await storage.getExam(id);
+    if (!exam || exam.schoolId !== schoolId) {
+      res.status(404).json({ message: "Exam not found" });
+      return null;
+    }
+    return { schoolId, exam };
+  };
+
+  // #64 — exams list. Parent ko sirf apne baccho ki class wale exams
+  // dikhenge (exam class-level hota hai, student-level nahi).
+  app.get(
+    "/api/exams",
+    requireAuth,
+    requireRole("principal", "teacher", "staff", "parent"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      let examList = await storage.getExams(schoolId);
+      if (req.user!.role === "parent") {
+        const linkedIds = await parentLinkedStudentIds(req);
+        const classNames = new Set<string>();
+        for (const studentId of linkedIds) {
+          const student = await storage.getStudent(studentId);
+          if (student) classNames.add(student.class);
+        }
+        examList = examList.filter((exam) => classNames.has(exam.class));
+      }
+      res.json(examList);
+    },
+  );
+
+  // #65 — exam create.
+  app.post(
+    "/api/exams",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createExamBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const exam = await storage.createExam({
+        schoolId,
+        examName: result.data.examName,
+        examType: result.data.examType ?? null,
+        class: result.data.class,
+        section: result.data.section ?? null,
+        subject: result.data.subject ?? null,
+        maxMarks: result.data.maxMarks ?? 100,
+        passingMarks: result.data.passingMarks ?? null,
+        examDate: result.data.examDate ?? null,
+        session: result.data.session ?? null,
+      });
+      res.status(201).json(exam);
+    },
+  );
+
+  // #66 — exam delete (uske marks bhi saath delete hote hain, storage me).
+  app.delete(
+    "/api/exams/:id",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const loaded = await loadExamInScope(req, res);
+      if (!loaded) return;
+      await storage.deleteExam(loaded.exam.id);
+      res.json({ message: "Exam deleted" });
+    },
+  );
+
+  // #67 — ek exam ke marks. Parent: sirf apne linked baccho ke marks.
+  app.get(
+    "/api/exams/:id/marks",
+    requireAuth,
+    requireRole("principal", "teacher", "parent"),
+    async (req, res) => {
+      const loaded = await loadExamInScope(req, res);
+      if (!loaded) return;
+      if (req.user!.role === "parent") {
+        const linkedIds = await parentLinkedStudentIds(req);
+        const rows = await storage.getMarksForStudents(
+          loaded.exam.id,
+          linkedIds,
+        );
+        return res.json(rows);
+      }
+      const rows = await storage.getExamMarks(loaded.exam.id);
+      res.json(rows);
+    },
+  );
+
+  // #68 — marks bulk save. Body ke har student ka is school ka hona
+  // lazmi hai; ek bhi bahar ka student ho to poora batch reject (400)
+  // — aadha save karke halla nahi.
+  app.post(
+    "/api/exams/:id/marks",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const loaded = await loadExamInScope(req, res);
+      if (!loaded) return;
+      const result = saveMarksBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      for (const entry of result.data.marks) {
+        const student = await storage.getStudent(entry.studentId);
+        if (!student || student.schoolId !== loaded.schoolId) {
+          return res.status(400).json({
+            message: "One or more students do not belong to this school",
+          });
+        }
+      }
+      const saved = await storage.saveExamMarks(
+        loaded.exam.id,
+        loaded.schoolId,
+        result.data.marks.map((entry) => ({
+          studentId: entry.studentId,
+          marksObtained: entry.marksObtained,
+          remarks: entry.remarks ?? null,
+        })),
+      );
+      res.json(saved);
+    },
+  );
+
+  // #69 — ek student ke saare results (exam ki detail ke saath).
+  // Parent: sirf apna linked baccha loadStudentInScope se pakka hai.
+  app.get(
+    "/api/students/:id/results",
+    requireAuth,
+    requireRole("principal", "teacher", "parent"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const rows = await storage.getStudentMarks(loaded.student.id);
+      const enriched = await Promise.all(
+        rows.map(async (row) => {
+          const exam = await storage.getExam(row.examId);
+          return {
+            ...row,
+            examName: exam?.examName ?? null,
+            examType: exam?.examType ?? null,
+            subject: exam?.subject ?? null,
+            maxMarks: exam?.maxMarks ?? null,
+            passingMarks: exam?.passingMarks ?? null,
+            examDate: exam?.examDate ?? null,
+          };
+        }),
+      );
+      res.json(enriched);
+    },
+  );
+
+  // ---------------------------------------------------------------------
+  // Notices (§5.8 #70–72) — audience: all | teachers | parents.
+  // Parent ko teachers-wale notices kabhi nahi; teacher/staff ko
+  // parents-wale nahi. Principal/accountant/super-hooked roles sab
+  // dekh sakte hain (principal sab, accountant read-only).
+  // ---------------------------------------------------------------------
+
+  const noticeVisibleTo = (
+    audience: string | null,
+    role: string,
+  ): boolean => {
+    if (role === "principal" || role === "super_admin") return true;
+    if (audience === "all") return true;
+    if (audience === "teachers") {
+      return role === "teacher" || role === "accountant";
+    }
+    if (audience === "parents") {
+      return role === "parent" || role === "accountant";
+    }
+    return false;
+  };
+
+  const loadNoticeInScope = async (
+    req: Request,
+    res: Response,
+  ): Promise<{ schoolId: number; notice: NonNullable<Awaited<ReturnType<typeof storage.getNotice>>> } | null> => {
+    const schoolId = requireSchoolId(req, res);
+    if (schoolId == null) return null;
+    const id = parsePathId(req);
+    if (id == null) {
+      res.status(400).json({ message: "Invalid ID" });
+      return null;
+    }
+    const notice = await storage.getNotice(id);
+    if (!notice || notice.schoolId !== schoolId) {
+      res.status(404).json({ message: "Notice not found" });
+      return null;
+    }
+    return { schoolId, notice };
+  };
+
+  // #70 — notices list (koi bhi logged-in user, audience filter ke saath).
+  app.get("/api/notices", requireAuth, async (req, res) => {
+    const schoolId = requireSchoolId(req, res);
+    if (schoolId == null) return;
+    const all = await storage.getNotices(schoolId);
+    res.json(
+      all.filter((notice) => noticeVisibleTo(notice.audience, req.user!.role)),
+    );
+  });
+
+  // #71 — notice create.
+  app.post(
+    "/api/notices",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createNoticeBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const notice = await storage.createNotice({
+        schoolId,
+        title: result.data.title,
+        body: result.data.body ?? null,
+        audience: result.data.audience ?? "all",
+        createdBy: req.user!.id,
+      });
+      res.status(201).json(notice);
+    },
+  );
+
+  // #72a — notice update. Principal kisi ka bhi; teacher sirf APNA
+  // banaya hua (dusre ka = 404, §5.8).
+  app.put(
+    "/api/notices/:id",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const loaded = await loadNoticeInScope(req, res);
+      if (!loaded) return;
+      if (
+        req.user!.role === "teacher" &&
+        loaded.notice.createdBy !== req.user!.id
+      ) {
+        return res.status(404).json({ message: "Notice not found" });
+      }
+      const result = updateNoticeBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const notice = await storage.updateNotice(loaded.notice.id, {
+        ...(result.data.title !== undefined
+          ? { title: result.data.title }
+          : {}),
+        ...(result.data.body !== undefined ? { body: result.data.body } : {}),
+        ...(result.data.audience !== undefined
+          ? { audience: result.data.audience }
+          : {}),
+        updatedAt: new Date(),
+      });
+      res.json(notice);
+    },
+  );
+
+  // #72b — notice delete (ownership niyam update jaisa hi).
+  app.delete(
+    "/api/notices/:id",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const loaded = await loadNoticeInScope(req, res);
+      if (!loaded) return;
+      if (
+        req.user!.role === "teacher" &&
+        loaded.notice.createdBy !== req.user!.id
+      ) {
+        return res.status(404).json({ message: "Notice not found" });
+      }
+      await storage.deleteNotice(loaded.notice.id);
+      res.json({ message: "Notice deleted" });
     },
   );
 

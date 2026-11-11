@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, date, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, date, real, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -82,6 +82,11 @@ export const students = pgTable("students", {
 
   category: text("category"),
 
+  // Transport route link (Phase 2 §6.11) — Electron students table me
+  // pehle se tha, Postgres me missing tha. transport_routes neeche
+  // define hai; reference lazy callback se hai, isliye order chalega.
+  transportId: integer("transport_id").references(() => transportRoutes.id),
+
   dob: text("dob"), // text for simple date string
 
   contact: text("contact").notNull(),
@@ -126,9 +131,14 @@ export const feePayments = pgTable("fee_payments", {
 export const staff = pgTable("staff", {
    id: serial("id").primaryKey(),
    schoolId: integer("school_id").references(() => schools.id),
+   // Parity columns (Phase 2 §6.16) — Electron staff table me pehle se hain.
+   employeeId: text("employee_id").unique(),
    name: text("name").notNull(),
    designation: text("designation").notNull(),
+   department: text("department"),
    qualification: text("qualification"),
+   experience: text("experience"),
+   address: text("address"),
    contact: text("contact").notNull(),
    email: text("email"),
    basicSalary: integer("basic_salary").notNull(),
@@ -149,6 +159,123 @@ export const studentDues = pgTable("student_dues", {
    createdAt: timestamp("created_at").defaultNow(),
    updatedAt: timestamp("updated_at").defaultNow(),
  });
+
+// ---------------------------------------------------------------------------
+// Feature-parity tables (Phase 2 §6.10–§6.15) — ye features abhi tak sirf
+// Electron ke local SQLite me the; bina inke server API adhoora rehta aur
+// phone app me ye gayab ho jate. Har table me school_id + created_at /
+// updated_at hai (§6.9 — Phase 3 ka offline sync inhi par chalega).
+// ---------------------------------------------------------------------------
+
+// §6.10 — Exams aur unke marks.
+export const exams = pgTable("exams", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  examName: text("exam_name").notNull(),
+  examType: text("exam_type"),
+  class: text("class").notNull(),
+  section: text("section"),
+  subject: text("subject"),
+  maxMarks: integer("max_marks").default(100),
+  passingMarks: integer("passing_marks"),
+  // Baaki tables ki tarah date text string me hai ("2026-09-15").
+  examDate: text("exam_date"),
+  session: text("session"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const marks = pgTable("marks", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  examId: integer("exam_id").notNull().references(() => exams.id),
+  studentId: integer("student_id").notNull().references(() => students.id),
+  // real: aadhe marks (jaise 12.5) bhi aam hain. NULL = marks abhi nahi bhare.
+  marksObtained: real("marks_obtained"),
+  remarks: text("remarks"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// §6.11 — Transport routes (students.transport_id isi ko point karta hai).
+export const transportRoutes = pgTable("transport_routes", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  routeName: text("route_name").notNull(),
+  amount: integer("amount").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// §6.12 — Class-wise extra fees (transport ke alawa wali one-off fees).
+export const additionalFees = pgTable("additional_fees", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  class: text("class").notNull(),
+  feeName: text("fee_name").notNull(),
+  amount: integer("amount").notNull(),
+  dueMonth: text("due_month"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// §6.13 — Staff salary payments aur school expenses.
+export const salaryPayments = pgTable("salary_payments", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  staffId: integer("staff_id").notNull().references(() => staff.id),
+  month: text("month").notNull(),
+  year: integer("year").notNull(),
+  amount: integer("amount").notNull(),
+  paymentDate: text("payment_date"),
+  remarks: text("remarks"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const expenses = pgTable("expenses", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  title: text("title").notNull(),
+  category: text("category"),
+  amount: integer("amount").notNull(),
+  expenseDate: text("expense_date"),
+  remarks: text("remarks"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// §6.14 — Student documents: Phase 2 me sirf metadata. Asli file storage
+// (disk/object store) Phase 3 ka faisla hai; file_path me jo URL/path
+// client dega wahi save hoga.
+export const studentDocuments = pgTable("student_documents", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  studentId: integer("student_id").notNull().references(() => students.id),
+  docType: text("doc_type"),
+  fileName: text("file_name").notNull(),
+  filePath: text("file_path"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// §6.15 — Notices. audience: all | teachers | parents (code me zod se
+// validate hoga; DB me text hi hai).
+export const notices = pgTable("notices", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  title: text("title").notNull(),
+  body: text("body"),
+  audience: text("audience").default("all"),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Notice audience ki valid values (Phase 2 §6.15).
+export const NOTICE_AUDIENCES = ["all", "teachers", "parents"] as const;
+export type NoticeAudience = (typeof NOTICE_AUDIENCES)[number];
+export const noticeAudienceSchema = z.enum(NOTICE_AUDIENCES);
 
 // Parent <-> student link (Phase 2 §6). Ek parent ke kai bacche,
 // ek bacche ke kai parents ho sakte hain.
@@ -223,6 +350,51 @@ export const insertRefreshTokenSchema = createInsertSchema(refreshTokens).omit({
   createdAt: true,
 });
 
+// Parity tables ke insert schemas (Phase 2 §6.10–§6.15) — style upar
+// walon jaisa hi: id/createdAt client nahi bhejega.
+export const insertExamSchema = createInsertSchema(exams).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertMarkSchema = createInsertSchema(marks).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTransportRouteSchema = createInsertSchema(transportRoutes).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertAdditionalFeeSchema = createInsertSchema(additionalFees).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertSalaryPaymentSchema = createInsertSchema(salaryPayments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertExpenseSchema = createInsertSchema(expenses).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertStudentDocumentSchema = createInsertSchema(studentDocuments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertNoticeSchema = createInsertSchema(notices).omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  // Audience sirf teen fixed values me se ek (§6.15).
+  audience: noticeAudienceSchema.default("all"),
+});
+
 // Types
 export type School = typeof schools.$inferSelect;
 export type InsertSchool = z.infer<typeof insertSchoolSchema>;
@@ -250,3 +422,27 @@ export type InsertParentStudent = z.infer<typeof insertParentStudentSchema>;
 
 export type RefreshToken = typeof refreshTokens.$inferSelect;
 export type InsertRefreshToken = z.infer<typeof insertRefreshTokenSchema>;
+
+export type Exam = typeof exams.$inferSelect;
+export type InsertExam = z.infer<typeof insertExamSchema>;
+
+export type Mark = typeof marks.$inferSelect;
+export type InsertMark = z.infer<typeof insertMarkSchema>;
+
+export type TransportRoute = typeof transportRoutes.$inferSelect;
+export type InsertTransportRoute = z.infer<typeof insertTransportRouteSchema>;
+
+export type AdditionalFee = typeof additionalFees.$inferSelect;
+export type InsertAdditionalFee = z.infer<typeof insertAdditionalFeeSchema>;
+
+export type SalaryPayment = typeof salaryPayments.$inferSelect;
+export type InsertSalaryPayment = z.infer<typeof insertSalaryPaymentSchema>;
+
+export type Expense = typeof expenses.$inferSelect;
+export type InsertExpense = z.infer<typeof insertExpenseSchema>;
+
+export type StudentDocument = typeof studentDocuments.$inferSelect;
+export type InsertStudentDocument = z.infer<typeof insertStudentDocumentSchema>;
+
+export type Notice = typeof notices.$inferSelect;
+export type InsertNotice = z.infer<typeof insertNoticeSchema>;
