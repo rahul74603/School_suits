@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, apiPut, apiDel } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 import {
   Settings,
   School,
@@ -39,8 +41,12 @@ import {
 
 export default function SettingsPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("school");
+  // Super Admin ka khud ka koi school nahi hota — us haalat me page
+  // par lal error toast ki jagah saaf sandesh dikhta hai.
+  const [noSchool, setNoSchool] = useState(false);
 
   // School ki id page ke state me nahi hoti; PUT /api/schools/:id ke
   // liye load ke samay branding jawab se yahan rakh li jati hai.
@@ -109,6 +115,16 @@ export default function SettingsPage() {
 
   // Load All Data
   const loadData = async () => {
+    // Super Admin school se juda hi nahi hota: server ka
+    // GET /api/branding uske liye 404 deta hai ("This account is not
+    // linked to a school") aur baaki settings endpoints bhi
+    // school-scoped hain. Isliye load ki koshish hi nahi karte —
+    // noSchool wala saaf sandesh dikhega, "Failed to load settings"
+    // wala lal toast nahi.
+    if (user?.role === "super_admin") {
+      setNoSchool(true);
+      return;
+    }
     setLoading(true);
     try {
       // Load School Info
@@ -291,9 +307,9 @@ export default function SettingsPage() {
   const classes = ["Nursery", "LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
             <Settings className="h-8 w-8 text-blue-600" /> Settings
@@ -306,18 +322,41 @@ export default function SettingsPage() {
         </Button>
       </div>
 
+      {noSchool ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there are no school settings to load here.
+              First create a school from the Schools screen — after that,
+              that school&apos;s Principal can sign in with their own
+              account and manage these settings.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid w-full grid-cols-4 lg:w-[600px]">
-          <TabsTrigger value="school" className="flex items-center gap-2">
+        <TabsList className="flex w-full overflow-x-auto lg:grid lg:grid-cols-4 lg:w-[600px]">
+          <TabsTrigger value="school" className="flex shrink-0 items-center gap-2 whitespace-nowrap">
             <School className="h-4 w-4" /> School Info
           </TabsTrigger>
-          <TabsTrigger value="fees" className="flex items-center gap-2">
+          <TabsTrigger value="fees" className="flex shrink-0 items-center gap-2 whitespace-nowrap">
             <Receipt className="h-4 w-4" /> Fee Structure
           </TabsTrigger>
-          <TabsTrigger value="transport" className="flex items-center gap-2">
+          <TabsTrigger value="transport" className="flex shrink-0 items-center gap-2 whitespace-nowrap">
             <Bus className="h-4 w-4" /> Transport
           </TabsTrigger>
-          <TabsTrigger value="additional" className="flex items-center gap-2">
+          <TabsTrigger value="additional" className="flex shrink-0 items-center gap-2 whitespace-nowrap">
             <CreditCard className="h-4 w-4" /> Additional Fees
           </TabsTrigger>
         </TabsList>
@@ -381,7 +420,7 @@ export default function SettingsPage() {
                     placeholder="e.g., 2026"
                   />
                 </div>
-                <div className="col-span-2 space-y-2">
+                <div className="col-span-1 md:col-span-2 space-y-2">
                   <Label>Address</Label>
                   <Input 
                     value={schoolInfo.address} 
@@ -428,7 +467,8 @@ export default function SettingsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <Table>
+              <div className="overflow-x-auto">
+<Table>
                 <TableHeader className="bg-slate-50">
                   <TableRow>
                     <TableHead>Class</TableHead>
@@ -464,6 +504,7 @@ export default function SettingsPage() {
                   )}
                 </TableBody>
               </Table>
+</div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -480,7 +521,8 @@ export default function SettingsPage() {
               </Button>
             </CardHeader>
             <CardContent>
-              <Table>
+              <div className="overflow-x-auto">
+<Table>
                 <TableHeader className="bg-slate-50">
                   <TableRow>
                     <TableHead>Route Name</TableHead>
@@ -514,6 +556,7 @@ export default function SettingsPage() {
                   )}
                 </TableBody>
               </Table>
+</div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -530,7 +573,8 @@ export default function SettingsPage() {
               </Button>
             </CardHeader>
             <CardContent>
-              <Table>
+              <div className="overflow-x-auto">
+<Table>
                 <TableHeader className="bg-slate-50">
                   <TableRow>
                     <TableHead>Class</TableHead>
@@ -568,10 +612,12 @@ export default function SettingsPage() {
                   )}
                 </TableBody>
               </Table>
+</div>
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+      )}
 
       {/* Edit Fee Dialog */}
       <Dialog open={isFeeDialogOpen} onOpenChange={setIsFeeDialogOpen}>

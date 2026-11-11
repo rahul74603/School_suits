@@ -216,7 +216,17 @@ export default function Fees() {
       window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${text}`, '_blank');
   };
 
-  const isAdmFullyPaid = status.admissionBalance <= 0;
+  // Admission Fee ka asal hisaab status API se aata hai: admissionTotal
+  // = school ki fee structure me is class ki lagi kul admission fee,
+  // admissionPaidSoFar = ab tak jama, admissionBalance = baaki.
+  // Kul fee lagi hi na ho (total 0) to purana code balance 0 dekh kar
+  // jhoota "Fully Paid" dikha deta tha — wo haalat ab alag hai.
+  const admTotal = status.admissionTotal ?? 0;
+  const admPaid = status.admissionPaidSoFar ?? 0;
+  const admBalance = status.admissionBalance ?? 0;
+  const admNotSet = admTotal <= 0;
+  const isAdmFullyPaid = !admNotSet && admBalance <= 0;
+  const admDue = !admNotSet && admBalance > 0;
 
   // Super Admin ke liye poora page hi no-school card hai (ye early
   // return saare hooks ke BAAD hai — hooks hamesha ek jaise chalte hain).
@@ -261,12 +271,23 @@ export default function Fees() {
         {selectedStudent && <div className="font-bold text-lg">{selectedStudent.name} ({selectedStudent.class}) - {selectedStudent.admission_no}</div>}
       </div>
 
+      {/* Teeno columns par min-w-0 lazmi hai: bina iske grid ka baccha
+          apni andar ki chaudai (khaas taur par table) se chhota hone se
+          inkaar kar deta hai aur poora column screen se bahar dhakelta
+          hai — Pending Dues card ki dayein sarhad katne ki wajah yahi thi. */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 overflow-y-auto lg:overflow-hidden">
         
         {/* LEFT: STUDENT LIST */}
-        <div className="h-64 lg:h-full lg:col-span-3 flex flex-col bg-white rounded-xl shadow-sm border overflow-hidden">
+        <div className="h-64 lg:h-full lg:col-span-3 min-w-0 flex flex-col bg-white rounded-xl shadow-sm border overflow-hidden">
             <div className="p-3 border-b bg-slate-50"><Input placeholder="Search Student..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-white" /></div>
             <div className="flex-1 overflow-y-auto">
+                {(!students || students.length === 0) && (
+                    <div className="p-4 text-center text-xs text-gray-400 leading-relaxed">
+                        {search.length < 2
+                            ? "Student dhundne ke liye upar uska naam likhein (kam se kam 2 akshar) — list yahan dikhegi."
+                            : "Is naam ka koi student nahi mila."}
+                    </div>
+                )}
                 {students?.map((s: any) => (
                     <div key={s.id} onClick={() => { setSelectedStudent(s); setSearch(""); }} className={`p-3 border-b cursor-pointer hover:bg-blue-50 ${selectedStudent?.id === s.id ? 'bg-blue-100 border-l-4 border-l-blue-600' : ''}`}>
                         <div className="font-bold text-slate-800">{s.name}</div><div className="text-xs text-gray-500">{s.admission_no}</div>
@@ -276,17 +297,32 @@ export default function Fees() {
         </div>
 
         {/* CENTER: DASHBOARD */}
-        <div className="lg:col-span-6 lg:h-full flex flex-col gap-4 lg:overflow-y-auto pr-1 pb-4 lg:pb-20">
+        <div className="lg:col-span-6 lg:h-full min-w-0 flex flex-col gap-4 lg:overflow-y-auto pr-1 pb-4 lg:pb-20">
             {selectedStudent ? (
                 <>
                     {/* ADMISSION & TRANSPORT */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <Card className={`border-l-4 cursor-pointer ${isAdmFullyPaid ? 'border-l-green-500 bg-green-50' : 'border-l-orange-500 bg-orange-50'}`} onClick={() => status.admissionBalance > 0 && addToBill("Admission Fee Balance", status.admissionBalance, "Admission Fee")}>
-                            <div className="p-4 flex justify-between items-center">
-                                <div><div className="text-xs font-bold opacity-70">ADMISSION FEE</div><div className="font-bold text-xl">{isAdmFullyPaid ? "Fully Paid" : `Due: ₹${status.admissionBalance}`}</div></div>
-                                {!isAdmFullyPaid && <Plus className="bg-orange-200 p-1 h-6 w-6 rounded-full text-orange-700"/>}
+                        {admNotSet ? (
+                        <Card className="border-l-4 border-l-slate-400 bg-slate-50">
+                            <div className="p-4">
+                                <div className="text-xs font-bold opacity-70">ADMISSION FEE</div>
+                                <div className="font-bold text-lg mt-0.5">Set nahi hai</div>
+                                <div className="text-xs text-gray-500 mt-1">Is class ki admission fee lagi hi nahi hai. Settings → Fee Structure me is class ki Admission Fee lagayein — tab yahan kul / jama / baaki ka hisaab dikhega.</div>
                             </div>
                         </Card>
+                        ) : (
+                        <Card className={`border-l-4 ${isAdmFullyPaid ? 'border-l-green-500 bg-green-50' : 'border-l-orange-500 bg-orange-50 cursor-pointer'}`} onClick={() => admDue && addToBill("Admission Fee Balance", admBalance, "Admission Fee")}>
+                            <div className="p-4">
+                                <div className="flex justify-between items-center">
+                                    <div className="text-xs font-bold opacity-70">ADMISSION FEE</div>
+                                    {admDue && <Plus className="bg-orange-200 p-1 h-6 w-6 rounded-full text-orange-700"/>}
+                                </div>
+                                <div className="font-bold text-xl mt-0.5">{isAdmFullyPaid ? "Fully Paid" : `Baaki: ₹${admBalance}`}</div>
+                                <div className="text-xs text-gray-600 mt-1">Kul: ₹{admTotal} • Jama: ₹{admPaid}</div>
+                                {admDue && <div className="text-[11px] text-orange-700 mt-0.5">Baaki rakam leni ho to card par tap karke bill me jodein.</div>}
+                            </div>
+                        </Card>
+                        )}
                         <Card className="border-l-4 border-l-blue-500 bg-blue-50">
                             <div className="p-4">
                                 <div className="text-xs font-bold opacity-60 uppercase flex items-center gap-1"><Bus className="h-3 w-3"/> Transport Route</div>
@@ -303,8 +339,21 @@ export default function Fees() {
                             <Button size="sm" variant="outline" className="h-7 bg-white text-purple-700" onClick={() => setIsAddDueOpen(true)}><Plus className="h-3 w-3 mr-1"/> Add</Button>
                         </CardHeader>
                         <CardContent className="p-0">
-                            {status.pendingDues?.length > 0 ? (
+                            {(admDue || status.pendingDues?.length > 0) ? (
                                 <div className="divide-y">
+                                    {/* Admission Fee ki baaki rakam: ye student_dues
+                                        table ki row NAHI hai — status ke admission
+                                        hisaab (kul - jama) se bani derived pankti
+                                        hai, isliye ispar delete nahi hai. Iski
+                                        adaygi bill se hogi (type "Admission Fee"),
+                                        jisse balance apne aap ghatega aur ye
+                                        pankti gayab ho jayegi. */}
+                                    {admDue && (
+                                        <div className="p-3 flex justify-between items-center bg-orange-50/60 hover:bg-orange-50">
+                                            <div><div className="font-bold text-sm text-gray-800">Admission Fee (baaki)</div><div className="text-[10px] text-gray-500">Kul ₹{admTotal} me se ₹{admPaid} jama — baaki admission fee</div></div>
+                                            <div className="flex items-center gap-3"><span className="font-bold text-red-600">₹{admBalance}</span><Button size="sm" className="h-7 px-2 bg-green-600 text-xs" onClick={() => addToBill("Admission Fee Balance", admBalance, "Admission Fee")}>Pay</Button></div>
+                                        </div>
+                                    )}
                                     {status.pendingDues.map((d: any) => (
                                         <div key={d.id} className="p-3 flex justify-between items-center hover:bg-gray-50">
                                             <div><div className="font-bold text-sm text-gray-800">{d.fee_name}</div><div className="text-[10px] text-gray-500">{new Date(d.due_date).toLocaleDateString()}</div></div>
@@ -317,7 +366,9 @@ export default function Fees() {
                     </Card>
 
                     {/* MONTHLY TRACKER */}
-                    <Card><CardContent className="p-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <Card><CardContent className="p-4">
+                        {status.monthStatus?.length > 0 ? (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                         {status.monthStatus.map((m: any) => (
                             <div key={m.name} className="border rounded bg-white overflow-hidden shadow-sm">
                                 <div className="bg-slate-100 px-2 py-1 text-xs font-bold text-center uppercase text-slate-600">{m.name}</div>
@@ -327,6 +378,13 @@ export default function Fees() {
                                 )}
                             </div>
                         ))}
+                        </div>
+                        ) : (
+                        <div className="text-center text-sm text-gray-500 py-3">
+                            Is class ki <span className="font-bold">fee structure set nahi hai</span> — isliye mahine-war hisaab khaali dikh raha hai.
+                            <div className="text-xs text-gray-400 mt-1">Settings → Fee Structure me is class ki fees lagayein, tab yahan har mahine ki paid / due haalat dikhegi.</div>
+                        </div>
+                        )}
                     </CardContent></Card>
 
                     {/* 🟢 RECENT TRANSACTIONS (FIXED: REMOVED TITLE PROPS) */}
@@ -374,7 +432,7 @@ export default function Fees() {
         </div>
 
         {/* RIGHT: BILL */}
-        <div className="lg:col-span-3 lg:h-full pb-4">
+        <div className="lg:col-span-3 lg:h-full min-w-0 pb-4">
             <Card className="h-full flex flex-col border-l-4 border-l-green-500 shadow-lg">
                 <CardHeader className="bg-green-50 py-3 border-b"><CardTitle className="text-green-800 text-lg">Current Bill</CardTitle></CardHeader>
                 <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">

@@ -22,6 +22,7 @@ import {
   RefreshCw,
   AlertCircle,
   School,
+  IndianRupee,
 } from "lucide-react";
 
 export default function Admissions() {
@@ -37,6 +38,14 @@ export default function Admissions() {
   const isSuperAdmin = user?.role === "super_admin";
   const [loading, setLoading] = useState(false);
   const [transportRoutes, setTransportRoutes] = useState<any[]>([]);
+  // Fee structures (GET /api/fee-structures) — chuni hui class ki
+  // admission fee ka default nikalne ke liye.
+  const [feeStructures, setFeeStructures] = useState<any[]>([]);
+  // Admission Fee is form se hi jama hogi: kul rakam (admFeeTotal)
+  // class ki fee structure se default aati hai, "Abhi Jama"
+  // (admFeePaid) office yahin bharta hai — poora, aadha ya kuch nahi.
+  const [admFeeTotal, setAdmFeeTotal] = useState("");
+  const [admFeePaid, setAdmFeePaid] = useState("");
 
   // Form Data
   const [formData, setFormData] = useState({
@@ -72,6 +81,28 @@ export default function Admissions() {
     loadInitialData();
   }, []);
 
+  // Class badle to Kul Admission Fee us class ki fee structure se
+  // apne aap bhar jaye. Office use uske baad haath se badal sakta
+  // hai — lekin pakki fee hamesha fee structure wali hi rehti hai
+  // (Fees page ka hisaab wahi se banta hai).
+  useEffect(() => {
+    if (!formData.class) return;
+    const s = feeStructures.find((f: any) => f.class === formData.class);
+    setAdmFeeTotal(s ? String(s.admissionFee ?? 0) : "");
+  }, [formData.class, feeStructures]);
+
+  // Chuni hui class ki structure-wali admission fee (structure hi na
+  // ho to null) — form ke neeche sahi salah dikhane ke liye.
+  const structureForClass = feeStructures.find(
+    (f: any) => f.class === formData.class
+  );
+  const structureAdmFee: number | null = structureForClass
+    ? (structureForClass.admissionFee ?? 0)
+    : null;
+  const admTotalNum = parseInt(admFeeTotal) || 0;
+  const admPaidNum = parseInt(admFeePaid) || 0;
+  const admBalancePreview = admTotalNum - admPaidNum;
+
   const loadInitialData = async () => {
     // Super Admin: koi school nahi — koi API call nahi (upar wala note).
     if (isSuperAdmin) return;
@@ -82,6 +113,15 @@ export default function Admissions() {
       setTransportRoutes(
         (routes || []).map((r) => ({ ...r, route_name: r.routeName }))
       );
+      // REST: GET /api/fee-structures — fail ho to form bina default
+      // ke bhi chalega (kul rakam haath se likh sakte hain), isliye
+      // iska apna try/catch hai.
+      try {
+        const structures = await apiGet<any[]>("/api/fee-structures");
+        setFeeStructures(structures || []);
+      } catch (e) {
+        console.error(e);
+      }
       await refreshAdmissionNumber();
     } catch (e) {
       console.error(e);
@@ -132,6 +172,24 @@ export default function Admissions() {
       return;
     }
 
+    // ✅ Admission Fee validation: jama rakam kul rakam se zyada nahi
+    // ho sakti; aur bina kul rakam ke jama ka baaki-hisaab Fees page
+    // par dikhega hi nahi (wahan ka kul bhi fee structure se banta
+    // hai) — isliye dono haalatein yahin rok dete hain.
+    const admTotalSubmit = parseInt(admFeeTotal) || 0;
+    const admPaidSubmit = parseInt(admFeePaid) || 0;
+    if (admPaidSubmit < 0 || admPaidSubmit > admTotalSubmit) {
+      toast({
+        title: "Admission Fee Error",
+        description:
+          admTotalSubmit <= 0
+            ? "Pehle Kul Admission Fee likho — bina kul rakam ke jama ka hisaab nahi banege."
+            : "Abhi Jama ki rakam Kul Admission Fee se zyada hai — rakam sahi karo.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setLoading(true);
     try {
       // Duplicate check
@@ -156,7 +214,7 @@ export default function Admissions() {
       // REST: POST /api/students — form ke naam server ke camelCase
       // columns par map kiye hain; switches 0/1 me jate hain aur
       // transportId sirf enabled ho to (warna null).
-      await apiPost("/api/students", {
+      const createdStudent = await apiPost<any>("/api/students", {
         admissionNo: formData.admissionNumber,
         name: formData.studentName,
         fatherName: formData.fatherName,
@@ -182,7 +240,63 @@ export default function Admissions() {
             : null,
       });
 
-      toast({ title: "Success", description: "Admission Created Successfully!" });
+      // Admission Fee ki entry (sirf jab jama rakam > 0): Fees page
+      // wali hi payment shape — pehle next receipt number, fir ek
+      // payment jiske breakdown me ek "Admission Fee" item aur
+      // isAdmission flag. Fees page ka kul/jama/baaki hisaab isi se
+      // banta hai; baaki rakam wahan Pending Dues me dikhegi.
+      let feeNote = "";
+      let feeFailed = false;
+      if (admPaidSubmit > 0 && createdStudent?.id) {
+        try {
+          const receiptRes = await apiGet<{ receiptNo: string }>(
+            "/api/payments/next-receipt-no"
+          );
+          await apiPost("/api/payments", {
+            studentId: createdStudent.id,
+            amount: admPaidSubmit,
+            month: "Misc",
+            year: new Date().getFullYear(),
+            receiptNo: receiptRes.receiptNo,
+            isAdmission: true,
+            remarks: `Admission Fee (₹${admPaidSubmit})`,
+            breakdown: {
+              extras: [
+                {
+                  name: "Admission Fee",
+                  amount: admPaidSubmit,
+                  type: "Admission Fee",
+                },
+              ],
+            },
+          });
+          feeNote =
+            admTotalSubmit > admPaidSubmit
+              ? ` Admission Fee ₹${admPaidSubmit} jama ho gayi — baaki ₹${admTotalSubmit - admPaidSubmit} Fees page par Pending Dues me dikhega.`
+              : ` Admission Fee ₹${admPaidSubmit} jama ho gayi — poori fee mil gayi.`;
+        } catch (feeError) {
+          console.error("Admission Fee Payment Error:", feeError);
+          feeFailed = true;
+        }
+      }
+
+      // Fee entry fail ho jaye to jhooti safalta bilkul nahi —
+      // admission ban chuka hai, ye saaf batao aur Fees page ka
+      // rasta do (form reset isliye bhi hota hai taaki dobara
+      // Submit se duplicate admission na bane).
+      if (feeFailed) {
+        toast({
+          title: "Admission ho gaya, fee entry nahi lagi",
+          description:
+            "Student ka admission ban gaya hai, lekin Admission Fee ki entry nahi lag payi. Fees page par student chunein aur Admission Fee wahan se jama kar dein.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Success",
+          description: `Admission Created Successfully!${feeNote}`,
+        });
+      }
 
       // Reset form
       setFormData({
@@ -212,6 +326,8 @@ export default function Admissions() {
         transportEnabled: false,
         transportId: "",
       });
+      setAdmFeeTotal("");
+      setAdmFeePaid("");
 
       await refreshAdmissionNumber();
     } catch (error) {
@@ -645,6 +761,62 @@ export default function Admissions() {
                 </Select>
               </CardContent>
             )}
+          </Card>
+
+          {/* Admission Fee — admission ke samay hi jama. Kul rakam
+              class ki fee structure se aati hai; parents jo dein
+              (poora / aadha / kuch nahi) wo "Abhi Jama" me bhara
+              jata hai, baaki Fees page par Pending Dues me dikhta hai. */}
+          <Card>
+            <CardHeader className="bg-teal-50 py-3">
+              <CardTitle className="text-base text-teal-800 flex items-center gap-2">
+                <IndianRupee className="h-4 w-4" /> Admission Fee
+              </CardTitle>
+            </CardHeader>
+
+            <CardContent className="space-y-4 pt-4">
+              <div className="space-y-1">
+                <Label>Kul Admission Fee (₹)</Label>
+                <Input
+                  type="number"
+                  placeholder="0"
+                  value={admFeeTotal}
+                  onChange={(e) => setAdmFeeTotal(e.target.value)}
+                />
+                <p className="text-[10px] text-gray-500">
+                  {!formData.class
+                    ? "Class chunne par ye rakam Settings → Fee Structure se apne aap aa jayegi — chahein to badal sakte hain."
+                    : structureAdmFee == null
+                      ? "Is class ki fee structure mili nahi — kul rakam haath se likhein. Pakki fee Settings → Fee Structure me hi save hoti hai."
+                      : structureAdmFee === 0
+                        ? "Fee Structure me is class ki admission fee 0 lagi hai. Pakki rakam pehle Settings → Fee Structure me lagayein — yahan likhi rakam wahan save nahi hoti."
+                        : "Ye rakam Settings → Fee Structure se aayi hai. Yahan badalne se sirf is form ka hisaab badlega — pakki fee wahan hi save hoti hai."}
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <Label>Abhi Jama (₹) — parents ne diye</Label>
+                <Input
+                  type="number"
+                  placeholder="0"
+                  value={admFeePaid}
+                  onChange={(e) => setAdmFeePaid(e.target.value)}
+                />
+                <p className="text-[10px] text-gray-500">
+                  {admPaidNum > 0 && admTotalNum <= 0
+                    ? "Pehle Kul Admission Fee likho — bina kul rakam ke jama save nahi hogi."
+                    : admPaidNum > 0 && admBalancePreview > 0
+                      ? `Baaki ₹${admBalancePreview} rahega — Fees page par Pending Dues me dikhega.`
+                      : admPaidNum > 0 && admBalancePreview === 0
+                        ? "Poori admission fee mil jayegi."
+                        : admBalancePreview < 0
+                          ? "Jama rakam kul fee se zyada hai — rakam sahi karo."
+                          : admTotalNum > 0
+                            ? "Kuch nahi diya to khaali chhodein — poori rakam Fees page par baaki dikhegi."
+                            : "Parents ne admission ke samay jo rakam di, wo yahan likhein. Kuch nahi diya to khaali chhodein."}
+                </p>
+              </div>
+            </CardContent>
           </Card>
         </div>
       </div>
