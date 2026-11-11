@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPost, apiDel } from "@/lib/api";
 import {
   IndianRupee,
   Plus,
@@ -90,6 +91,10 @@ export default function StaffSalary() {
     remarks: ""
   });
 
+  // Payment rows me staff_name/base_salary bharne ke liye staff ka
+  // map (REST payments join karke nahi deta — Batch A wala pattern).
+  const staffById = useRef<Map<number, any>>(new Map());
+
   useEffect(() => {
     fetchStaff();
     fetchSalaryHistory();
@@ -97,11 +102,23 @@ export default function StaffSalary() {
 
   const fetchStaff = async () => {
     try {
-      const data = await (window as any).electronAPI.invoke("get-staff", {
-        search: "",
-        status: "Active"
-      });
-      setStaffList(data || []);
+      // REST: GET /api/staff — server saare (active + inactive) deta
+      // hai; is page ko sirf Active chahiye, filter yahin laga hai.
+      // Adapter (Batch A jaisa): salary <- basicSalary,
+      // employee_id <- employeeId, status <- isActive.
+      // NOTE: salary fields sirf principal/accountant ko milte hain
+      // (server ki neeti) — baaki roles par salary khali ayegi.
+      const data = await apiGet<any[]>("/api/staff");
+      const adapted = (data || [])
+        .map((m) => ({
+          ...m,
+          employee_id: m.employeeId,
+          salary: m.basicSalary,
+          status: m.isActive === 0 ? "Inactive" : "Active",
+        }))
+        .filter((s) => s.status === "Active");
+      staffById.current = new Map(adapted.map((s) => [s.id, s]));
+      setStaffList(adapted);
     } catch (e) {
       toast({ title: "Error", description: "Failed to load staff", variant: "destructive" });
     }
@@ -109,11 +126,31 @@ export default function StaffSalary() {
 
   const fetchSalaryHistory = async () => {
     try {
-      const data = await (window as any).electronAPI.invoke("get-monthly-salary-payments", {
-        month: selectedMonth,
-        year: selectedYear
+      // REST: GET /api/salary-payments?month=&year=
+      const data = await apiGet<any[]>(
+        `/api/salary-payments?month=${encodeURIComponent(selectedMonth)}&year=${selectedYear}`
+      );
+      // Adapter: page snake_case padhta hai. Server sirf ek `amount`
+      // (net) deta hai — base/bonus/deduction ka split server par hai
+      // hi nahi (SERVER-GAPS.md); page render me sirf net_amount,
+      // staff_id aur id istemal hote hain. staff_name/base_salary
+      // staff map se bhare hain (map khali ho to defaults).
+      const adapted = (data || []).map((p) => {
+        const st = staffById.current.get(p.staffId);
+        return {
+          ...p,
+          staff_id: p.staffId,
+          staff_name: st?.name ?? "",
+          employee_id: st?.employee_id ?? "",
+          base_salary: st?.salary ?? p.amount,
+          bonus: 0,
+          deduction: 0,
+          net_amount: p.amount,
+          payment_date: p.paymentDate ?? "",
+          payment_mode: "",
+        };
       });
-      setSalaryHistory(data || []);
+      setSalaryHistory(adapted);
     } catch (e) {
       console.error("Failed to load salary history", e);
     }
@@ -142,7 +179,8 @@ export default function StaffSalary() {
 
   const fetchStaffSalaryHistory = async (staffId: number) => {
     try {
-      const data = await (window as any).electronAPI.invoke("get-staff-salary-history", staffId);
+      // REST: GET /api/staff/:id/salary-history
+      const data = await apiGet<any[]>(`/api/staff/${staffId}/salary-history`);
       // Will be used in dialog
     } catch (e) {
       console.error("Failed to load staff history", e);
@@ -157,17 +195,35 @@ export default function StaffSalary() {
     const deduction = parseInt(paymentForm.deduction) || 0;
     const netAmount = baseSalary + bonus - deduction;
 
+    // Duplicate guard: IPC dobara payment par "SALARY_ALREADY_PAID"
+    // deta tha; REST par aisa server check abhi nahi hai
+    // (SERVER-GAPS.md) — is mahine ki loaded history se yahin roka
+    // hai taaki wahi toast chale jo page pehle dikhata tha.
+    if (salaryHistory.some((p) => p.staff_id === selectedStaff.id)) {
+      toast({ title: "Error", description: "Salary already paid for this month", variant: "destructive" });
+      return;
+    }
+
     try {
-      await (window as any).electronAPI.invoke("pay-salary", {
+      // REST: POST /api/salary-payments — server ke paas bonus /
+      // deduction / payment-mode ke columns nahi hain (SERVER-GAPS.md).
+      // Net rakam `amount` me jati hai aur pura breakup remarks me
+      // mehfooz rehta hai, taaki koi hisaab khoye nahi.
+      const now = new Date();
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+      const breakup = [
+        paymentForm.paymentMode ? `Mode: ${paymentForm.paymentMode}` : "",
+        bonus ? `Bonus: +₹${bonus}` : "",
+        deduction ? `Deduction: -₹${deduction}` : "",
+        paymentForm.remarks || "",
+      ].filter(Boolean).join(" | ");
+      await apiPost("/api/salary-payments", {
         staffId: selectedStaff.id,
         month: selectedMonth,
         year: selectedYear,
-        baseSalary: baseSalary,
-        bonus: bonus,
-        deduction: deduction,
-        netAmount: netAmount,
-        paymentMode: paymentForm.paymentMode,
-        remarks: paymentForm.remarks
+        amount: netAmount,
+        paymentDate: today,
+        remarks: breakup || undefined,
       });
 
       toast({ title: "Success", description: `Salary paid to ${selectedStaff.name}` });
@@ -186,7 +242,8 @@ export default function StaffSalary() {
     if (!confirm("Delete this salary payment record?")) return;
     
     try {
-      await (window as any).electronAPI.invoke("delete-salary-payment", paymentId);
+      // REST: DELETE /api/salary-payments/:id
+      await apiDel(`/api/salary-payments/${paymentId}`);
       toast({ title: "Success", description: "Payment record deleted" });
       fetchSalaryHistory();
     } catch (e) {

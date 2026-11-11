@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { apiGet, apiPost, apiPut, apiDel } from "@/lib/api";
 import {
   Settings,
   School,
@@ -40,6 +41,22 @@ export default function SettingsPage() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("school");
+
+  // School ki id page ke state me nahi hoti; PUT /api/schools/:id ke
+  // liye load ke samay branding jawab se yahan rakh li jati hai.
+  const schoolIdRef = useRef<number | null>(null);
+
+  // REST fee structure camelCase hai; page snake_case padhta hai.
+  // Server par annual fee ka alag column nahi hai — `otherFee` hi
+  // uski jagah hai (NOTES.md me flag kiya hai).
+  const adaptFeeStructure = (f: any) => ({
+    ...f,
+    class_name: f.class,
+    monthly_fee: f.monthlyFee,
+    admission_fee: f.admissionFee,
+    exam_fee: f.examFee,
+    annual_fee: f.otherFee,
+  });
 
   // School Info State
   const [schoolInfo, setSchoolInfo] = useState({
@@ -95,20 +112,47 @@ export default function SettingsPage() {
     setLoading(true);
     try {
       // Load School Info
-      const school = await (window as any).electronAPI.invoke("get-school-info");
-      if (school) setSchoolInfo(school);
+      // REST: GET /api/branding — login wale user ke apne school ki
+      // row. Adapter: page adm_prefix/adm_year/adm_start padhta hai,
+      // server admissionPrefix/admissionYear/admissionStart deta hai.
+      const school = await apiGet<any>("/api/branding");
+      if (school) {
+        schoolIdRef.current = school.id;
+        setSchoolInfo({
+          name: school.name ?? "",
+          address: school.address ?? "",
+          phone: school.phone ?? "",
+          email: school.email ?? "",
+          session: school.session ?? "",
+          adm_prefix: school.admissionPrefix ?? "",
+          adm_year: school.admissionYear ?? "",
+          adm_start: school.admissionStart ?? 1,
+        });
+      }
 
       // Load Fee Master
-      const fees = await (window as any).electronAPI.invoke("get-fee-master");
-      setFeeMaster(fees || []);
+      // REST: GET /api/fee-structures
+      const fees = await apiGet<any[]>("/api/fee-structures");
+      setFeeMaster((fees || []).map(adaptFeeStructure));
 
       // Load Transport
-      const routes = await (window as any).electronAPI.invoke("get-transport");
-      setTransportRoutes(routes || []);
+      // REST: GET /api/transport-routes (route_name <- routeName)
+      const routes = await apiGet<any[]>("/api/transport-routes");
+      setTransportRoutes(
+        (routes || []).map((r) => ({ ...r, route_name: r.routeName }))
+      );
 
       // Load Additional Fees
-      const addFees = await (window as any).electronAPI.invoke("get-additional-fees");
-      setAdditionalFees(addFees || []);
+      // REST: GET /api/additional-fees
+      const addFees = await apiGet<any[]>("/api/additional-fees");
+      setAdditionalFees(
+        (addFees || []).map((f) => ({
+          ...f,
+          class_name: f.class,
+          fee_name: f.feeName,
+          due_month: f.dueMonth ?? "",
+        }))
+      );
     } catch (e) {
       console.error(e);
       toast({ title: "Error", description: "Failed to load settings", variant: "destructive" });
@@ -123,7 +167,21 @@ export default function SettingsPage() {
   // Save School Info
   const saveSchoolInfo = async () => {
     try {
-      await (window as any).electronAPI.invoke("save-school-info", schoolInfo);
+      // REST: PUT /api/schools/:id — sirf principal (apna school)
+      // ya super_admin. Body camelCase me map kiya hai; logo/colors
+      // page ke state me hain hi nahi, aur PUT partial hai isliye
+      // server par wo waise ke waise bane rehte hain.
+      if (!schoolIdRef.current) throw new Error("School not loaded");
+      await apiPut(`/api/schools/${schoolIdRef.current}`, {
+        name: schoolInfo.name,
+        address: schoolInfo.address,
+        phone: schoolInfo.phone,
+        email: schoolInfo.email || undefined,
+        session: schoolInfo.session || undefined,
+        admissionPrefix: schoolInfo.adm_prefix || undefined,
+        admissionYear: schoolInfo.adm_year || undefined,
+        admissionStart: schoolInfo.adm_start,
+      });
       toast({ title: "Success", description: "School information saved successfully" });
     } catch (e) {
       toast({ title: "Error", description: "Failed to save school info", variant: "destructive" });
@@ -134,12 +192,15 @@ export default function SettingsPage() {
   const saveFee = async () => {
     try {
       if (editingFee) {
-        await (window as any).electronAPI.invoke("update-fee-master", {
-          className: feeForm.class_name,
-          monthly: parseInt(feeForm.monthly_fee) || 0,
-          admission: parseInt(feeForm.admission_fee) || 0,
-          exam: parseInt(feeForm.exam_fee) || 0,
-          annual: parseInt(feeForm.annual_fee) || 0,
+        // REST: PUT /api/fee-structures/:id — IPC className se
+        // dhundta tha, REST id se update karta hai (editingFee.id
+        // adapter me barkaraar hai). annual_fee -> otherFee.
+        await apiPut(`/api/fee-structures/${editingFee.id}`, {
+          class: feeForm.class_name,
+          monthlyFee: parseInt(feeForm.monthly_fee) || 0,
+          admissionFee: parseInt(feeForm.admission_fee) || 0,
+          examFee: parseInt(feeForm.exam_fee) || 0,
+          otherFee: parseInt(feeForm.annual_fee) || 0,
         });
       }
       toast({ title: "Success", description: "Fee structure saved" });
@@ -154,8 +215,9 @@ export default function SettingsPage() {
   // Add Transport Route
   const addTransport = async () => {
     try {
-      await (window as any).electronAPI.invoke("add-transport", {
-        name: transportForm.route_name,
+      // REST: POST /api/transport-routes { routeName, amount }
+      await apiPost("/api/transport-routes", {
+        routeName: transportForm.route_name,
         amount: parseInt(transportForm.amount) || 0,
       });
       toast({ title: "Success", description: "Transport route added" });
@@ -170,7 +232,8 @@ export default function SettingsPage() {
   // Delete Transport
   const deleteTransport = async (id: number) => {
     try {
-      await (window as any).electronAPI.invoke("delete-transport", id);
+      // REST: DELETE /api/transport-routes/:id (sirf principal)
+      await apiDel(`/api/transport-routes/${id}`);
       toast({ title: "Success", description: "Transport route deleted" });
       loadData();
     } catch (e) {
@@ -181,11 +244,14 @@ export default function SettingsPage() {
   // Add Additional Fee
   const addAdditionalFee = async () => {
     try {
-      await (window as any).electronAPI.invoke("add-additional-fee", {
-        className: additionalFeeForm.class_name,
+      // REST: POST /api/additional-fees — dueMonth khali ho to
+      // bhejte hi nahi (server use optional manta hai, "" reject
+      // kar deta hai).
+      await apiPost("/api/additional-fees", {
+        class: additionalFeeForm.class_name,
         feeName: additionalFeeForm.fee_name,
         amount: parseInt(additionalFeeForm.amount) || 0,
-        dueMonth: additionalFeeForm.due_month,
+        dueMonth: additionalFeeForm.due_month || undefined,
       });
       toast({ title: "Success", description: "Additional fee added" });
       setIsAdditionalFeeDialogOpen(false);
@@ -199,7 +265,8 @@ export default function SettingsPage() {
   // Delete Additional Fee
   const deleteAdditionalFee = async (id: number) => {
     try {
-      await (window as any).electronAPI.invoke("delete-additional-fee", { id });
+      // REST: DELETE /api/additional-fees/:id
+      await apiDel(`/api/additional-fees/${id}`);
       toast({ title: "Success", description: "Additional fee deleted" });
       loadData();
     } catch (e) {
