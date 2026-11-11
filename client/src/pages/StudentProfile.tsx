@@ -9,6 +9,12 @@ import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Search,
   Upload,
   FileText,
@@ -22,7 +28,10 @@ import {
   FileBadge,
   FileCheck,
   FileX,
-  School
+  School,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw
 } from "lucide-react";
 
 const DOC_TYPES = [
@@ -53,6 +62,15 @@ export default function StudentProfile() {
 
   const [student, setStudent] = useState<any>(null);
   const [documents, setDocuments] = useState<any[]>([]);
+
+  // v1.3: in-app photo viewer ki state. Pehle documents window.open se
+  // naye page me asal size par khulte the — phone par photo bahut
+  // zoom-in dikhti thi. Ab image yahin Dialog me khulti hai: default
+  // poori chaudai me fit, upar Zoom − / % / Zoom + / Reset controls,
+  // zoom par container ke andar scroll/pan. Viewer band hone par blob
+  // URL revoke ho jata hai (closeDocViewer dekho).
+  const [viewer, setViewer] = useState<{ url: string; fileName: string } | null>(null);
+  const [zoom, setZoom] = useState(1);
 
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
@@ -211,6 +229,21 @@ export default function StudentProfile() {
     }
   };
 
+  // v1.3: file photo hai ya nahi — pehle mime type, na ho to file ke
+  // naam ke extension se. Sirf photo par in-app zoom viewer lagega.
+  const isImageFile = (mimeType?: string, fileName?: string) => {
+    if (mimeType?.startsWith("image/")) return true;
+    return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(fileName || "");
+  };
+
+  const closeDocViewer = () => {
+    setViewer((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+    setZoom(1);
+  };
+
   const openDoc = async (filePath: string) => {
     try {
       // REST: filePath asal path nahi, "sgdoc:<documentId>" token hai —
@@ -226,6 +259,17 @@ export default function StudentProfile() {
       const bytes = Uint8Array.from(atob(file.base64Data), (c) => c.charCodeAt(0));
       const blob = new Blob([bytes], { type: file.mimeType || "application/octet-stream" });
       const url = URL.createObjectURL(blob);
+
+      // v1.3: photo hai to app ke andar viewer me kholo (fit + zoom) —
+      // window.open wala purana rasta use asal size me kholta tha.
+      if (isImageFile(file.mimeType, file.fileName)) {
+        closeDocViewer();
+        setZoom(1);
+        setViewer({ url, fileName: file.fileName || "Document" });
+        return;
+      }
+
+      // PDF ya anya file — bartav pehle jaisa (naya page / download).
       const win = window.open(url, "_blank");
       if (!win) {
         const a = document.createElement("a");
@@ -544,6 +588,78 @@ export default function StudentProfile() {
 
       </>
       )}
+
+      {/* v1.3: Photo viewer — default fit, Zoom − / % / + / Reset ke saath.
+          Zoom img ki chaudai (zoom × 100%) se lagta hai taaki container
+          ke overflow par asal scroll/pan bane (akela transform layout
+          nahi badalta, isliye pan nahi banta). Sirf images ke liye hai —
+          PDF/anya file openDoc ke purane raste se khulti hai. */}
+      <Dialog
+        open={!!viewer}
+        onOpenChange={(open) => {
+          if (!open) closeDocViewer();
+        }}
+      >
+        <DialogContent className="max-w-3xl max-h-[92vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="truncate pr-8 text-base">
+              {viewer?.fileName || "Document"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="flex items-center justify-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))
+              }
+              disabled={zoom <= 0.5}
+              aria-label="Zoom kam karo"
+            >
+              <ZoomOut className="h-4 w-4" />
+            </Button>
+            <span className="text-sm font-mono w-14 text-center">
+              {Math.round(zoom * 100)}%
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                setZoom((z) => Math.min(3, Math.round((z + 0.25) * 100) / 100))
+              }
+              disabled={zoom >= 3}
+              aria-label="Zoom badhao"
+            >
+              <ZoomIn className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setZoom(1)}
+              disabled={zoom === 1}
+            >
+              <RotateCcw className="h-4 w-4 mr-1" /> Reset
+            </Button>
+          </div>
+
+          <div className="overflow-auto flex-1 min-h-0 bg-slate-100 rounded-md">
+            {viewer && (
+              <img
+                src={viewer.url}
+                alt={viewer.fileName}
+                className="block h-auto mx-auto"
+                style={{ width: `${zoom * 100}%`, maxWidth: zoom <= 1 ? "100%" : "none" }}
+              />
+            )}
+          </div>
+
+          <p className="text-xs text-gray-400 text-center">
+            Photo default poori chaudai me fit khulti hai — bada karke
+            dekhna ho to Zoom + dabao aur ghuma-phira kar dekho.
+          </p>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -4,6 +4,12 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 
+// 📱 Android ka hardware back button (@capacitor/app) — sirf native
+// platform par; web/Electron par iska koi asar nahi (neeche guard hai).
+import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
+import { toast } from "@/hooks/use-toast";
+
 // 🔐 Phase 3: asal login (REST + JWT) — pehle app me koi login tha hi nahi.
 import { AuthProvider, useAuth } from "./lib/auth";
 import Login from "@/pages/Login";
@@ -127,7 +133,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.2</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.3</div>
     </div>
   );
 }
@@ -288,7 +294,60 @@ function Gate() {
   return <Router />;
 }
 
+// 📱 Android back button ka bartav (v1.3):
+//  - Andar ke kisi page par ho (history me peeche ja sakte ho) → ek kadam
+//    peeche (window.history.back()) — pehle back dabate hi poori app
+//    minimize/band ho jati thi, wo marz yahin theek hota hai.
+//  - Sabse pehle (root/home) page par: pehla back → toast "App band karne
+//    ke liye ek baar aur back dabao"; 2 second ke andar dusra back →
+//    App.exitApp(). Galti se ek back par app band nahi hogi.
+//  - Sirf native (Android) par lagta hai; web/Electron par listener hi
+//    nahi lagta, isliye wahan ka bartav bilkul pehle jaisa.
+function useAndroidBackButton() {
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    let lastRootBackAt = 0;
+    let handle: { remove: () => Promise<void> | void } | null = null;
+    let cancelled = false;
+
+    CapacitorApp.addListener("backButton", ({ canGoBack }) => {
+      if (canGoBack) {
+        window.history.back();
+        return;
+      }
+      const now = Date.now();
+      if (now - lastRootBackAt < 2000) {
+        void CapacitorApp.exitApp();
+        return;
+      }
+      lastRootBackAt = now;
+      toast({
+        title: "App band karein?",
+        description: "App band karne ke liye ek baar aur back dabao.",
+      });
+    })
+      .then((h) => {
+        if (cancelled) {
+          void h.remove();
+        } else {
+          handle = h;
+        }
+      })
+      .catch(() => {
+        // Plugin na mile (purana build) to kuch nahi — app pehle jaise chalegi.
+      });
+
+    return () => {
+      cancelled = true;
+      if (handle) void handle.remove();
+    };
+  }, []);
+}
+
 export default function App() {
+  useAndroidBackButton();
+
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>

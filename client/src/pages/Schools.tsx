@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import {
   Table,
   TableBody,
@@ -31,6 +31,9 @@ import {
   CheckCircle2,
   KeyRound,
   User,
+  Users,
+  ChevronDown,
+  ChevronUp,
   X,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -50,6 +53,17 @@ import { apiGet, apiPost, apiPut, ApiError, type ApiUser } from "@/lib/api";
 //   POST /api/schools/:id/deactivate       → isActive = 0 wala school
 //   PUT  /api/schools/:id { isActive: 1 }  → dobara chaalu (super_admin ko
 //         route isActive badalne deta hai — dedicated /activate nahi hai)
+//
+// v1.3 — per-school Accounts + Password Reset (Super Admin ka support flow):
+//   GET  /api/users?schoolId=<id>          → us school ke saare users
+//         (routes.ts §5.3: principal/super_admin; super_admin schoolId
+//         query se kisi bhi school ke users le sakta hai)
+//   POST /api/users/:id/reset-password {}  → server khud temporary password
+//         (12 hex) banata hai aur EK hi response me deta hai:
+//         { user, temporaryPassword }; mustChangePassword=1 lag jata hai
+//         aur user ke purane sessions revoke ho jate hain. Yehi "bhool
+//         gaya password" ka asal ilaaj hai (khud-se email/OTP wala
+//         system hai hi nahi) — Login screen par bhi yahi bataya gaya hai.
 // =============================================================================
 
 interface SchoolRow {
@@ -71,6 +85,23 @@ interface CreateSchoolResponse {
   school: SchoolRow;
   principal: ApiUser;
 }
+
+interface ResetPasswordResponse {
+  user: ApiUser;
+  // Body khaali bhejne par server khud banata hai aur sirf is ek
+  // response me deta hai — dobara kabhi nahi milta.
+  temporaryPassword?: string;
+}
+
+// Role ko saaf label me — Principal ko pehchanne ke liye yahi badge hai.
+const ROLE_LABELS: Record<ApiUser["role"], string> = {
+  super_admin: "Super Admin",
+  principal: "Principal",
+  accountant: "Accountant",
+  teacher: "Teacher",
+  staff: "Staff",
+  parent: "Parent",
+};
 
 const EMPTY_FORM = {
   // School (insertSchoolSchema) — name/address/phone lazmi, baaki optional.
@@ -109,6 +140,38 @@ export default function Schools() {
     null,
   );
   const [statusBusyId, setStatusBusyId] = useState<number | null>(null);
+
+  // --- v1.3: per-school Accounts vistaar -------------------------------
+  // Ek samay par ek hi school khula rehta hai; users schoolId ke hisaab
+  // se cache hote hain taaki baar-baar band-kholne par faltu call na ho.
+  const [expandedSchoolId, setExpandedSchoolId] = useState<number | null>(
+    null,
+  );
+  const [accountsBySchool, setAccountsBySchool] = useState<
+    Record<number, ApiUser[]>
+  >({});
+  const [accountsLoadingId, setAccountsLoadingId] = useState<number | null>(
+    null,
+  );
+  const [accountsError, setAccountsError] = useState<{
+    schoolId: number;
+    message: string;
+  } | null>(null);
+
+  // Password reset: pehle confirm, fir server ka diya temporary password
+  // ek hi baar dikhane wala dialog. Password wali state dialog band
+  // hote hi saaf kar dete hain (neeche onOpenChange dekho).
+  const [resetTarget, setResetTarget] = useState<{
+    school: SchoolRow;
+    user: ApiUser;
+  } | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetResult, setResetResult] = useState<{
+    user: ApiUser;
+    schoolName: string;
+    temporaryPassword: string;
+  } | null>(null);
 
   const fetchSchools = async () => {
     setLoading(true);
@@ -261,6 +324,73 @@ export default function Schools() {
     setStatusBusyId(null);
   };
 
+  // --- v1.3: Accounts vistaar ke kaam --------------------------------
+  const fetchAccounts = async (schoolId: number) => {
+    setAccountsLoadingId(schoolId);
+    setAccountsError(null);
+    try {
+      const users = await apiGet<ApiUser[]>(
+        `/api/users?schoolId=${schoolId}`,
+      );
+      setAccountsBySchool((prev) => ({ ...prev, [schoolId]: users || [] }));
+    } catch (e) {
+      console.error(e);
+      setAccountsError({
+        schoolId,
+        message:
+          e instanceof ApiError
+            ? e.message
+            : "Is school ke accounts nahi aa paye. Dobara koshish karo.",
+      });
+    }
+    setAccountsLoadingId(null);
+  };
+
+  const toggleAccounts = (school: SchoolRow) => {
+    if (expandedSchoolId === school.id) {
+      setExpandedSchoolId(null);
+      return;
+    }
+    setExpandedSchoolId(school.id);
+    if (!accountsBySchool[school.id]) {
+      void fetchAccounts(school.id);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetTarget) return;
+    setResetBusy(true);
+    setResetError(null);
+    try {
+      // Body khaali {} — server khud temporary password banayega aur
+      // isi ek response me dega (routes.ts §5.3 se verify).
+      const res = await apiPost<ResetPasswordResponse>(
+        `/api/users/${resetTarget.user.id}/reset-password`,
+        {},
+      );
+      const schoolName = resetTarget.school.name;
+      const user = res.user ?? resetTarget.user;
+      setResetTarget(null);
+      setResetResult({
+        user,
+        schoolName,
+        temporaryPassword: res.temporaryPassword || "",
+      });
+      toast({
+        title: "Password reset ho gaya",
+        description: `${user.username} ke liye naya temporary password ban gaya hai.`,
+      });
+    } catch (e) {
+      console.error(e);
+      setResetError(
+        e instanceof ApiError
+          ? e.message
+          : "Password reset nahi ho paya. Dobara koshish karo.",
+      );
+    }
+    setResetBusy(false);
+  };
+
   const formatDate = (value: string | null) => {
     if (!value) return "—";
     const d = new Date(value);
@@ -349,8 +479,11 @@ export default function Schools() {
               ) : (
                 schools.map((school) => {
                   const active = !!school.isActive;
+                  const expanded = expandedSchoolId === school.id;
+                  const schoolUsers = accountsBySchool[school.id];
                   return (
-                    <TableRow key={school.id}>
+                    <Fragment key={school.id}>
+                    <TableRow>
                       <TableCell>
                         <div className="font-medium text-slate-800">
                           {school.name}
@@ -380,29 +513,143 @@ export default function Schools() {
                       </TableCell>
                       <TableCell>{formatDate(school.createdAt)}</TableCell>
                       <TableCell className="text-right">
-                        {active ? (
+                        <div className="flex flex-wrap gap-2 justify-end">
                           <Button
                             variant="outline"
                             size="sm"
-                            className="gap-2 text-red-600 hover:text-red-700"
-                            disabled={statusBusyId === school.id}
-                            onClick={() => setDeactivateTarget(school)}
+                            className="gap-2"
+                            onClick={() => toggleAccounts(school)}
                           >
-                            <Ban className="h-4 w-4" /> Deactivate
+                            <Users className="h-4 w-4" /> Accounts
+                            {expanded ? (
+                              <ChevronUp className="h-4 w-4" />
+                            ) : (
+                              <ChevronDown className="h-4 w-4" />
+                            )}
                           </Button>
-                        ) : (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="gap-2 text-green-700 hover:text-green-800"
-                            disabled={statusBusyId === school.id}
-                            onClick={() => handleActivate(school)}
-                          >
-                            <CheckCircle2 className="h-4 w-4" /> Activate
-                          </Button>
-                        )}
+                          {active ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-2 text-red-600 hover:text-red-700"
+                              disabled={statusBusyId === school.id}
+                              onClick={() => setDeactivateTarget(school)}
+                            >
+                              <Ban className="h-4 w-4" /> Deactivate
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-2 text-green-700 hover:text-green-800"
+                              disabled={statusBusyId === school.id}
+                              onClick={() => handleActivate(school)}
+                            >
+                              <CheckCircle2 className="h-4 w-4" /> Activate
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
+
+                    {/* v1.3: khula hua school — uske accounts + password reset */}
+                    {expanded && (
+                      <TableRow className="bg-slate-50 hover:bg-slate-50">
+                        <TableCell colSpan={6} className="p-4">
+                          {accountsLoadingId === school.id ? (
+                            <p className="text-sm text-gray-500 text-center py-3">
+                              Accounts load ho rahe hain…
+                            </p>
+                          ) : accountsError?.schoolId === school.id ? (
+                            <div className="flex flex-wrap items-center gap-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                              <span className="flex-1 min-w-[200px]">
+                                {accountsError.message}
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => fetchAccounts(school.id)}
+                              >
+                                Dobara koshish karo
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">
+                                {school.name} ke accounts (
+                                {schoolUsers?.length ?? 0})
+                              </p>
+                              {(schoolUsers ?? []).length === 0 ? (
+                                <p className="text-sm text-gray-500 py-1">
+                                  Is school me abhi koi account nahi hai.
+                                </p>
+                              ) : (
+                                (schoolUsers ?? []).map((u) => (
+                                  <div
+                                    key={u.id}
+                                    className="flex flex-wrap items-center gap-2 bg-white border rounded-lg px-3 py-2"
+                                  >
+                                    <div className="flex-1 min-w-[180px]">
+                                      <div className="text-sm font-medium text-slate-800 flex flex-wrap items-center gap-2">
+                                        {u.name || u.username}
+                                        <Badge
+                                          variant={
+                                            u.role === "principal"
+                                              ? "default"
+                                              : "secondary"
+                                          }
+                                        >
+                                          {ROLE_LABELS[u.role]}
+                                        </Badge>
+                                        <Badge
+                                          variant={
+                                            u.isActive
+                                              ? "outline"
+                                              : "secondary"
+                                          }
+                                          className={
+                                            u.isActive
+                                              ? "text-green-700 border-green-300"
+                                              : "text-gray-500"
+                                          }
+                                        >
+                                          {u.isActive ? "Active" : "Inactive"}
+                                        </Badge>
+                                        {!!u.mustChangePassword && (
+                                          <Badge
+                                            variant="outline"
+                                            className="text-amber-600 border-amber-300"
+                                          >
+                                            Pehla login baaki
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <div className="text-xs text-gray-500 font-mono mt-0.5">
+                                        {u.username}
+                                        {u.phone ? ` • ${u.phone}` : ""}
+                                      </div>
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="gap-2"
+                                      onClick={() => {
+                                        setResetError(null);
+                                        setResetTarget({ school, user: u });
+                                      }}
+                                    >
+                                      <KeyRound className="h-4 w-4" /> Password
+                                      Reset
+                                    </Button>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    </Fragment>
                   );
                 })
               )}
@@ -623,6 +870,125 @@ export default function Schools() {
               disabled={statusBusyId === deactivateTarget?.id}
             >
               Haan, Deactivate karo
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* v1.3: Password reset ki pushti                                    */}
+      {/* ---------------------------------------------------------------- */}
+      <Dialog
+        open={!!resetTarget}
+        onOpenChange={(open) => {
+          if (!open && !resetBusy) {
+            setResetTarget(null);
+            setResetError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-blue-600" /> Password reset
+              karein?
+            </DialogTitle>
+            <DialogDescription>
+              {resetTarget && (
+                <>
+                  <span className="font-semibold text-slate-700">
+                    {resetTarget.user.name || resetTarget.user.username}
+                  </span>{" "}
+                  ({resetTarget.user.username} — {resetTarget.school.name})
+                  ka purana password <b>turant band</b> ho jayega aur wo har
+                  jagah se logout ho jayenge. Server ek naya temporary
+                  password banayega — use pehle login par badalna lazmi hoga.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {resetError && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              {resetError}
+            </p>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setResetTarget(null);
+                setResetError(null);
+              }}
+              disabled={resetBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleResetPassword}
+              disabled={resetBusy}
+            >
+              {resetBusy ? "Reset ho raha hai…" : "Haan, Reset karo"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* v1.3: Naya temporary password — sirf EK baar dikhta hai           */}
+      {/* Band hote hi state saaf — password kahin aur store nahi hota.    */}
+      {/* ---------------------------------------------------------------- */}
+      <Dialog
+        open={!!resetResult}
+        onOpenChange={(open) => {
+          if (!open) setResetResult(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-green-600" /> Naya
+              temporary password taiyaar
+            </DialogTitle>
+            <DialogDescription>
+              {resetResult && (
+                <>
+                  {resetResult.user.name || resetResult.user.username} (
+                  {resetResult.user.username} — {resetResult.schoolName})
+                  ke liye:
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {resetResult &&
+            (resetResult.temporaryPassword ? (
+              <div className="text-center">
+                <div className="text-2xl font-mono font-bold tracking-widest bg-slate-100 border rounded-md py-4 px-2 select-all break-all">
+                  {resetResult.temporaryPassword}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-600">
+                Password reset ho gaya hai, lekin server ne temporary
+                password wapas nahi bheja. User ko naya password dilane ke
+                liye support se sampark karo.
+              </p>
+            ))}
+
+          <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 flex items-start gap-2">
+            <KeyRound className="h-4 w-4 shrink-0 mt-0.5" />
+            Ise abhi note karke{" "}
+            {resetResult?.user.name || "user"} ko de do — ye dobara nahi
+            dikhega. Pehle login par unhe apna naya password banana lazmi
+            hoga.
+          </p>
+
+          <DialogFooter>
+            <Button onClick={() => setResetResult(null)}>
+              Note kar liya, band karo
             </Button>
           </DialogFooter>
         </DialogContent>

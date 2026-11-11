@@ -3,10 +3,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
-import { GraduationCap, Loader2, Lock, User } from "lucide-react";
+import { GraduationCap, KeyRound, Loader2, Lock, User } from "lucide-react";
 
 // =============================================================================
 // Login screen (Phase 3 foundation)
@@ -29,6 +37,12 @@ export default function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // "Password bhool gaye?" wali jaankari ka dialog (v1.3) — is app me
+  // khud-se reset (email/OTP) ka system hai hi nahi; password hamesha
+  // upar wale (Principal / Super Admin) se reset hota hai, isliye
+  // dialog me wahi imaandar rasta bataya gaya hai, koi nakli wada nahi.
+  const [forgotOpen, setForgotOpen] = useState(false);
 
   // Change-password form ki state.
   const [currentPw, setCurrentPw] = useState("");
@@ -166,6 +180,16 @@ export default function Login() {
                 {busy && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Login
               </Button>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => setForgotOpen(true)}
+                  className="text-sm text-slate-500 underline-offset-2 hover:text-blue-600 hover:underline"
+                >
+                  Password bhool gaye?
+                </button>
+              </div>
             </form>
           ) : (
             <form onSubmit={handleChangePassword} className="space-y-4">
@@ -214,9 +238,54 @@ export default function Login() {
           <p className="text-center text-xs text-slate-400 mt-6">
             School Guardian Suite — har school ka apna login
           </p>
-          <p className="text-center text-[11px] text-slate-400 mt-1">Version 1.2</p>
+          <p className="text-center text-[11px] text-slate-400 mt-1">Version 1.3</p>
         </CardContent>
       </Card>
+
+      {/* ------------------------------------------------------------ */}
+      {/* Password bhool gaye — imaandar jaankari (koi email/OTP nahi)  */}
+      {/* ------------------------------------------------------------ */}
+      <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="h-5 w-5 text-blue-600" /> Password bhool
+              gaye?
+            </DialogTitle>
+            <DialogDescription>
+              Is app me password khud se (email ya OTP se) reset nahi hota —
+              suraksha ke liye password sirf tumhare school ke bade adhikari
+              hi reset karte hain.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 text-sm text-slate-600">
+            <p>
+              <span className="font-semibold text-slate-800">
+                Teacher, Staff ya Parent ho?
+              </span>{" "}
+              Apne school ke <b>Principal</b> se kaho — wo tumhare liye
+              password reset karke ek naya temporary password de denge.
+            </p>
+            <p>
+              <span className="font-semibold text-slate-800">
+                Principal ho?
+              </span>{" "}
+              Apne <b>Super Admin</b> se sampark karo — jinse tumne ye app
+              liya hai. Wo tumhara password turant reset karke naya temporary
+              password de denge.
+            </p>
+            <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+              Naya temporary password milne ke baad pehle login par tumhe
+              apna naya password banana lazmi hoga.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button onClick={() => setForgotOpen(false)}>Samajh gaya</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
