@@ -6,10 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, CheckCircle2 } from "lucide-react";
+import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, CheckCircle2, School } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useReactToPrint } from "react-to-print";
 import { apiGet, apiPost, apiDel } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 
 // --- REST adapters (Phase 3 Batch A) --------------------------------------
 // IPC me student ke saath route_name/bus_fee join hokar aate the; REST me
@@ -40,6 +42,13 @@ function adaptFeeStudent(s: any, routes: any[]) {
 
 export default function Fees() {
   const { toast } = useToast();
+  // Super Admin ka khud ka koi school nahi hota — is page ke saare
+  // endpoints server par uske liye 403/404 dete hain (/api/branding
+  // 404, /api/students aur /api/payments 403; routes se verify).
+  // Isliye SA par poora fees layout hi nahi dikhate — Settings wala
+  // no-school card dikhega (neeche render me early return dekho).
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const [search, setSearch] = useState("");
   const [selectedStudent, setSelectedStudent] = useState<any>(null);
   const [schoolInfo, setSchoolInfo] = useState<any>({}); 
@@ -64,6 +73,8 @@ export default function Fees() {
   const receiptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Super Admin: koi school nahi — branding call hi nahi karte.
+    if (isSuperAdmin) return;
     (async () => {
         try {
             // REST: GET /api/branding (school ki row seedhi aati hai —
@@ -207,18 +218,53 @@ export default function Fees() {
 
   const isAdmFullyPaid = status.admissionBalance <= 0;
 
+  // Super Admin ke liye poora page hi no-school card hai (ye early
+  // return saare hooks ke BAAD hai — hooks hamesha ek jaise chalte hain).
+  if (isSuperAdmin) {
+    return (
+      <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
+        <div className="flex flex-wrap gap-3 justify-between items-center">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-slate-800">
+            <IndianRupee className="text-green-600" /> Fees Dashboard
+          </h1>
+        </div>
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there is no school fees data to show here.
+              First create a school from the Schools screen — after that,
+              that school&apos;s Principal can sign in with their own
+              account and manage fees.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="p-4 h-screen flex flex-col bg-slate-50 overflow-hidden">
       {/* HEADER */}
-      <div className="flex justify-between items-center shrink-0 bg-white p-3 rounded-xl shadow-sm border mb-3">
+      <div className="flex flex-wrap gap-2 justify-between items-center shrink-0 bg-white p-3 rounded-xl shadow-sm border mb-3">
         <h1 className="text-2xl font-bold flex items-center gap-2 text-slate-800"><IndianRupee className="text-green-600" /> Fees Dashboard</h1>
         {selectedStudent && <div className="font-bold text-lg">{selectedStudent.name} ({selectedStudent.class}) - {selectedStudent.admission_no}</div>}
       </div>
 
-      <div className="grid grid-cols-12 gap-4 flex-1 overflow-hidden">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 overflow-y-auto lg:overflow-hidden">
         
         {/* LEFT: STUDENT LIST */}
-        <div className="col-span-3 h-full flex flex-col bg-white rounded-xl shadow-sm border overflow-hidden">
+        <div className="h-64 lg:h-full lg:col-span-3 flex flex-col bg-white rounded-xl shadow-sm border overflow-hidden">
             <div className="p-3 border-b bg-slate-50"><Input placeholder="Search Student..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-white" /></div>
             <div className="flex-1 overflow-y-auto">
                 {students?.map((s: any) => (
@@ -230,11 +276,11 @@ export default function Fees() {
         </div>
 
         {/* CENTER: DASHBOARD */}
-        <div className="col-span-6 h-full flex flex-col gap-4 overflow-y-auto pr-1 pb-20">
+        <div className="lg:col-span-6 lg:h-full flex flex-col gap-4 lg:overflow-y-auto pr-1 pb-4 lg:pb-20">
             {selectedStudent ? (
                 <>
                     {/* ADMISSION & TRANSPORT */}
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <Card className={`border-l-4 cursor-pointer ${isAdmFullyPaid ? 'border-l-green-500 bg-green-50' : 'border-l-orange-500 bg-orange-50'}`} onClick={() => status.admissionBalance > 0 && addToBill("Admission Fee Balance", status.admissionBalance, "Admission Fee")}>
                             <div className="p-4 flex justify-between items-center">
                                 <div><div className="text-xs font-bold opacity-70">ADMISSION FEE</div><div className="font-bold text-xl">{isAdmFullyPaid ? "Fully Paid" : `Due: ₹${status.admissionBalance}`}</div></div>
@@ -271,7 +317,7 @@ export default function Fees() {
                     </Card>
 
                     {/* MONTHLY TRACKER */}
-                    <Card><CardContent className="p-4 grid grid-cols-3 gap-3">
+                    <Card><CardContent className="p-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
                         {status.monthStatus.map((m: any) => (
                             <div key={m.name} className="border rounded bg-white overflow-hidden shadow-sm">
                                 <div className="bg-slate-100 px-2 py-1 text-xs font-bold text-center uppercase text-slate-600">{m.name}</div>
@@ -290,7 +336,10 @@ export default function Fees() {
                                 <Clock className="h-4 w-4"/> Recent Transactions
                             </CardTitle>
                         </CardHeader>
-                        <CardContent className="p-0 flex-1 overflow-y-auto">
+                        <CardContent className="p-0 flex-1 overflow-auto">
+                            {paymentHistory.length === 0 ? (
+                                <div className="py-6 text-center text-gray-400 text-sm">No transactions found.</div>
+                            ) : (
                             <Table>
                                 <TableHeader>
                                     <TableRow className="bg-slate-50">
@@ -315,11 +364,9 @@ export default function Fees() {
                                             </TableCell>
                                         </TableRow>
                                     ))}
-                                    {paymentHistory.length === 0 && (
-                                        <TableRow><TableCell colSpan={5} className="text-center py-6 text-gray-400">No transactions found.</TableCell></TableRow>
-                                    )}
                                 </TableBody>
                             </Table>
+                            )}
                         </CardContent>
                     </Card>
                 </>
@@ -327,7 +374,7 @@ export default function Fees() {
         </div>
 
         {/* RIGHT: BILL */}
-        <div className="col-span-3 h-full pb-4">
+        <div className="lg:col-span-3 lg:h-full pb-4">
             <Card className="h-full flex flex-col border-l-4 border-l-green-500 shadow-lg">
                 <CardHeader className="bg-green-50 py-3 border-b"><CardTitle className="text-green-800 text-lg">Current Bill</CardTitle></CardHeader>
                 <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
@@ -359,7 +406,7 @@ export default function Fees() {
 
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
         <DialogContent className="max-w-2xl">
-            <DialogHeader><DialogTitle className="flex justify-between items-center"><span>Payment Receipt</span><div className="flex gap-2"><Button size="sm" variant="outline" onClick={handlePrint}><Printer className="h-4 w-4 mr-2"/> Print / PDF</Button><Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={sendWhatsApp}><MessageCircle className="h-4 w-4 mr-2"/> WhatsApp</Button></div></DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle className="flex flex-wrap gap-2 justify-between items-center"><span>Payment Receipt</span><div className="flex gap-2"><Button size="sm" variant="outline" onClick={handlePrint}><Printer className="h-4 w-4 mr-2"/> Print / PDF</Button><Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={sendWhatsApp}><MessageCircle className="h-4 w-4 mr-2"/> WhatsApp</Button></div></DialogTitle></DialogHeader>
             <div className="border p-6 bg-white shadow-sm" ref={receiptRef}>
                 <div className="text-center border-b pb-4 mb-4">
                     <h2 className="text-2xl font-bold text-slate-800">{schoolInfo.name || "SCHOOL NAME"}</h2>
@@ -368,7 +415,7 @@ export default function Fees() {
                 </div>
                 {currentReceipt && (
                     <>
-                        <div className="flex justify-between text-sm mb-6"><div><p><span className="font-bold">Receipt No:</span> {currentReceipt.receiptNo}</p><p><span className="font-bold">Date:</span> {currentReceipt.date}</p></div><div className="text-right"><p><span className="font-bold">Student:</span> {currentReceipt.student.name}</p><p><span className="font-bold">ID:</span> {currentReceipt.student.admission_no}</p><p><span className="font-bold">Class:</span> {currentReceipt.student.class}</p></div></div>
+                        <div className="flex flex-wrap gap-3 justify-between text-sm mb-6"><div><p><span className="font-bold">Receipt No:</span> {currentReceipt.receiptNo}</p><p><span className="font-bold">Date:</span> {currentReceipt.date}</p></div><div className="text-right"><p><span className="font-bold">Student:</span> {currentReceipt.student.name}</p><p><span className="font-bold">ID:</span> {currentReceipt.student.admission_no}</p><p><span className="font-bold">Class:</span> {currentReceipt.student.class}</p></div></div>
                         <table className="w-full text-sm border-collapse mb-6"><thead><tr className="border-b-2 border-slate-200"><th className="text-left py-2">Description</th><th className="text-right py-2">Amount</th></tr></thead><tbody>{currentReceipt.items.map((item: any, idx: number) => (<tr key={idx} className="border-b border-slate-100"><td className="py-2">{item.name} {item.month ? `(${item.month})` : ""}</td><td className="text-right py-2 font-mono">₹{item.amount}</td></tr>))}</tbody><tfoot><tr className="border-t-2 border-slate-800 font-bold text-lg"><td className="py-3">Total Paid</td><td className="text-right py-3">₹{currentReceipt.total}</td></tr></tfoot></table>
                     </>
                 )}

@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -27,13 +27,21 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter } from "lucide-react";
+import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter, School } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPut } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 
 export default function Students() {
   const { toast } = useToast();
-  
+  // Super Admin ka khud ka koi school nahi hota — GET /api/students
+  // server par uske liye 403 deta hai (requireRole me super_admin
+  // hai hi nahi; routes se verify). Isliye SA par API call hi nahi
+  // karte — Settings wala no-school card dikhega, lal toast nahi.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+
   // 🟢 Filter States
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState("ALL");
@@ -53,6 +61,8 @@ export default function Students() {
 
   // 🟢 LOAD STUDENTS (FIXED: Ab ye sahi naam bhejega)
   const fetchStudents = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     setLoading(true);
     try {
       console.log("Fetching with:", { search, classFilter, sectionFilter }); // Debugging ke liye
@@ -153,17 +163,42 @@ export default function Students() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-[1600px] mx-auto">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1600px] mx-auto">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-between sm:items-center">
+        <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-slate-800">
           <GraduationCap className="h-8 w-8 text-blue-600" /> Students Directory
         </h1>
 
-        <Button onClick={fetchStudents} variant="outline" size="sm">
+        <Button onClick={fetchStudents} variant="outline" size="sm" className="shrink-0 self-start sm:self-auto">
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
           Refresh List
         </Button>
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there is no school student data to show here.
+              First create a school from the Schools screen — after that,
+              that school&apos;s Principal can sign in with their own
+              account and manage students.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* 🟢 FILTER CARD */}
       <Card className="border-t-4 border-t-blue-600 shadow-sm overflow-visible">
@@ -171,13 +206,13 @@ export default function Students() {
           <div className="flex flex-wrap gap-4 items-end relative z-20">
             
             {/* Search Box */}
-            <div className="flex-1 min-w-[250px] space-y-1">
+            <div className="w-full min-w-0 sm:w-auto sm:flex-1 sm:min-w-[250px] space-y-1">
                 <Label className="text-xs font-bold text-gray-500 uppercase">Search Student</Label>
                 <div className="relative">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
                   <Input
                     placeholder="Name, Adm No, Mobile..."
-                    className="pl-9 bg-white"
+                    className="pl-9 bg-white w-full min-w-0"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                   />
@@ -228,7 +263,8 @@ export default function Students() {
         </CardHeader>
 
         <CardContent>
-          <div className="rounded-md border bg-white relative z-10">
+          {students.length > 0 ? (
+          <div className="rounded-md border bg-white relative z-10 overflow-x-auto">
             <Table>
               <TableHeader className="bg-slate-50">
                 <TableRow>
@@ -245,8 +281,7 @@ export default function Students() {
               </TableHeader>
 
               <TableBody>
-                {students.length > 0 ? (
-                  students.map((s: any) => (
+                {students.map((s: any) => (
                     <TableRow key={s.id} className="hover:bg-slate-50">
                       <TableCell className="font-bold text-blue-600">{s.admission_no}</TableCell>
                       <TableCell className="font-medium">
@@ -285,19 +320,20 @@ export default function Students() {
                         </Button>
                       </TableCell>
                     </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={9} className="h-24 text-center text-slate-500">
-                        {loading ? "Searching..." : "No students found matching filters."}
-                    </TableCell>
-                  </TableRow>
-                )}
+                  ))}
               </TableBody>
             </Table>
           </div>
+          ) : (
+            <div className="rounded-md border bg-white py-12 text-center text-slate-500">
+              {loading ? "Searching..." : "No students found matching filters."}
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      </>
+      )}
 
       {/* Transport Popup */}
       <Dialog open={isTransportOpen} onOpenChange={setIsTransportOpen}>

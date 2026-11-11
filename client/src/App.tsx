@@ -127,7 +127,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.1</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.2</div>
     </div>
   );
 }

@@ -3,6 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 import {
   Users,
   IndianRupee,
@@ -12,7 +14,8 @@ import {
   TrendingDown,
   Activity,
   Calendar,
-  RefreshCw
+  RefreshCw,
+  School
 } from "lucide-react";
 import {
   BarChart,
@@ -28,6 +31,15 @@ import {
 
 export default function Dashboard() {
   const { toast } = useToast();
+  // School ka naam greeting ke liye auth se aata hai (/api/auth/me ka
+  // school — sidebar bhi yahi naam dikhata hai).
+  const { user, school } = useAuth();
+  // Super Admin ka khud ka koi school nahi hota — dashboard ke
+  // endpoints server par uske liye 403 dete hain (requireRole me
+  // super_admin hai hi nahi; routes se verify). Isliye SA par API
+  // call hi nahi karte — Settings wala no-school card dikhega,
+  // "Failed to load dashboard data" wala lal toast nahi.
+  const isSuperAdmin = user?.role === "super_admin";
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState({
     totalStudents: 0,
@@ -45,6 +57,8 @@ export default function Dashboard() {
 
   // Load all dashboard data
   const loadDashboardData = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     setLoading(true);
     try {
       const today = new Date();
@@ -223,18 +237,43 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold text-slate-800">Dashboard</h1>
-          <p className="text-gray-500 mt-1">Welcome back to SchoolMate</p>
+          <p className="text-gray-500 mt-1">Welcome back to {school?.name || "School Guardian Suite"}</p>
         </div>
         <Button onClick={loadDashboardData} variant="outline" size="sm" disabled={loading}>
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there is no school data to show on the
+              dashboard. First create a school from the Schools screen —
+              after that, that school&apos;s Principal can sign in with
+              their own account and see their school&apos;s dashboard.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -339,7 +378,7 @@ export default function Dashboard() {
         {/* Fee Collection Chart */}
         <Card className="lg:col-span-2">
           <CardHeader>
-            <div className="flex justify-between items-center">
+            <div className="flex flex-wrap gap-3 justify-between items-center">
               <CardTitle className="flex items-center gap-2">
                 <Activity className="h-5 w-5" /> Fee Collection Trends
               </CardTitle>
@@ -436,11 +475,14 @@ export default function Dashboard() {
                 </div>
               ))
             ) : (
-              <p className="text-center text-gray-500 col-span-3 py-4">No pending dues</p>
+              <p className="text-center text-gray-500 col-span-1 md:col-span-2 lg:col-span-3 py-4">No pending dues</p>
             )}
           </div>
         </CardContent>
       </Card>
+
+      </>
+      )}
     </div>
   );
 }

@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Search,
@@ -19,7 +21,8 @@ import {
   FileImage,
   FileBadge,
   FileCheck,
-  FileX
+  FileX,
+  School
 } from "lucide-react";
 
 const DOC_TYPES = [
@@ -33,6 +36,14 @@ const DOC_TYPES = [
 
 export default function StudentProfile() {
   const { toast } = useToast();
+  // Super Admin ka khud ka koi school nahi hota — student endpoints
+  // server par uske liye 403 dete hain (requireRole me super_admin
+  // hai hi nahi; routes se verify). Search karne par SA ko lal
+  // "Failed to load student." toast milta tha. Isliye SA par
+  // search/load hi nahi chalate — Settings wala no-school card
+  // dikhega.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
 
   const [admNo, setAdmNo] = useState("");
   const [loading, setLoading] = useState(false);
@@ -68,6 +79,8 @@ export default function StudentProfile() {
 
   // REST: GET /api/students — "ALL" par param bhejte hi nahi (Batch A usool).
   const fetchStudentList = async (searchText: string) => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return [];
     const params = new URLSearchParams();
     if (searchText) params.set("search", searchText);
     if (classFilter !== "ALL") params.set("class", classFilter);
@@ -251,15 +264,42 @@ export default function StudentProfile() {
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold flex items-center gap-2 text-gray-800">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-gray-800">
           <UserCircle2 className="h-8 w-8 text-blue-600" /> Student Profile
         </h1>
-        <Button variant="outline" size="sm" onClick={resetFilters}>
-            <FilterX className="h-4 w-4 mr-2"/> Reset Search
-        </Button>
+        {!isSuperAdmin && (
+          <Button variant="outline" size="sm" onClick={resetFilters} className="shrink-0 self-start sm:self-auto">
+              <FilterX className="h-4 w-4 mr-2"/> Reset Search
+          </Button>
+        )}
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there are no school student profiles to
+              show here. First create a school from the Schools screen —
+              after that, that school&apos;s Principal can sign in with
+              their own account and view student profiles.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* SEARCH BAR & FILTERS */}
       <Card className="border-t-4 border-t-blue-600 shadow-sm overflow-visible">
@@ -270,7 +310,7 @@ export default function StudentProfile() {
         <CardContent className="pt-4 space-y-3 relative z-20">
           <div className="flex flex-wrap gap-4 items-end">
             
-            <div className="flex-1 min-w-[200px] space-y-1 relative z-30">
+            <div className="w-full min-w-0 sm:w-auto sm:flex-1 space-y-1 relative z-30">
               <Label>Search (Name / Adm No / Mobile)</Label>
               <div className="relative">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
@@ -279,7 +319,7 @@ export default function StudentProfile() {
                     onChange={(e) => setAdmNo(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") fetchStudent(); }}
                     placeholder="Type to search..."
-                    className="pl-9 font-bold"
+                    className="pl-9 font-bold w-full min-w-0"
                   />
               </div>
 
@@ -500,6 +540,9 @@ export default function StudentProfile() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      </>
       )}
     </div>
   );

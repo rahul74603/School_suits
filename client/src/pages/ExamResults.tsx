@@ -20,7 +20,9 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost } from "@/lib/api";
-import { Save, CheckCircle, XCircle, Calculator } from "lucide-react";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
+import { Save, CheckCircle, XCircle, Calculator, School } from "lucide-react";
 
 const SUBJECTS: Record<string, string[]> = {
   "1-5": ["Hindi", "English", "Math", "EVS", "GK"],
@@ -67,6 +69,14 @@ interface MarksMap {
 
 export default function ExamResults() {
   const { toast } = useToast();
+  // Super Admin ka khud ka koi school nahi hota — GET /api/exams
+  // server par uske liye 403 deta hai (requireRole me super_admin
+  // hai hi nahi; routes se verify). Pehle ye fail bina catch ke
+  // khamoshi se hota tha aur exam list khali dikhti thi. Isliye SA
+  // par API call hi nahi karte — Settings wala no-school card
+  // dikhega.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const [exams, setExams] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [selectedExam, setSelectedExam] = useState<any>(null);
@@ -74,6 +84,8 @@ export default function ExamResults() {
   const [loading, setLoading] = useState(false);
 
   const fetchExams = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     // REST: GET /api/exams — IPC session="2026-27" filter deta tha;
     // session khali wali rows bahar nahi karte (REST par optional hai).
     const data = await apiGet<any[]>("/api/exams");
@@ -222,17 +234,42 @@ export default function ExamResults() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
       <h1 className="text-3xl font-bold flex items-center gap-2">
         <Calculator className="h-8 w-8 text-blue-600" /> Marks Entry
       </h1>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there are no school exams to enter marks
+              for here. First create a school from the Schools screen —
+              after that, that school&apos;s Principal can sign in with
+              their own account and manage marks entry.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* Select Exam */}
       <Card>
         <CardContent className="pt-6">
           <Label>Select Exam</Label>
           <Select onValueChange={(v) => loadStudents(exams.find(e => e.id === parseInt(v)))}>
-            <SelectTrigger className="w-[400px]">
+            <SelectTrigger className="w-full max-w-[400px]">
               <SelectValue placeholder="Choose exam..." />
             </SelectTrigger>
             <SelectContent>
@@ -327,6 +364,9 @@ export default function ExamResults() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      </>
       )}
     </div>
   );

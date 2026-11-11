@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, apiDel } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 import {
   GraduationCap,
   Plus,
@@ -37,7 +39,8 @@ import {
   RefreshCw,
   Search,
   Save,
-  X
+  X,
+  School
 } from "lucide-react";
 
 // Types
@@ -92,6 +95,12 @@ type SectionType = typeof SECTIONS[number];
 
 export default function Exams() {
   const { toast } = useToast();
+  // Super Admin ka khud ka koi school nahi hota — GET /api/exams
+  // server par uske liye 403 deta hai (requireRole me super_admin
+  // hai hi nahi; routes se verify). Isliye SA par API call hi nahi
+  // karte — Settings wala no-school card dikhega, lal toast nahi.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const [exams, setExams] = useState<Exam[]>([]);
   const [loading, setLoading] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -120,6 +129,8 @@ export default function Exams() {
   });
 
   const fetchExams = useCallback(async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     setLoading(true);
     try {
       // REST: GET /api/exams — server class/section/session filter
@@ -142,7 +153,7 @@ export default function Exams() {
     } finally {
       setLoading(false);
     }
-  }, [classFilter, sectionFilter, toast]);
+  }, [classFilter, sectionFilter, toast, isSuperAdmin]);
 
   useEffect(() => {
     fetchExams();
@@ -311,19 +322,46 @@ export default function Exams() {
   );
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
             <GraduationCap className="h-8 w-8 text-blue-600" /> Examination
           </h1>
           <p className="text-gray-500 mt-1">Manage exams and student results</p>
         </div>
-        <Button onClick={() => setIsAddOpen(true)} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-2" /> Create Exam
-        </Button>
+        {!isSuperAdmin && (
+          <Button onClick={() => setIsAddOpen(true)} className="bg-blue-600 hover:bg-blue-700">
+            <Plus className="h-4 w-4 mr-2" /> Create Exam
+          </Button>
+        )}
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there are no school exams to show here.
+              First create a school from the Schools screen — after that,
+              that school&apos;s Principal can sign in with their own
+              account and manage exams.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* Filters */}
       <Card className="shadow-sm relative z-10">
@@ -380,7 +418,9 @@ export default function Exams() {
       {/* Exams Table */}
       <Card>
         <CardContent className="p-0">
-          <Table>
+          {filteredExams.length > 0 ? (
+          <div className="overflow-x-auto">
+<Table>
             <TableHeader className="bg-slate-50">
               <TableRow>
                 <TableHead>Exam Name</TableHead>
@@ -394,14 +434,7 @@ export default function Exams() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredExams.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-gray-500">
-                    {loading ? "Loading..." : "No exams found"}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredExams.map((exam) => (
+              {filteredExams.map((exam) => (
                   <TableRow key={exam.id} className="hover:bg-slate-50">
                     <TableCell className="font-medium">{exam.exam_name}</TableCell>
                     <TableCell>
@@ -440,12 +473,20 @@ export default function Exams() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
-              )}
+                ))}
             </TableBody>
           </Table>
+          </div>
+          ) : (
+            <div className="py-12 text-center text-gray-500">
+              {loading ? "Loading..." : "No exams found"}
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      </>
+      )}
 
       {/* Add Exam Dialog */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
@@ -463,7 +504,7 @@ export default function Exams() {
               />
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Exam Type *</Label>
                 <Select 
@@ -490,7 +531,7 @@ export default function Exams() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Class *</Label>
                 <Select 
@@ -521,7 +562,7 @@ export default function Exams() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>Max Marks *</Label>
                 <Input 
@@ -590,7 +631,9 @@ export default function Exams() {
           ) : (
             <>
               <div className="border rounded-lg overflow-hidden">
-                <Table>
+                {students.length > 0 ? (
+                <div className="overflow-x-auto">
+<Table>
                   <TableHeader className="bg-slate-50 sticky top-0">
                     <TableRow>
                       <TableHead className="w-[80px]">Roll No</TableHead>
@@ -601,14 +644,7 @@ export default function Exams() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {students.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={5} className="text-center py-8 text-gray-500">
-                          No students found for this class/section
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      students.map((student) => {
+                    {students.map((student) => {
                         const entry = marksData[student.id] || { marks: "", remarks: "" };
                         const status = getResultStatus(
                           entry.marks, 
@@ -650,10 +686,15 @@ export default function Exams() {
                             </TableCell>
                           </TableRow>
                         );
-                      })
-                    )}
+                      })}
                   </TableBody>
                 </Table>
+                </div>
+                ) : (
+                  <div className="py-8 text-center text-gray-500">
+                    No students found for this class/section
+                  </div>
+                )}
               </div>
 
               <DialogFooter className="mt-6">

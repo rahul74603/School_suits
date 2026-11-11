@@ -18,7 +18,9 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet } from "@/lib/api";
-import { Printer, Search, FileText, Award, TrendingUp, Calendar, User } from "lucide-react";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
+import { Printer, Search, FileText, Award, TrendingUp, Calendar, User, School } from "lucide-react";
 
 interface ExamResult {
   exam_name: string;
@@ -91,6 +93,14 @@ function adaptResult(row: any, exam: any) {
 
 export default function ReportCards() {
   const { toast } = useToast();
+  // Super Admin ka khud ka koi school nahi hota — is page ke
+  // endpoints server par uske liye 403/404 dete hain (/api/branding
+  // 404, student search/results 403; routes se verify). Search
+  // karne par SA ko jhoota "Not Found" lal toast milta tha.
+  // Isliye SA par search hi nahi chalate — Settings wala
+  // no-school card dikhega.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const printRef = useRef<HTMLDivElement>(null);
   
   const [searchAdmNo, setSearchAdmNo] = useState("");
@@ -106,6 +116,8 @@ export default function ReportCards() {
   }, []);
 
   const loadSchoolInfo = async () => {
+    // Super Admin: koi school nahi — branding call hi nahi karte.
+    if (isSuperAdmin) return;
     // REST: GET /api/branding — jawab ke naam (name/address/phone/
     // email) page se match hain, adapter nahi chahiye.
     try {
@@ -250,9 +262,9 @@ export default function ReportCards() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
             <FileText className="h-8 w-8 text-blue-600" /> Report Cards
@@ -260,6 +272,31 @@ export default function ReportCards() {
           <p className="text-gray-500 mt-1">Generate and print student report cards</p>
         </div>
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there are no school report cards to
+              generate here. First create a school from the Schools
+              screen — after that, that school&apos;s Principal can sign
+              in with their own account and generate report cards.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* Search */}
       <Card className="border-t-4 border-t-blue-600">
@@ -273,8 +310,9 @@ export default function ReportCards() {
                   value={searchAdmNo}
                   onChange={(e) => setSearchAdmNo(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && searchStudent()}
+                  className="min-w-0"
                 />
-                <Button onClick={searchStudent} disabled={loading} className="bg-blue-600">
+                <Button onClick={searchStudent} disabled={loading} className="bg-blue-600 shrink-0">
                   <Search className="h-4 w-4 mr-2" />
                   {loading ? "Searching..." : "Search"}
                 </Button>
@@ -388,7 +426,7 @@ export default function ReportCards() {
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex justify-between items-center">
+            <DialogTitle className="flex flex-wrap gap-3 justify-between items-center">
               <span>Report Card Preview</span>
               <Button onClick={handlePrint} className="bg-blue-600">
                 <Printer className="h-4 w-4 mr-2" /> Print Report Card
@@ -540,6 +578,9 @@ export default function ReportCards() {
           </div>
         </DialogContent>
       </Dialog>
+
+      </>
+      )}
     </div>
   );
 }

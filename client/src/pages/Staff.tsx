@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -44,9 +44,12 @@ import {
   FileText,
   Eye,
   Upload,
+  School,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 
 const DEPARTMENTS = ["Teaching", "Administration", "Accounts", "Support", "Transport", "Security"];
 const DESIGNATIONS = ["Principal", "Vice Principal", "Teacher", "Accountant", "Clerk", "Librarian", "Driver", "Security Guard", "Peon", "Other"];
@@ -80,7 +83,14 @@ function adaptStaffMember(m: any) {
 
 export default function Staff() {
   const { toast } = useToast();
-  
+  // Super Admin ka khud ka koi school nahi hota — GET /api/staff
+  // server par uske liye 403 deta hai (requireRole me super_admin
+  // hai hi nahi; routes se verify). Isliye SA par API call hi nahi
+  // karte — Settings wala no-school card dikhega, lal toast nahi,
+  // aur jhoota "No staff members found" bhi nahi.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+
   const [staffList, setStaffList] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
@@ -108,6 +118,8 @@ export default function Staff() {
   });
 
   const fetchStaff = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     setLoading(true);
     try {
       // REST: GET /api/staff — server na search/status params leta hai,
@@ -331,32 +343,60 @@ export default function Staff() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
-      {/* Header */}
-      <div className="flex justify-between items-center">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
+      {/* Header — mobile par title aur button ek ke neeche ek
+          (pehle ek hi row me ghuskar title do line me tootta tha) */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-between sm:items-center">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-slate-800">
             <Users className="h-8 w-8 text-blue-600" /> Staff Management
           </h1>
           <p className="text-gray-500 mt-1">Manage teachers and support staff</p>
         </div>
 
-        <Button onClick={() => { resetForm(); setIsAddOpen(true); }} className="bg-blue-600 hover:bg-blue-700">
-          <Plus className="h-4 w-4 mr-2" /> Add Staff
-        </Button>
+        {!isSuperAdmin && (
+          <Button onClick={() => { resetForm(); setIsAddOpen(true); }} className="bg-blue-600 hover:bg-blue-700 shrink-0 self-start sm:self-auto">
+            <Plus className="h-4 w-4 mr-2" /> Add Staff
+          </Button>
+        )}
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there is no school staff data to show here.
+              First create a school from the Schools screen — after that,
+              that school&apos;s Principal can sign in with their own
+              account and manage staff.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* Filters */}
       <Card className="shadow-sm">
         <CardContent className="pt-6">
-          <div className="flex flex-wrap gap-4 items-end">
-            <div className="flex-1 min-w-[300px]">
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
+            <div className="flex-1 min-w-0 w-full sm:w-auto sm:min-w-[300px]">
               <Label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Search Staff</Label>
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
                 <Input
                   placeholder="Name, Employee ID, Contact..."
-                  className="pl-9"
+                  className="pl-9 w-full min-w-0"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
@@ -364,7 +404,7 @@ export default function Staff() {
             </div>
 
             {/* FIXED: Status Dropdown with proper z-index and background */}
-            <div className="w-[200px] relative z-50">
+            <div className="w-full sm:w-[200px] relative z-50">
               <Label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Status</Label>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="bg-white">
@@ -387,7 +427,9 @@ export default function Staff() {
 
       {/* Staff Table */}
       <Card className="shadow-sm overflow-hidden">
-        <Table>
+        {staffList.length > 0 ? (
+        <div className="overflow-x-auto">
+<Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
               <TableHead className="font-bold">Employee ID</TableHead>
@@ -401,8 +443,7 @@ export default function Staff() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {staffList.length > 0 ? (
-              staffList.map((staff) => (
+            {staffList.map((staff) => (
                 <TableRow key={staff.id} className="hover:bg-slate-50">
                   <TableCell className="font-mono font-bold text-blue-600">{staff.employee_id}</TableCell>
                   <TableCell>
@@ -435,17 +476,19 @@ export default function Staff() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={8} className="h-24 text-center text-gray-500">
-                  {loading ? "Loading..." : "No staff members found"}
-                </TableCell>
-              </TableRow>
-            )}
+              ))}
           </TableBody>
         </Table>
+        </div>
+        ) : (
+          <div className="py-12 text-center text-gray-500">
+            {loading ? "Loading..." : "No staff members found"}
+          </div>
+        )}
       </Card>
+
+      </>
+      )}
 
       {/* Add Staff Dialog - FIXED DROPDOWNS */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
@@ -456,7 +499,7 @@ export default function Staff() {
             </DialogTitle>
           </DialogHeader>
           
-          <div className="grid grid-cols-2 gap-4 py-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
             <div className="space-y-2">
               <Label>Full Name *</Label>
               <Input value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="Enter name" />
@@ -516,7 +559,7 @@ export default function Staff() {
               <Label>Join Date *</Label>
               <Input type="date" value={formData.joinDate} onChange={(e) => setFormData({...formData, joinDate: e.target.value})} />
             </div>
-            <div className="col-span-2 space-y-2">
+            <div className="col-span-1 sm:col-span-2 space-y-2">
               <Label>Address</Label>
               <Input value={formData.address} onChange={(e) => setFormData({...formData, address: e.target.value})} placeholder="Enter full address" />
             </div>
@@ -540,7 +583,7 @@ export default function Staff() {
             </DialogTitle>
           </DialogHeader>
           
-          <div className="grid grid-cols-2 gap-4 py-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-4">
             <div className="space-y-2">
               <Label>Full Name</Label>
               <Input value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
@@ -610,7 +653,7 @@ export default function Staff() {
               </Select>
             </div>
 
-            <div className="col-span-2 space-y-2">
+            <div className="col-span-1 sm:col-span-2 space-y-2">
               <Label>Address</Label>
               <Input value={formData.address} onChange={(e) => setFormData({...formData, address: e.target.value})} />
             </div>
@@ -633,7 +676,7 @@ export default function Staff() {
           {selectedStaff && (
             <div className="space-y-6">
               <div className="bg-slate-50 p-4 rounded-lg">
-                <div className="flex justify-between items-start">
+                <div className="flex flex-wrap gap-2 justify-between items-start">
                   <div>
                     <h3 className="text-2xl font-bold text-slate-800">{selectedStaff.name}</h3>
                     <p className="text-gray-500">{selectedStaff.employee_id}</p>
@@ -644,7 +687,7 @@ export default function Staff() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                 <div className="flex items-center gap-2">
                   <Briefcase className="h-4 w-4 text-gray-400" />
                   <span className="font-medium">{selectedStaff.designation}</span>
@@ -673,7 +716,7 @@ export default function Staff() {
                   <Calendar className="h-4 w-4 text-gray-400" />
                   <span>Joined: {selectedStaff.join_date}</span>
                 </div>
-                <div className="col-span-2 flex items-start gap-2">
+                <div className="col-span-1 sm:col-span-2 flex items-start gap-2">
                   <MapPin className="h-4 w-4 text-gray-400 mt-0.5" />
                   <span>{selectedStaff.address || "N/A"}</span>
                 </div>
@@ -685,7 +728,7 @@ export default function Staff() {
                   <FileText className="h-4 w-4" /> Documents
                 </h4>
                 
-                <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                   {DOC_TYPES.map((doc) => {
                     const uploadedDocs = selectedStaff.documents ? JSON.parse(selectedStaff.documents) : [];
                     const hasDoc = uploadedDocs.find((d: any) => d.type === doc.key);

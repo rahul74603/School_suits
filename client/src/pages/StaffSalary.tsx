@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, apiDel } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 import {
   IndianRupee,
   Plus,
@@ -36,7 +38,8 @@ import {
   Wallet,
   CheckCircle,
   AlertCircle,
-  Download
+  Download,
+  School
 } from "lucide-react";
 
 const MONTHS = [
@@ -73,6 +76,13 @@ interface SalaryPayment {
 
 export default function StaffSalary() {
   const { toast } = useToast();
+  // Super Admin ka khud ka koi school nahi hota — GET /api/staff aur
+  // GET /api/salary-payments server par uske liye 403 dete hain
+  // (requireRole me super_admin hai hi nahi; routes se verify).
+  // Isliye SA par API call hi nahi karte — Settings wala no-school
+  // card dikhega, lal toast nahi.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [salaryHistory, setSalaryHistory] = useState<SalaryPayment[]>([]);
   const [loading, setLoading] = useState(false);
@@ -101,6 +111,8 @@ export default function StaffSalary() {
   }, [selectedMonth, selectedYear]);
 
   const fetchStaff = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     try {
       // REST: GET /api/staff — server saare (active + inactive) deta
       // hai; is page ko sirf Active chahiye, filter yahin laga hai.
@@ -125,6 +137,8 @@ export default function StaffSalary() {
   };
 
   const fetchSalaryHistory = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     try {
       // REST: GET /api/salary-payments?month=&year=
       const data = await apiGet<any[]>(
@@ -271,9 +285,9 @@ export default function StaffSalary() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
             <IndianRupee className="h-8 w-8 text-green-600" /> Staff Salary
@@ -281,6 +295,31 @@ export default function StaffSalary() {
           <p className="text-gray-500 mt-1">Manage staff salaries and payments</p>
         </div>
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there is no school salary data to show here.
+              First create a school from the Schools screen — after that,
+              that school&apos;s Principal can sign in with their own
+              account and manage staff salaries.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -376,7 +415,8 @@ export default function StaffSalary() {
           <CardTitle>Staff Salary Status - {selectedMonth} {selectedYear}</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
+          <div className="overflow-x-auto">
+<Table>
             <TableHeader className="bg-slate-50">
               <TableRow>
                 <TableHead>Employee ID</TableHead>
@@ -442,8 +482,12 @@ export default function StaffSalary() {
               })}
             </TableBody>
           </Table>
+</div>
         </CardContent>
       </Card>
+
+      </>
+      )}
 
       {/* Pay Salary Dialog */}
       <Dialog open={isPayDialogOpen} onOpenChange={setIsPayDialogOpen}>
@@ -466,7 +510,7 @@ export default function StaffSalary() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label>Bonus</Label>
                 <Input

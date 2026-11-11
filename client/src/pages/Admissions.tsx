@@ -13,6 +13,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 import {
   UserPlus,
   Bus,
@@ -24,6 +26,15 @@ import {
 
 export default function Admissions() {
   const { toast } = useToast();
+  // Super Admin ka khud ka koi school nahi hota — is page ke load
+  // endpoints server par uske liye 403 dete hain (/api/transport-routes,
+  // /api/students/next-admission-no — requireRole me super_admin hai
+  // hi nahi; routes se verify). Pehle ye fail khamoshi se hota tha
+  // (sirf console), lekin form bharkar Submit karne par SA ko lal
+  // toast milta tha. Isliye SA par form hi nahi dikhate — Settings
+  // wala no-school card dikhega.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const [loading, setLoading] = useState(false);
   const [transportRoutes, setTransportRoutes] = useState<any[]>([]);
 
@@ -62,6 +73,8 @@ export default function Admissions() {
   }, []);
 
   const loadInitialData = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     try {
       // REST: GET /api/transport-routes — camelCase aata hai,
       // page route_name padhta hai, adapter wahi bharta hai.
@@ -214,16 +227,43 @@ export default function Admissions() {
   };
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-2">
+    <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-between sm:items-center">
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 flex items-center gap-2">
           <UserPlus className="h-8 w-8 text-blue-600" /> New Admission
         </h1>
 
-        <Button variant="outline" size="sm" onClick={refreshAdmissionNumber}>
-          <RefreshCw className="h-4 w-4 mr-2" /> Refresh ID
-        </Button>
+        {!isSuperAdmin && (
+          <Button variant="outline" size="sm" onClick={refreshAdmissionNumber} className="shrink-0 self-start sm:self-auto">
+            <RefreshCw className="h-4 w-4 mr-2" /> Refresh ID
+          </Button>
+        )}
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so new admissions cannot be added from here.
+              First create a school from the Schools screen — after that,
+              that school&apos;s Principal can sign in with their own
+              account and add admissions.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* LEFT SIDE */}
@@ -293,7 +333,7 @@ export default function Admissions() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Father Name</Label>
                 <Input
@@ -314,7 +354,7 @@ export default function Admissions() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Mobile</Label>
                 <Input
@@ -396,7 +436,7 @@ export default function Admissions() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Label>Previous Class</Label>
                   <Input
@@ -426,7 +466,7 @@ export default function Admissions() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <Label>TC Issue Date</Label>
                   <Input
@@ -486,7 +526,7 @@ export default function Admissions() {
             </CardHeader>
 
             <CardContent className="space-y-4 pt-4">
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1">
                   <Label>Class</Label>
                   <Select
@@ -612,13 +652,16 @@ export default function Admissions() {
       <div className="flex justify-end pt-4">
         <Button
           size="lg"
-          className="w-[200px] bg-blue-600 hover:bg-blue-700 text-lg"
+          className="w-full sm:w-[200px] bg-blue-600 hover:bg-blue-700 text-lg"
           onClick={handleSubmit}
           disabled={loading}
         >
           <Save className="mr-2 h-5 w-5" /> Submit
         </Button>
       </div>
+
+      </>
+      )}
     </div>
   );
 }

@@ -21,14 +21,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import { apiGet } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Link } from "wouter";
 import { 
   TrendingUp, 
   TrendingDown, 
   IndianRupee, 
   Users, 
   CreditCard,
-  Wallet
+  Wallet,
+  School
 } from "lucide-react";
 
 const MONTHS = [
@@ -56,6 +60,14 @@ interface TrendData {
 }
 
 export default function FinancialDashboard() {
+  // Super Admin ka khud ka koi school nahi hota — /api/reports/*
+  // server par uske liye 403 dete hain (requireRole principal/
+  // accountant only; routes se verify). Pehle ye fail khamoshi se
+  // hota tha aur SA ko ek jhoota zero-wala dashboard dikhta tha.
+  // Isliye SA par API call hi nahi karte — Settings wala no-school
+  // card dikhega.
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [summary, setSummary] = useState<FinancialSummary>({
@@ -83,6 +95,8 @@ export default function FinancialDashboard() {
     (await apiGet<any[]>("/api/reports/financial-trend")) || [];
 
   const fetchFinancialData = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     setLoading(true);
     try {
       const rows = await loadTrendRows();
@@ -109,6 +123,8 @@ export default function FinancialDashboard() {
   };
 
   const fetchTrendData = async () => {
+    // Super Admin: koi school nahi — koi API call nahi (upar wala note).
+    if (isSuperAdmin) return;
     try {
       const rows = await loadTrendRows();
       // Adapter: server { feesCollected, salaryPaid, expenses } deta
@@ -135,9 +151,9 @@ export default function FinancialDashboard() {
   const isProfit = summary.netProfit >= 0;
 
   return (
-    <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
+    <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-4 md:flex-row md:justify-between md:items-center">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
             <TrendingUp className="h-8 w-8 text-blue-600" /> Financial Dashboard
@@ -145,6 +161,7 @@ export default function FinancialDashboard() {
           <p className="text-gray-500 mt-1">Track income, expenses and profitability</p>
         </div>
         
+        {!isSuperAdmin && (
         <div className="flex gap-4">
           <div className="w-[150px]">
             <Label>Month</Label>
@@ -176,7 +193,33 @@ export default function FinancialDashboard() {
             </Select>
           </div>
         </div>
+        )}
       </div>
+
+      {isSuperAdmin ? (
+        <Card className="border-t-4 border-t-blue-600">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <School className="h-5 w-5" /> No School Linked to This Account
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-gray-600">
+              You are signed in as Super Admin. This account is not linked
+              to any school, so there is no school financial data to show
+              here. First create a school from the Schools screen — after
+              that, that school&apos;s Principal can sign in with their
+              own account and see the financial report.
+            </p>
+            <Link href="/schools">
+              <Button className="bg-blue-600 hover:bg-blue-700">
+                <School className="h-4 w-4 mr-2" /> Go to Schools
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+      <>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -317,6 +360,9 @@ export default function FinancialDashboard() {
           </ResponsiveContainer>
         </CardContent>
       </Card>
+
+      </>
+      )}
     </div>
   );
 }
