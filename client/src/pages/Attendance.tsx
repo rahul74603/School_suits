@@ -592,7 +592,7 @@ export default function Attendance() {
                         {row.rollNo ? ` • Roll ${row.rollNo}` : ""}
                       </span>
                     </div>
-                    <div className="grid grid-cols-4 gap-1.5">
+                    <div className="grid grid-cols-2 min-w-0 gap-1.5 sm:grid-cols-4">
                       {STATUS_OPTIONS.map((opt) => {
                         const active = current === opt.value;
                         return (

@@ -441,7 +441,7 @@ export default function Staff() {
             </div>
 
             {/* FIXED: Status Dropdown with proper z-index and background */}
-            <div className="w-full sm:w-[200px] relative z-50">
+            <div className="w-full min-w-0 sm:w-[200px] relative z-50">
               <Label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Status</Label>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="bg-white">

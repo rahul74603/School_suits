@@ -431,7 +431,7 @@ export default function Students() {
             </div>
 
             {/* Class Filter (Design & Logic Fixed) */}
-            <div className="w-[180px] space-y-1 relative">
+            <div className="w-full min-w-0 sm:w-[180px] space-y-1 relative">
                 <Label className="text-xs font-bold text-gray-500 uppercase flex gap-1"><Filter className="h-3 w-3"/> Class</Label>
                 <Select value={classFilter} onValueChange={setClassFilter}>
                   <SelectTrigger className="bg-white">
@@ -449,7 +449,7 @@ export default function Students() {
             </div>
 
             {/* Section Filter (Design & Logic Fixed) */}
-            <div className="w-[150px] space-y-1 relative">
+            <div className="w-full min-w-0 sm:w-[150px] space-y-1 relative">
                 <Label className="text-xs font-bold text-gray-500 uppercase">Section</Label>
                 <Select value={sectionFilter} onValueChange={setSectionFilter}>
                   <SelectTrigger className="bg-white">

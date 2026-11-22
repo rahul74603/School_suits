@@ -159,7 +159,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.8</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.9</div>
     </div>
   );
 }
@@ -260,10 +260,10 @@ function Router() {
         />
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col h-screen overflow-hidden md:ml-64">
+      <div className="flex min-w-0 w-full flex-1 flex-col h-screen overflow-hidden overflow-x-clip md:ml-64">
         <TopBar onMenuClick={() => setSidebarOpen(true)} />
 
-        <main className="flex-1 overflow-y-auto p-2">
+        <main className="flex-1 min-w-0 w-full overflow-y-auto overflow-x-clip p-2">
           <Switch>
             {user?.role === "super_admin" && (
               <Route path="/schools" component={Schools} />

@@ -405,7 +405,7 @@ export default function Exams() {
       <Card className="shadow-sm relative z-10">
         <CardContent className="pt-6">
           <div className="flex flex-wrap gap-4 items-end">
-            <div className="w-[200px]">
+            <div className="w-full min-w-0 sm:w-[200px]">
               <Label>Class</Label>
               <Select value={classFilter} onValueChange={setClassFilter}>
                 <SelectTrigger className="bg-white">
@@ -419,7 +419,7 @@ export default function Exams() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="w-[150px]">
+            <div className="w-full min-w-0 sm:w-[150px]">
               <Label>Section</Label>
               <Select value={sectionFilter} onValueChange={setSectionFilter}>
                 <SelectTrigger className="bg-white">
@@ -433,7 +433,7 @@ export default function Exams() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="w-[250px]">
+            <div className="w-full min-w-0 sm:w-[250px]">
               <Label>Search</Label>
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-400" />

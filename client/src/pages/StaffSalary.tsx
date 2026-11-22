@@ -376,7 +376,7 @@ export default function StaffSalary() {
       <Card className="shadow-sm">
         <CardContent className="pt-6">
           <div className="flex flex-wrap gap-4 items-end">
-            <div className="w-[200px]">
+            <div className="w-full min-w-0 sm:w-[200px]">
               <Label>Month</Label>
               <Select value={selectedMonth} onValueChange={setSelectedMonth}>
                 <SelectTrigger className="bg-white">
@@ -389,7 +389,7 @@ export default function StaffSalary() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="w-[150px]">
+            <div className="w-full min-w-0 sm:w-[150px]">
               <Label>Year</Label>
               <Select 
                 value={selectedYear.toString()} 

@@ -512,6 +512,7 @@ export default function ReportCards() {
                 </div>
 
                 {/* Marks Table */}
+                <div className="overflow-x-auto">
                 <table className="marks-table">
                   <thead>
                     <tr>
@@ -540,6 +541,7 @@ export default function ReportCards() {
                     })}
                   </tbody>
                 </table>
+                </div>
 
                 {/* Result Summary */}
                 <div className="result-box">

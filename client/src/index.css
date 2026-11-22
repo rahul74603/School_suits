@@ -83,6 +83,23 @@
   --ring: 224 76% 48%;
 }
 
+/* v1.9: global overflow guard — koi bhi page poori screen ko
+   side me nahi dhakel sakta. Print par asar na pade isliye
+   screen-only; @media print block neeche jyon ka tyon hai. */
+html {
+  max-width: 100%;
+}
+@media screen {
+  body {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+}
+#root {
+  min-width: 0;
+  max-width: 100%;
+}
+
 @layer base {
   body {
     @apply bg-background text-foreground antialiased;

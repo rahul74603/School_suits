@@ -484,7 +484,7 @@ export default function StudentProfile() {
               )}
             </div>
 
-            <div className="w-[140px] space-y-1 relative z-20">
+            <div className="flex-1 min-w-[120px] sm:flex-none sm:w-[140px] space-y-1 relative z-20">
                 <Label>Class</Label>
                 <Select value={classFilter} onValueChange={setClassFilter}>
                     <SelectTrigger className="bg-white"><SelectValue placeholder="All" /></SelectTrigger>
@@ -495,7 +495,7 @@ export default function StudentProfile() {
                 </Select>
             </div>
 
-            <div className="w-[110px] space-y-1 relative z-20">
+            <div className="flex-1 min-w-[100px] sm:flex-none sm:w-[110px] space-y-1 relative z-20">
                 <Label>Section</Label>
                 <Select value={sectionFilter} onValueChange={setSectionFilter}>
                     <SelectTrigger className="bg-white"><SelectValue placeholder="All" /></SelectTrigger>

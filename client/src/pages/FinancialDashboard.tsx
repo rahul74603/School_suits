@@ -162,8 +162,8 @@ export default function FinancialDashboard() {
         </div>
         
         {!isSuperAdmin && (
-        <div className="flex gap-4">
-          <div className="w-[150px]">
+        <div className="flex flex-wrap gap-4">
+          <div className="flex-1 min-w-[130px] sm:flex-none sm:w-[150px]">
             <Label>Month</Label>
             <Select value={selectedMonth} onValueChange={setSelectedMonth}>
               <SelectTrigger className="bg-white">
@@ -176,7 +176,7 @@ export default function FinancialDashboard() {
               </SelectContent>
             </Select>
           </div>
-          <div className="w-[120px]">
+          <div className="flex-1 min-w-[110px] sm:flex-none sm:w-[120px]">
             <Label>Year</Label>
             <Select 
               value={selectedYear.toString()} 
