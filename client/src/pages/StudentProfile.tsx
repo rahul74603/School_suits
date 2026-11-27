@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 import { openExternal } from "@/lib/openExternal";
 import { useAuth } from "@/lib/auth";
 // 📲 Parent App invite (v2.1) — parent ko WhatsApp par app ka link
@@ -17,7 +17,9 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import {
   Search,
   Upload,
@@ -38,7 +40,8 @@ import {
   ZoomOut,
   RotateCcw,
   CreditCard,
-  Award
+  Award,
+  Pencil
 } from "lucide-react";
 // 🪪📜 v1.7: ID Card + Certificates (TC/Bonafide)
 import {
@@ -155,8 +158,77 @@ export default function StudentProfile() {
   // load na ho to null (certificate par "—" chhapta hai).
   const [certFeeTotal, setCertFeeTotal] = useState<number | null>(null);
 
+  // 🪪 Naye khaane — edit (v3.3): APAAR ID, Stream (11/12), TC
+  // Received. Profile par poora edit form nahi hai, isliye sirf
+  // in teen ke liye chhota sa dialog — save PUT /api/students/:id
+  // se (partial update; baki khane server par waise ke waise).
+  const [isExtraEditOpen, setIsExtraEditOpen] = useState(false);
+  const [extraForm, setExtraForm] = useState({
+    apaarId: "",
+    stream: "",
+    tcReceived: false,
+    tcReceivedDate: "",
+  });
+  const [savingExtra, setSavingExtra] = useState(false);
+
+  const openExtraEdit = () => {
+    if (!student) return;
+    setExtraForm({
+      apaarId: student.apaarId ?? student.apaar_id ?? "",
+      stream: student.stream ?? "",
+      tcReceived: !!(student.tcReceived ?? student.tc_received),
+      tcReceivedDate:
+        (student.tcReceivedDate ?? student.tc_received_date ?? "") || "",
+    });
+    setIsExtraEditOpen(true);
+  };
+
+  const saveExtra = async () => {
+    if (!student?.id) return;
+    setSavingExtra(true);
+    try {
+      await apiPut(`/api/students/${student.id}`, {
+        apaarId: extraForm.apaarId.trim() || null,
+        stream:
+          (student.class === "11" || student.class === "12") &&
+          extraForm.stream
+            ? extraForm.stream
+            : null,
+        tcReceived: extraForm.tcReceived ? 1 : 0,
+        tcReceivedDate: extraForm.tcReceived
+          ? extraForm.tcReceivedDate || null
+          : null,
+      });
+      setStudent((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              apaarId: extraForm.apaarId.trim() || null,
+              stream: extraForm.stream || null,
+              tcReceived: extraForm.tcReceived ? 1 : 0,
+              tcReceivedDate: extraForm.tcReceived
+                ? extraForm.tcReceivedDate || null
+                : null,
+            }
+          : prev,
+      );
+      setIsExtraEditOpen(false);
+      toast({ title: "✅ Details save ho gayi" });
+    } catch (e: any) {
+      toast({
+        title: "Save nahi ho paya",
+        description: e?.message || "Dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setSavingExtra(false);
+  };
+
   const certificateStudent: CertificateStudent | null = student
     ? {
+        // 📜 id (v3.3) — certificate register me entry isi se banti
+        // hai (print ke samay POST /api/certificates/issued)।
+        id: student.id,
         name: student.name,
         fatherName: student.father_name ?? student.fatherName ?? "",
         motherName: student.motherName ?? null,
@@ -642,6 +714,12 @@ export default function StudentProfile() {
                 <div className="border-b pb-1"><b>Father:</b> <span className="float-right text-slate-700">{student.father_name}</span></div>
                 <div className="border-b pb-1"><b>Contact:</b> <span className="float-right font-mono text-slate-700">{student.contact}</span></div>
                 <div className="border-b pb-1"><b>TC Status:</b> <span className={`float-right font-bold ${student.tc_submitted ? 'text-green-600' : 'text-red-500'}`}>{student.tc_submitted ? "Submitted" : "Pending"}</span></div>
+                {/* 🪪 Naye khaane (v3.3) */}
+                <div className="border-b pb-1"><b>APAAR ID:</b> <span className="float-right font-mono text-slate-700">{student.apaarId ?? student.apaar_id ?? "—"}</span></div>
+                {(student.class === "11" || student.class === "12") && (
+                  <div className="border-b pb-1"><b>Stream:</b> <span className="float-right text-slate-700">{student.stream || "—"}</span></div>
+                )}
+                <div className="border-b pb-1"><b>TC Received:</b> <span className={`float-right font-bold ${(student.tcReceived ?? student.tc_received) ? 'text-green-600' : 'text-amber-600'}`}>{(student.tcReceived ?? student.tc_received) ? `Mil gaya${(student.tcReceivedDate ?? student.tc_received_date) ? ` (${student.tcReceivedDate ?? student.tc_received_date})` : ""}` : "Nahi mila"}</span></div>
               </div>
               {/* 🪪📜 v1.7: ID Card + Certificates — data isi student se
                   auto bharata hai, print components khud karte hain. */}
@@ -673,6 +751,15 @@ export default function StudentProfile() {
                     purane admission ke liye bhi yahin se bhej sakte
                     hain (admission par auto bana parent account yahi
                     login istemal karega). */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="min-h-[40px]"
+                  onClick={openExtraEdit}
+                >
+                  <Pencil className="h-4 w-4 mr-2" /> APAAR / Stream / TC
+                  Edit
+                </Button>
                 <ParentAppInviteButton
                   contact={student.contact}
                   childName={student.name}
@@ -866,6 +953,92 @@ export default function StudentProfile() {
 
       </>
       )}
+
+      {/* 🪪 Naye khaane edit dialog (v3.3) */}
+      <Dialog open={isExtraEditOpen} onOpenChange={setIsExtraEditOpen}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>APAAR / Stream / TC Details</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-1">
+              <Label>APAAR ID</Label>
+              <Input
+                value={extraForm.apaarId}
+                onChange={(e) =>
+                  setExtraForm({ ...extraForm, apaarId: e.target.value })
+                }
+                placeholder="APAAR ID (ho to likhein)"
+              />
+            </div>
+            {(student?.class === "11" || student?.class === "12") && (
+              <div className="space-y-1">
+                <Label>Stream (Class 11–12)</Label>
+                <Select
+                  value={extraForm.stream}
+                  onValueChange={(v) =>
+                    setExtraForm({ ...extraForm, stream: v })
+                  }
+                >
+                  <SelectTrigger className="bg-white">
+                    <SelectValue placeholder="Stream chunein" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white z-[9999] shadow-xl border-gray-200">
+                    <SelectItem value="Science">Science</SelectItem>
+                    <SelectItem value="Commerce">Commerce</SelectItem>
+                    <SelectItem value="Arts">Arts</SelectItem>
+                    <SelectItem value="Humanities">Humanities</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label>TC Received (pichhle school se mila)</Label>
+              <div className="flex items-center gap-2 pt-1">
+                <Switch
+                  checked={extraForm.tcReceived}
+                  onCheckedChange={(c) =>
+                    setExtraForm({ ...extraForm, tcReceived: c })
+                  }
+                />
+                <span className="text-sm text-gray-700">
+                  {extraForm.tcReceived ? "Mil gaya" : "Nahi mila"}
+                </span>
+              </div>
+            </div>
+            {extraForm.tcReceived && (
+              <div className="space-y-1">
+                <Label>TC Milne ki Tareekh</Label>
+                <Input
+                  type="date"
+                  value={extraForm.tcReceivedDate}
+                  onChange={(e) =>
+                    setExtraForm({
+                      ...extraForm,
+                      tcReceivedDate: e.target.value,
+                    })
+                  }
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsExtraEditOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void saveExtra()}
+              disabled={savingExtra}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {savingExtra ? "Save ho raha hai…" : "Save karein"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 🪪📜 v1.7: ID Card + Certificate dialogs */}
       <IdCardDialog

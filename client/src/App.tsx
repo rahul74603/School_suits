@@ -84,6 +84,10 @@ import Timetable from "@/pages/Timetable";
 import Broadsheet from "@/pages/Broadsheet";
 // 📚 Library (v1.7): kitabon ka catalog + issue/return
 import Library from "@/pages/Library";
+// 🚌 Transport (v3.3): bus routes + baccho ke route jod
+import Transport from "@/pages/Transport";
+// 📜 Audit Log (v3.3): kisne kab kya badla — sirf Principal
+import AuditLog from "@/pages/AuditLog";
 
 // 🟢 EXAM PAGES IMPORT
 import Exams from "@/pages/Exams";
@@ -120,7 +124,9 @@ import {
   TrendingUp,       // 🟢 NEW ICON
   Building2,        // 🏫 Super Admin: Schools
   LogOut,           // 🔐 Phase 3: logout button
-  Menu              // 📱 Mobile: hamburger (sidebar drawer kholne ke liye)
+  Menu,             // 📱 Mobile: hamburger (sidebar drawer kholne ke liye)
+  Bus,              // 🚌 Transport (v3.3)
+  ScrollText        // 📜 Audit Log (v3.3)
 } from "lucide-react";
 
 function Sidebar({
@@ -151,6 +157,7 @@ function Sidebar({
     { href: "/homework", label: "Homework", icon: BookOpen },
     { href: "/leaves", label: "Leaves (Chutti)", icon: CalendarOff },
     { href: "/library", label: "Library", icon: BookOpen },
+    { href: "/transport", label: "Transport", icon: Bus },
     { href: "/admissions", label: "Admissions", icon: UserPlus },
     { href: "/student-profile", label: "Student Profile", icon: FileText },
     { href: "/fees", label: "Fees & Payments", icon: Banknote },
@@ -168,6 +175,10 @@ function Sidebar({
     { href: "/staff-salary", label: "Staff Salary", icon: IndianRupee },
     { href: "/financial-dashboard", label: "Financial Report", icon: TrendingUp },
     
+    // 📜 Audit Log sirf Principal ko — dusre roles ke liye link hi nahi banta.
+    ...(user?.role === "principal"
+      ? [{ href: "/audit-log", label: "Audit Log", icon: ScrollText }]
+      : []),
     { href: "/settings", label: "Settings", icon: SettingsIcon },
   ];
 
@@ -350,6 +361,7 @@ function Router() {
             <Route path="/homework" component={Homework} />
             <Route path="/leaves" component={Leaves} />
             <Route path="/library" component={Library} />
+            <Route path="/transport" component={Transport} />
             <Route path="/admissions" component={Admissions} />
             <Route path="/student-profile" component={StudentProfile} />
             <Route path="/fees" component={Fees} />
@@ -367,6 +379,7 @@ function Router() {
             <Route path="/staff-salary" component={StaffSalary} />
             <Route path="/financial-dashboard" component={FinancialDashboard} />
             
+            <Route path="/audit-log" component={AuditLog} />
             <Route path="/settings" component={Settings} />
 
             <Route component={NotFound} />

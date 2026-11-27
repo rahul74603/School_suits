@@ -52,6 +52,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 import { openExternal } from "@/lib/openExternal";
+import StaffAssignments from "@/components/StaffAssignments";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 
@@ -83,6 +84,47 @@ function adaptStaffMember(m: any) {
     join_date: m.joinDate,
     status: m.isActive === 0 ? "Inactive" : "Active",
   };
+}
+
+// 📥 CSV parser (v3.3) — Students import wala hi tarika: quotes ke
+// andar comma/newline safe, khaali line skip. Staff CSV Import
+// dialog isi se file padhta hai.
+function parseStaffCsvText(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  const src = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n") {
+      row.push(field);
+      field = "";
+      if (row.some((c) => c.trim() !== "")) rows.push(row);
+      row = [];
+    } else {
+      field += ch;
+    }
+  }
+  row.push(field);
+  if (row.some((c) => c.trim() !== "")) rows.push(row);
+  return rows;
 }
 
 export default function Staff() {
@@ -157,6 +199,21 @@ export default function Staff() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isViewOpen, setIsViewOpen] = useState(false);
+
+  // 📥 Staff CSV Import (v3.3) — Students import wala pattern.
+  // Server: POST /api/staff/bulk { staff: [...] } (sirf principal).
+  // Har row me name + designation + contact lazmi (server schema);
+  // employeeId dohra ho to wo row skip + error aata hai.
+  const [isStaffImportOpen, setIsStaffImportOpen] = useState(false);
+  const [staffImportRows, setStaffImportRows] = useState<any[] | null>(null);
+  const [staffImportErrors, setStaffImportErrors] = useState<string[]>([]);
+  const [staffImportFileName, setStaffImportFileName] = useState("");
+  const [staffImporting, setStaffImporting] = useState(false);
+  const [staffImportResult, setStaffImportResult] = useState<{
+    created: number;
+    skipped: number;
+    errors: { row: number; message: string }[];
+  } | null>(null);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<any>(null);
 
@@ -327,6 +384,122 @@ export default function Staff() {
     setIsEditOpen(true);
   };
 
+  // CSV file → rows. Pehli line header hoti hai; header ke naam
+  // chhote aksharon me, bina space ke mila kar pehchante hain
+  // (name, designation/role, contact/mobile/phone, email,
+  // department, qualification, experience, address, fatherName,
+  // salary/basicSalary, joinDate, employeeId).
+  const handleStaffImportFile = async (file: File) => {
+    setStaffImportResult(null);
+    setStaffImportFileName(file.name);
+    try {
+      const text = await file.text();
+      const grid = parseStaffCsvText(text);
+      if (grid.length < 2) {
+        setStaffImportRows(null);
+        setStaffImportErrors([
+          "File me header ke alawa koi row nahi mili — pehli line column ke naam, uske baad har line ek staff.",
+        ]);
+        return;
+      }
+      const headers = grid[0].map((h) => h.toLowerCase().replace(/\s+/g, ""));
+      const col = (...names: string[]) => {
+        for (const n of names) {
+          const i = headers.indexOf(n);
+          if (i >= 0) return i;
+        }
+        return -1;
+      };
+      const idx = {
+        name: col("name", "staffname", "fullname"),
+        designation: col("designation", "role", "post", "jobtitle"),
+        contact: col("contact", "mobile", "phone", "mobilenumber", "contactnumber"),
+        email: col("email", "emailid"),
+        department: col("department", "dept"),
+        qualification: col("qualification"),
+        experience: col("experience"),
+        address: col("address"),
+        fatherName: col("fathername", "father"),
+        salary: col("salary", "basicsalary", "monthlysalary"),
+        joinDate: col("joindate", "joiningdate"),
+        employeeId: col("employeeid", "empid", "staffid"),
+      };
+      const errors: string[] = [];
+      if (idx.name < 0 || idx.designation < 0 || idx.contact < 0) {
+        errors.push(
+          "Header me name, designation (ya role) aur contact (ya mobile) column lazmi hain — file jaanch kar dobara chunein.",
+        );
+        setStaffImportRows(null);
+        setStaffImportErrors(errors);
+        return;
+      }
+      const get = (cells: string[], i: number) =>
+        i >= 0 ? (cells[i] ?? "").trim() : "";
+      const rows: any[] = [];
+      for (let r = 1; r < grid.length; r++) {
+        const cells = grid[r];
+        const name = get(cells, idx.name);
+        const designation = get(cells, idx.designation);
+        const contact = get(cells, idx.contact);
+        if (!name || !designation || !contact) {
+          errors.push(
+            `Line ${r + 1}: name, designation aur contact teeno lazmi hain — ye row chhod di gayi.`,
+          );
+          continue;
+        }
+        const salaryText = get(cells, idx.salary);
+        const salary = salaryText ? parseInt(salaryText.replace(/[^0-9]/g, "")) : NaN;
+        const row: any = { name, designation, contact };
+        const email = get(cells, idx.email);
+        if (email) row.email = email;
+        const department = get(cells, idx.department);
+        if (department) row.department = department;
+        const qualification = get(cells, idx.qualification);
+        if (qualification) row.qualification = qualification;
+        const experience = get(cells, idx.experience);
+        if (experience) row.experience = experience;
+        const address = get(cells, idx.address);
+        if (address) row.address = address;
+        const fatherName = get(cells, idx.fatherName);
+        if (fatherName) row.fatherName = fatherName;
+        if (!Number.isNaN(salary)) row.basicSalary = salary;
+        const joinDate = get(cells, idx.joinDate);
+        if (joinDate) row.joinDate = joinDate;
+        const employeeId = get(cells, idx.employeeId);
+        if (employeeId) row.employeeId = employeeId;
+        rows.push(row);
+      }
+      setStaffImportRows(rows);
+      setStaffImportErrors(errors);
+    } catch {
+      setStaffImportRows(null);
+      setStaffImportErrors(["File padh nahi paye — sahi CSV file chunein."]);
+    }
+  };
+
+  const doStaffImport = async () => {
+    if (!staffImportRows || staffImportRows.length === 0) return;
+    setStaffImporting(true);
+    try {
+      const result = await apiPost<any>("/api/staff/bulk", {
+        staff: staffImportRows,
+      });
+      setStaffImportResult(result);
+      toast({
+        title: "📥 Staff import pura",
+        description: `${result?.created ?? 0} staff jude, ${result?.skipped ?? 0} chhode gaye.`,
+      });
+      void fetchStaff();
+    } catch (e: any) {
+      toast({
+        title: "Import nahi ho paya",
+        description: e?.message || "Dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setStaffImporting(false);
+  };
+
   const openView = async (staff: any) => {
     // REST (Batch C): documents staff_documents table se aate hain —
     // View khulne par is staff ke documents laakar purane IPC wale
@@ -452,9 +625,26 @@ export default function Staff() {
         </div>
 
         {!isSuperAdmin && (
-          <Button onClick={() => { resetForm(); setIsAddOpen(true); }} className="bg-blue-600 hover:bg-blue-700 shrink-0 self-start sm:self-auto">
-            <Plus className="h-4 w-4 mr-2" /> Add Staff
-          </Button>
+          <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+            {isPrincipal && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setStaffImportRows(null);
+                  setStaffImportErrors([]);
+                  setStaffImportResult(null);
+                  setStaffImportFileName("");
+                  setIsStaffImportOpen(true);
+                }}
+                className="shrink-0"
+              >
+                <Upload className="h-4 w-4 mr-2" /> CSV se Import
+              </Button>
+            )}
+            <Button onClick={() => { resetForm(); setIsAddOpen(true); }} className="bg-blue-600 hover:bg-blue-700 shrink-0">
+              <Plus className="h-4 w-4 mr-2" /> Add Staff
+            </Button>
+          </div>
         )}
       </div>
 
@@ -902,8 +1092,111 @@ export default function Staff() {
                   </div>
                 )}
               </div>
+
+              {/* 🔗 Login link + class assignments (v3.3) */}
+              <StaffAssignments
+                staffId={selectedStaff.id}
+                staffName={selectedStaff.name}
+                linkedUserId={
+                  selectedStaff.userId ?? selectedStaff.user_id ?? null
+                }
+              />
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 📥 Staff CSV Import Dialog (v3.3) */}
+      <Dialog open={isStaffImportOpen} onOpenChange={setIsStaffImportOpen}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Staff CSV se Import</DialogTitle>
+            <DialogDescription>
+              Excel se "CSV (Comma delimited)" save karke file chunein.
+              Pehli line me column ke naam hon: <b>name</b>,{" "}
+              <b>designation</b> (ya role), <b>contact</b> (ya mobile) —
+              ye teen lazmi hain. Baki chaaho to: email, department,
+              qualification, experience, address, fatherName, salary,
+              joinDate, employeeId. Dohra employeeId wali row chhod di
+              jayegi.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>CSV File chunein</Label>
+              <Input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleStaffImportFile(f);
+                  e.target.value = "";
+                }}
+              />
+              {staffImportFileName && (
+                <p className="text-xs text-gray-500">
+                  File: {staffImportFileName}
+                </p>
+              )}
+            </div>
+
+            {staffImportErrors.length > 0 && (
+              <div className="rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900 space-y-1 max-h-40 overflow-y-auto">
+                {staffImportErrors.map((err, i) => (
+                  <p key={i}>⚠️ {err}</p>
+                ))}
+              </div>
+            )}
+
+            {staffImportRows && staffImportRows.length > 0 && !staffImportResult && (
+              <p className="text-sm text-slate-700">
+                ✅ <b>{staffImportRows.length}</b> staff import ke liye
+                taiyaar hain — neeche Import dabayein.
+              </p>
+            )}
+
+            {staffImportResult && (
+              <div className="rounded-md bg-green-50 border border-green-200 p-3 text-sm text-green-900 space-y-1">
+                <p>
+                  ✅ Import pura: <b>{staffImportResult.created}</b>{" "}
+                  staff jude, <b>{staffImportResult.skipped}</b> chhode
+                  gaye.
+                </p>
+                {staffImportResult.errors?.length > 0 && (
+                  <div className="max-h-40 overflow-y-auto space-y-1">
+                    {staffImportResult.errors.map((err, i) => (
+                      <p key={i}>
+                        ⚠️ Row {err.row}: {err.message}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsStaffImportOpen(false)}
+            >
+              Band karein
+            </Button>
+            {!staffImportResult && (
+              <Button
+                onClick={() => void doStaffImport()}
+                disabled={
+                  staffImporting ||
+                  !staffImportRows ||
+                  staffImportRows.length === 0
+                }
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                {staffImporting
+                  ? "Import ho raha hai…"
+                  : `Import karein (${staffImportRows?.length ?? 0})`}
+              </Button>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

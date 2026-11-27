@@ -46,7 +46,11 @@ import {
   Printer,
   FileText,
   Download,
-  Database
+  Database,
+  QrCode,
+  Upload,
+  X,
+  AlertTriangle
 } from "lucide-react";
 
 export default function SettingsPage() {
@@ -79,6 +83,34 @@ export default function SettingsPage() {
     exam_fee: f.examFee,
     annual_fee: f.otherFee,
   });
+
+  // 💳 Payment Settings (v3.3) — school ka apna UPI ID + QR code.
+  // Razorpay jaisi online suvidha setup na ho tab tak yahi rasta
+  // hai: ye jaankari Parents App ke fees hisse me dikhti hai,
+  // parents wahi dekh kar payment karte hain aur screenshot bhej
+  // dete hain (proof Fees page ke Payment Proofs inbox me aata
+  // hai). Server: schools row par upiId / upiQr — save wahi
+  // PUT /api/schools/:id se (school info wala hi rasta).
+  // upiQr poora data-URI (base64) rakha jata hai — documents wale
+  // upload pattern jaisa hi, alag file endpoint nahi chahiye.
+  const [paymentSettings, setPaymentSettings] = useState({
+    upiId: "",
+    upiQr: "",
+  });
+  const [savingPayment, setSavingPayment] = useState(false);
+  const qrFileRef = useRef<HTMLInputElement>(null);
+
+  // ♻️ Backup Restore (v3.3) — export wali JSON file ko wapas
+  // chadhana: POST /api/import/school. Khatarnak kaam hai (data
+  // badal jata hai), isliye file chunne ke baad alag confirm
+  // dialog aata hai; logins/passwords backup me hote hi nahi,
+  // isliye restore bhi nahi hote — dialog me saaf likha hai.
+  const [restoreData, setRestoreData] = useState<any>(null);
+  const [restoreFileName, setRestoreFileName] = useState("");
+  const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<any>(null);
+  const restoreFileRef = useRef<HTMLInputElement>(null);
 
   // School Info State
   const [schoolInfo, setSchoolInfo] = useState({
@@ -159,6 +191,12 @@ export default function SettingsPage() {
           adm_prefix: school.admissionPrefix ?? "",
           adm_year: school.admissionYear ?? "",
           adm_start: school.admissionStart ?? 1,
+        });
+        // 💳 Payment settings bhi branding jawab se hi aate hain
+        // (schools row ke upiId/upiQr columns, v3.3).
+        setPaymentSettings({
+          upiId: school.upiId ?? "",
+          upiQr: school.upiQr ?? "",
         });
       }
 
@@ -294,6 +332,114 @@ export default function SettingsPage() {
     } catch (e) {
       toast({ title: "Error", description: "Failed to save school info", variant: "destructive" });
     }
+  };
+
+  // 💳 QR photo file → data-URI (documents wala FileReader pattern,
+  // yahan poora data-URI rakha jata hai taaki preview bhi wahi ho
+  // aur server ko bhi wahi bhejna hai). QR photo chhoti hoti hai —
+  // 1MB se badi file par saaf mana kar dete hain.
+  const handleQrFile = (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Sirf photo file chunein",
+        description: "QR code ki photo (JPG/PNG) hi chalegi.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      toast({
+        title: "Photo bohut badi hai",
+        description: "QR photo 1MB se chhoti rakhein — screenshot crop karke dobara chunein.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () =>
+      setPaymentSettings((prev) => ({
+        ...prev,
+        upiQr: reader.result?.toString() || "",
+      }));
+    reader.onerror = () =>
+      toast({
+        title: "Photo padh nahi paye",
+        description: "Dobara koshish karein.",
+        variant: "destructive",
+      });
+    reader.readAsDataURL(file);
+  };
+
+  // 💳 Payment settings save — school info wala hi PUT rasta;
+  // khaali khane null bankar jate hain (purani value saaf ho).
+  const savePaymentSettings = async () => {
+    if (!schoolIdRef.current) {
+      toast({ title: "Error", description: "School not loaded", variant: "destructive" });
+      return;
+    }
+    setSavingPayment(true);
+    try {
+      await apiPut(`/api/schools/${schoolIdRef.current}`, {
+        upiId: paymentSettings.upiId.trim() || null,
+        upiQr: paymentSettings.upiQr || null,
+      });
+      toast({
+        title: "✅ Payment settings save ho gayi",
+        description: "Ab ye UPI ID aur QR code Parents App ke fees hisse me dikhega.",
+      });
+    } catch (e: any) {
+      toast({
+        title: "Save nahi ho paya",
+        description: e?.message || "Dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setSavingPayment(false);
+  };
+
+  // ♻️ Restore: file padh kar pehle sirf taiyaar rakhte hain —
+  // asal bhej confirm dialog ke "Haan" ke baad hota hai.
+  const handleRestoreFile = async (file: File) => {
+    setRestoreResult(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("not-an-object");
+      }
+      setRestoreData(parsed);
+      setRestoreFileName(file.name);
+      setRestoreConfirmOpen(true);
+    } catch {
+      toast({
+        title: "Ye backup file nahi lagti",
+        description: "Wahi JSON file chunein jo is app ke Backup / Data Export se bani ho.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const doRestore = async () => {
+    if (!restoreData) return;
+    setRestoring(true);
+    try {
+      // REST: POST /api/import/school — body wahi export JSON.
+      const result = await apiPost<any>("/api/import/school", restoreData);
+      setRestoreResult(result ?? { ok: true });
+      setRestoreConfirmOpen(false);
+      toast({
+        title: "✅ Backup wapas chadh gaya",
+        description: "Data restore ho gaya hai — pages refresh karke dekh lein.",
+      });
+      loadData();
+    } catch (e: any) {
+      toast({
+        title: "Restore nahi ho paya",
+        description: e?.message || "File ya server me dikkat hai — dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setRestoring(false);
   };
 
   // Save Fee Master
@@ -524,6 +670,114 @@ export default function SettingsPage() {
               </div>
               <Button onClick={saveSchoolInfo} className="bg-blue-600 hover:bg-blue-700">
                 <Save className="h-4 w-4 mr-2" /> Save School Info
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* 💳 Payment Settings (v3.3) — UPI ID + QR code.
+              Ye Parents App ke fees hisse me dikhega: parents
+              wahan se payment karke screenshot bhejte hain, jo
+              Fees page ke Payment Proofs inbox me aata hai. */}
+          <Card className="border-t-4 border-t-green-600">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <QrCode className="h-5 w-5" /> Payment Settings — UPI
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-gray-600 leading-relaxed">
+                School ka <b>UPI ID</b> aur <b>QR code</b> yahan lagayein.{" "}
+                <b>Ye Parents App ke fees hisse me dikhega</b> — parents
+                wahi se payment karke screenshot bhej sakenge. Jab tak
+                Razorpay jaisa online setup nahi hota, fees lene ka
+                yahi aasan rasta hai.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>UPI ID</Label>
+                  <Input
+                    value={paymentSettings.upiId}
+                    onChange={(e) =>
+                      setPaymentSettings({
+                        ...paymentSettings,
+                        upiId: e.target.value,
+                      })
+                    }
+                    placeholder="e.g., schoolsbi@okhdfcbank"
+                  />
+                  <p className="text-[11px] text-gray-400">
+                    Wahi UPI ID likhein jis par paise aane hain —
+                    galat ID par gaya paisa school ki zimmedari nahi
+                    hoga, isliye dhyaan se jaanch lein.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>QR Code ki Photo</Label>
+                  {paymentSettings.upiQr ? (
+                    <div className="flex items-start gap-3">
+                      <img
+                        src={paymentSettings.upiQr}
+                        alt="School ka UPI QR code"
+                        className="h-28 w-28 object-contain border rounded-md bg-white"
+                      />
+                      <div className="flex flex-col gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => qrFileRef.current?.click()}
+                        >
+                          <Upload className="h-4 w-4 mr-2" /> Badlein
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="text-red-700 border-red-300 hover:bg-red-50"
+                          onClick={() =>
+                            setPaymentSettings({
+                              ...paymentSettings,
+                              upiQr: "",
+                            })
+                          }
+                        >
+                          <X className="h-4 w-4 mr-2" /> Hatayein
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => qrFileRef.current?.click()}
+                    >
+                      <Upload className="h-4 w-4 mr-2" /> QR Photo Chunein
+                    </Button>
+                  )}
+                  <Input
+                    ref={qrFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleQrFile(f);
+                      e.target.value = "";
+                    }}
+                  />
+                  <p className="text-[11px] text-gray-400">
+                    UPI app (PhonePe/GPay/Paytm) ke QR ki saaf photo —
+                    1MB tak.
+                  </p>
+                </div>
+              </div>
+              <Button
+                onClick={() => void savePaymentSettings()}
+                disabled={savingPayment}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                <Save className="h-4 w-4 mr-2" />
+                {savingPayment ? "Save ho raha hai…" : "Payment Settings Save karein"}
               </Button>
             </CardContent>
           </Card>
@@ -773,9 +1027,111 @@ export default function SettingsPage() {
               List-wise CSV chahiye to Students page se students ki aur
               Fees page se payments / pending dues ki CSV alag se milti hai.
             </p>
+
+            {/* ♻️ Backup Restore (v3.3) */}
+            <div className="border-t pt-4 space-y-3">
+              <h4 className="font-bold flex items-center gap-2 text-slate-800">
+                <Upload className="h-4 w-4" /> Backup Wapas Chadhao
+                (Restore)
+              </h4>
+              <p className="text-sm text-gray-600 leading-relaxed">
+                Kabhi data bigad jaye ya galti se kuch mit jaye, to
+                purani <b>JSON backup file</b> yahan se wapas chadha
+                sakte hain. File chunne ke baad pehle chetaavni
+                aayegi — bina "Haan" dabaye kuch nahi badlega.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="border-amber-400 text-amber-800 hover:bg-amber-50"
+                  onClick={() => restoreFileRef.current?.click()}
+                >
+                  <Upload className="h-4 w-4 mr-2" /> Backup File
+                  Chunein (.json)
+                </Button>
+                <Input
+                  ref={restoreFileRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleRestoreFile(f);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+              {restoreResult && (
+                <div className="rounded-md bg-green-50 border border-green-200 p-3 text-sm text-green-900 break-words">
+                  ✅ Restore pura hua
+                  {restoreFileName ? ` — file: ${restoreFileName}` : ""}
+                  {typeof restoreResult === "object" &&
+                  restoreResult !== null &&
+                  (restoreResult as any).message
+                    ? `: ${(restoreResult as any).message}`
+                    : ""}
+                  {typeof restoreResult === "object" &&
+                  restoreResult !== null &&
+                  (restoreResult as any).counts
+                    ? ` (${Object.entries((restoreResult as any).counts)
+                        .map(([k, v]) => `${k}: ${v}`)
+                        .join(", ")})`
+                    : ""}
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
+
+      {/* ♻️ Restore Confirm Dialog (v3.3) — khatre ki chetaavni */}
+      <Dialog open={restoreConfirmOpen} onOpenChange={setRestoreConfirmOpen}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-red-600 flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" /> Kya aap pakka
+              restore karna chahte hain?
+            </DialogTitle>
+            <DialogDescription>
+              File: <b>{restoreFileName}</b>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm text-gray-700 leading-relaxed">
+            <p>
+              ⚠️ Is file ka data school ke maujooda data ki jagah /
+              uske saath chadh jayega. <b>Jo badlav iske baad hue
+              hain, wo mit sakte hain.</b> Galat file chadh jaye to
+              wapas purani halat laana mushkil hoga.
+            </p>
+            <p>
+              🔐 <b>Logins aur passwords restore NAHI hote</b> — backup
+              file me wo hote hi nahi (suraksha ke liye). Saare
+              accounts jaise hain waise hi rahenge.
+            </p>
+            <p>
+              Salah: pehle upar se <b>aaj ka ek fresh backup</b> le
+              lein, fir restore karein — taaki kuch gadbad ho to
+              wapas ja sakein.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRestoreConfirmOpen(false)}
+              disabled={restoring}
+            >
+              Cancel — rehne do
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void doRestore()}
+              disabled={restoring}
+            >
+              {restoring ? "Restore ho raha hai…" : "Haan, Restore karein"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       </>
       )}
 

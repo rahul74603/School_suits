@@ -66,6 +66,10 @@ export default function Admissions() {
     motherName: "",
     dob: "",
     aadhaarNo: "",
+    // 🪪 APAAR ID (v3.3) — sarkari "One Nation One Student ID";
+    // optional hai, ho to yahin likh lein (UDISE+/board kaam me
+    // kaam aayega).
+    apaarId: "",
     birthCertificateNo: "",
 
     contactNumber: "",
@@ -73,6 +77,10 @@ export default function Admissions() {
     class: "",
     section: "A",
     rollNo: "",
+    // 🎓 Stream (v3.3) — sirf Class 11/12 ke liye (Science /
+    // Commerce / Arts / Humanities); form me bhi sirf tabhi dikhta
+    // hai aur server ko bhi sirf tabhi jata hai.
+    stream: "",
 
     category: "General",
 
@@ -82,6 +90,11 @@ export default function Admissions() {
     tcNumber: "",
     tcIssueDate: "",
     tcSubmitted: false,
+    // 📥 TC Received (v3.3) — pichhle school se TC asal me school
+    // ke paas aa gaya ya nahi (tcSubmitted se alag: wo form ke
+    // saath jama hone ki baat thi, ye asal milne ka record hai)।
+    tcReceived: false,
+    tcReceivedDate: "",
     reportCardSubmitted: false,
 
     transportEnabled: false,
@@ -232,18 +245,28 @@ export default function Admissions() {
         motherName: formData.motherName || undefined,
         dob: formData.dob || undefined,
         aadhaar: formData.aadhaarNo || undefined,
+        apaarId: formData.apaarId.trim() || undefined,
         birthCertificateNo: formData.birthCertificateNo || undefined,
         contact: formData.contactNumber,
         address: formData.address || undefined,
         class: formData.class,
         section: formData.section,
         rollNo: formData.rollNo || undefined,
+        stream:
+          (formData.class === "11" || formData.class === "12") &&
+          formData.stream
+            ? formData.stream
+            : undefined,
         category: formData.category || undefined,
         previousSchoolName: formData.previousSchoolName || undefined,
         previousClass: formData.previousClass || undefined,
         tcNumber: formData.tcNumber || undefined,
         tcIssueDate: formData.tcIssueDate || undefined,
         tcSubmitted: formData.tcSubmitted ? 1 : 0,
+        tcReceived: formData.tcReceived ? 1 : 0,
+        tcReceivedDate: formData.tcReceived
+          ? formData.tcReceivedDate || undefined
+          : undefined,
         reportCardSubmitted: formData.reportCardSubmitted ? 1 : 0,
         transportId:
           formData.transportEnabled && formData.transportId
@@ -330,6 +353,7 @@ export default function Admissions() {
         motherName: "",
         dob: "",
         aadhaarNo: "",
+        apaarId: "",
         birthCertificateNo: "",
 
         contactNumber: "",
@@ -337,6 +361,7 @@ export default function Admissions() {
         class: "",
         section: "A",
         rollNo: "",
+        stream: "",
 
         category: "General",
 
@@ -345,6 +370,8 @@ export default function Admissions() {
         tcNumber: "",
         tcIssueDate: "",
         tcSubmitted: false,
+        tcReceived: false,
+        tcReceivedDate: "",
         reportCardSubmitted: false,
 
         transportEnabled: false,
@@ -548,6 +575,24 @@ export default function Admissions() {
                 />
               </div>
             </div>
+
+            {/* 🪪 APAAR ID (v3.3) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label>APAAR ID (Optional)</Label>
+                <Input
+                  value={formData.apaarId}
+                  onChange={(e) =>
+                    setFormData({ ...formData, apaarId: e.target.value })
+                  }
+                  placeholder="APAAR ID (ho to likhein)"
+                />
+                <p className="text-[10px] text-gray-500">
+                  Sarkari student ID — na ho to khaali chhod dein, baad
+                  me Student Profile se bhi jud sakta hai.
+                </p>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -635,6 +680,40 @@ export default function Admissions() {
                     </span>
                   </div>
                 </div>
+              </div>
+
+              {/* 📥 TC Received (v3.3) — asal TC school ko mila ya nahi */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label>TC Received (Pichhle School se mila)</Label>
+                  <div className="flex items-center gap-2 pt-2">
+                    <Switch
+                      checked={formData.tcReceived}
+                      onCheckedChange={(c) =>
+                        setFormData({ ...formData, tcReceived: c })
+                      }
+                    />
+                    <span className="text-sm text-gray-700">
+                      {formData.tcReceived ? "Mil gaya" : "Nahi mila"}
+                    </span>
+                  </div>
+                </div>
+
+                {formData.tcReceived && (
+                  <div className="space-y-1">
+                    <Label>TC Milne ki Tareekh</Label>
+                    <Input
+                      type="date"
+                      value={formData.tcReceivedDate}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          tcReceivedDate: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -734,6 +813,29 @@ export default function Admissions() {
                   </Select>
                 </div>
               </div>
+
+              {/* 🎓 Stream — sirf Class 11/12 par (v3.3) */}
+              {(formData.class === "11" || formData.class === "12") && (
+                <div className="space-y-1">
+                  <Label>Stream (Class 11–12)</Label>
+                  <Select
+                    onValueChange={(v) =>
+                      setFormData({ ...formData, stream: v })
+                    }
+                    value={formData.stream}
+                  >
+                    <SelectTrigger className="bg-white">
+                      <SelectValue placeholder="Stream chunein" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      <SelectItem value="Science">Science</SelectItem>
+                      <SelectItem value="Commerce">Commerce</SelectItem>
+                      <SelectItem value="Arts">Arts</SelectItem>
+                      <SelectItem value="Humanities">Humanities</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </CardContent>
           </Card>
 

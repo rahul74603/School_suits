@@ -5,8 +5,8 @@ import { MASTER_APP } from "@/lib/masterApp";
 // Jab naya release bane to version yahi badlega aur build.gradle ka
 // versionCode bhi yahi number hoga (dono ka milan zaroori hai —
 // server wala code isse bada ho tabhi update ka sandesh aata hai).
-export const APP_VERSION_CODE = 16;
-export const APP_VERSION_NAME = "3.2";
+export const APP_VERSION_CODE = 17;
+export const APP_VERSION_NAME = "3.3";
 
 // Ye build kis app ki hai — server par /api/app-version?app= ke
 // liye. Flags build-time par tay hote hain (v2.2 ka 3-app split).

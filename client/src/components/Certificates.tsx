@@ -11,6 +11,7 @@ import {
 import { Printer } from "lucide-react";
 import { formatDobText, type IdCardSchool } from "./IdCard";
 import PrintViewer from "./PrintViewer";
+import { apiPost } from "@/lib/api";
 
 // 📜 Certificates (v1.7) — TC (Transfer Certificate) + Bonafide.
 // (v2.0, Arena port #4: Character, Migration aur Birth Verification
@@ -59,6 +60,10 @@ export const CERT_TITLES: Record<CertificateType, string> = {
 };
 
 export interface CertificateStudent {
+  // 📜 Student ki asal id (v3.3) — ho to print ke samay register
+  // me entry banti hai (POST /api/certificates/issued). Na ho to
+  // sirf print hota hai, register chup rehta hai.
+  id?: number;
   name: string;
   fatherName: string;
   motherName?: string | null;
@@ -231,6 +236,20 @@ export function CertificateDialog({
   const handlePrint = () => {
     if (!certRef.current) return;
     setPrintHtml(certRef.current.innerHTML);
+    // 📜 Register entry (v3.3) — print ke saath-saath record bhi:
+    // kab, kisko, konsa certificate. Fire-and-forget: register
+    // fail ho jaye to bhi print NAHI rukta (chup chaap catch) —
+    // certificate dena asal kaam hai, register uska record hai.
+    if (student.id) {
+      void apiPost("/api/certificates/issued", {
+        studentId: student.id,
+        type,
+        studentName: student.name,
+        className: student.class,
+      }).catch(() => {
+        /* register fail — print phir bhi chalega */
+      });
+    }
   };
 
   return (

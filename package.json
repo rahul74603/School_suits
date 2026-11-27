@@ -1,6 +1,6 @@
 {
   "name": "school-guardian-suite",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "license": "MIT",
   "main": "main/main.js",
   "scripts": {

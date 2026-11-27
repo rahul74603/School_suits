@@ -6,6 +6,7 @@ import {
   storage,
   generateUniqueSchoolCode,
   normalizeSchoolCode,
+  type SchoolExportData,
 } from "./storage";
 import {
   insertSchoolSchema,
@@ -24,6 +25,7 @@ import {
   type Staff,
   type StudentDues,
   type LeaveRequest,
+  type PaymentProof,
 } from "@shared/schema";
 import {
   hashPassword,
@@ -218,7 +220,14 @@ const createAdditionalFeeBodySchema = z.object({
 const createTransportRouteBodySchema = z.object({
   routeName: z.string().min(1),
   amount: z.number().int().nonnegative(),
+  // v3.3: gaadi + driver ki jaankari (vaikalpik).
+  vehicleNo: z.string().trim().max(50).optional().nullable(),
+  driverName: z.string().trim().max(100).optional().nullable(),
+  driverContact: z.string().trim().max(20).optional().nullable(),
 });
+
+// Route edit (v3.3) — saare khet vaikalpik, jo aaya wahi badlega.
+const updateTransportRouteBodySchema = createTransportRouteBodySchema.partial();
 
 const updateStaffBodySchema = insertStaffSchema.partial();
 
@@ -458,6 +467,8 @@ const bulkStudentRowSchema = z.object({
   dob: z.string().min(1).optional(),
   address: z.string().min(1).optional(),
   category: z.string().min(1).optional(),
+  // v3.3: APAAR ID CSV se bhi aa sakta hai (vaikalpik).
+  apaarId: z.string().min(1).optional(),
 });
 
 // Ek CSV staff row: staff form ke lazmi khet (name, designation,
@@ -473,6 +484,68 @@ const upsertAppVersionBodySchema = z.object({
   stage: z.enum(["testing", "released"]).optional().default("testing"),
 });
 const APP_VERSION_APP_NAMES = new Set(["school", "parent", "master"]);
+
+// Payment proof (v3.3) — parent UPI screenshot bhejta hai. amount
+// rupee me decimal bhi ho sakta hai (proof table NUMERIC hai);
+// image lazmi base64 string (size ki jaanch route par document
+// wale 2MB pattern se hoti hai).
+const createPaymentProofBodySchema = z.object({
+  studentId: z.number().int().positive(),
+  amount: z.number().positive().max(10000000),
+  txnRef: z.string().trim().max(100).optional().nullable(),
+  image: z.string().min(1),
+});
+
+const paymentProofDecisionBodySchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+});
+
+// Certificate register entry (v3.3) — client print ke samay bhejta
+// hai. type free-text hai (8 certificate types client par hain).
+// studentName vaikalpik hai (merge fix): client bhejta hai, lekin
+// na aaye to route student record se pakka naam le leta hai —
+// register entry kabhi naam ki wajah se na ruke.
+const createIssuedCertificateBodySchema = z.object({
+  studentId: z.number().int().positive(),
+  type: z.string().trim().min(1).max(100),
+  studentName: z.string().trim().min(1).max(200).optional(),
+  className: z.string().trim().max(100).optional().nullable(),
+});
+
+// Staff <-> user link (v3.3).
+const linkStaffUserBodySchema = z.object({
+  userId: z.number().int().positive(),
+});
+
+// Teacher assignment (v3.3) — principal ek teacher-user ko class/
+// section/subject deta hai; isClassTeacher 1 = wo class teacher hai.
+const createTeacherAssignmentBodySchema = z.object({
+  userId: z.number().int().positive(),
+  className: z.string().trim().min(1).max(100),
+  section: z.string().trim().max(20).optional().nullable(),
+  subject: z.string().trim().max(100).optional().nullable(),
+  isClassTeacher: z.boolean().optional(),
+});
+
+// Backup restore (v3.3) — body GET /api/export/school ka poora JSON
+// hota hai; gehri jaanch route ke andar (tables ki maujoodgi).
+const importSchoolBodySchema = z.object({
+  school: z.object({}).passthrough(),
+  exportedAt: z.string().optional(),
+  students: z.array(z.unknown()).optional(),
+  staff: z.array(z.unknown()).optional(),
+  feeStructures: z.array(z.unknown()).optional(),
+  feePayments: z.array(z.unknown()).optional(),
+  studentDues: z.array(z.unknown()).optional(),
+  exams: z.array(z.unknown()).optional(),
+  marks: z.array(z.unknown()).optional(),
+  attendance: z.array(z.unknown()).optional(),
+  notices: z.array(z.unknown()).optional(),
+  transportRoutes: z.array(z.unknown()).optional(),
+  additionalFees: z.array(z.unknown()).optional(),
+  salaryPayments: z.array(z.unknown()).optional(),
+  expenses: z.array(z.unknown()).optional(),
+});
 
 const bulkStaffRowSchema = z.object({
   name: z.string().min(1),
@@ -600,6 +673,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return null;
     }
     return schoolId;
+  };
+
+  // Audit log helper (v3.3) — "kisne kab kya kiya" ka record bade
+  // kaamo par (paisa, admission, accounts, settings, faisle).
+  // FAIL-SAFE: audit likhna fail ho (table na ho, DB hichki) to
+  // asal kaam KABHI nahi rukta — isliye poora body try/catch me
+  // hai aur ye function kabhi throw nahi karta. userName token me
+  // nahi hota, isliye user row se liya jata hai (na mile to null).
+  const logAudit = async (
+    req: Request,
+    action: string,
+    entity: string,
+    entityId: number | null,
+    detail?: string | null,
+  ): Promise<void> => {
+    try {
+      if (!req.user) return;
+      const schoolId = req.user.schoolId ?? scopedSchoolId(req);
+      let userName: string | null = null;
+      try {
+        const me = await storage.getUser(req.user.id);
+        userName = me?.name ?? null;
+      } catch {
+        userName = null;
+      }
+      await storage.createAuditLog({
+        schoolId: schoolId ?? null,
+        userId: req.user.id,
+        userName,
+        action,
+        entity,
+        entityId: entityId ?? null,
+        detail: detail ?? null,
+      });
+    } catch (err) {
+      console.error("logAudit failed (asli kaam jaari hai):", err);
+    }
   };
 
   // --- Login rate limit (§2.4) -------------------------------------------
@@ -1079,10 +1189,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
           .json({ message: "licenseExpiry must be YYYY-MM-DD" });
       }
       if (updates.licenseExpiry === "") updates.licenseExpiry = null;
+      // v3.3: UPI QR image (base64) par bhi document wali 2MB seema —
+      // bina seema ke ek vishal string DB row ko phula degi.
+      if (
+        typeof updates.upiQr === "string" &&
+        updates.upiQr !== "" &&
+        documentTooLarge(updates.upiQr)
+      ) {
+        return res.status(400).json({
+          message: "UPI QR image bahut badi hai (adhiktam ~2 MB)",
+        });
+      }
       const school = await storage.updateSchool(id, {
         ...(updates as typeof result.data),
         updatedAt: new Date(),
       });
+      // Audit (v3.3): settings/branding badlav record ho.
+      await logAudit(
+        req,
+        "school.settings_update",
+        "school",
+        id,
+        `Settings update: ${Object.keys(updates).join(", ")}`,
+      );
       res.json(school);
     },
   );
@@ -1462,6 +1591,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
 
+      // Audit (v3.3): naya account bana — kisne, kis role ka.
+      await logAudit(
+        req,
+        "user.create",
+        "user",
+        created.id,
+        `${created.name} (${created.role}, username ${created.username})`,
+      );
+
       res.status(201).json(await withStudentIds(created));
     },
   );
@@ -1576,6 +1714,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.setMustChangePassword(id, 1);
       await revokeAllRefreshTokensForUser(id);
       const updated = await storage.getUser(id);
+      // Audit (v3.3): password reset — temporary password khud
+      // record me KABHI nahi likhte, sirf ghatna likhte hain.
+      await logAudit(
+        req,
+        "user.password_reset",
+        "user",
+        id,
+        `${target.name} (${target.username}) ka password reset`,
+      );
       res.json({
         user: serializeUser(updated ?? target),
         ...(generated ? { temporaryPassword: generated } : {}),
@@ -1630,7 +1777,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // login taiyaar kar do — contact number ka parent account ho to
       // is bacche ko link, na ho to naya parent account (username =
       // mobile, shuru ka password = bacche ka Admission No.,
-      // mustChangePassword = 0 — pehla login seedha chale). Poora
+      // mustChangePassword = 1 — v3.3: pehle login par password
+      // badalna LAZMI hai, kyunki Admission No. ID card/report card
+      // par chhapa hota hai — koi bhi use jaan sakta hai). Poora
       // niyam storage.ensureParentForAdmission me hai. Ye kadam fail
       // ho jaye to bhi admission safal hi rahega — parent account
       // baad me Users screen se haath se bhi ban sakta hai.
@@ -1641,6 +1790,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (err) {
         console.error("Parent auto-link failed (admission OK):", err);
       }
+      // Audit (v3.3): naya admission.
+      await logAudit(
+        req,
+        "student.create",
+        "student",
+        student.id,
+        `${student.name} — Admission No. ${student.admissionNo}, Class ${student.class}${student.section ? `-${student.section}` : ""}`,
+      );
       res.json(student);
     },
   );
@@ -1794,6 +1951,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       }
+
+      // Audit (v3.3): paisa aaya — sabse hassas record.
+      await logAudit(
+        req,
+        "payment.create",
+        "fee_payment",
+        payment.id,
+        `₹${payment.amount} — student ${paymentData.studentId ?? "-"}, receipt ${payment.receiptNo ?? "-"}`,
+      );
 
       res.status(201).json(payment);
     },
@@ -2473,6 +2639,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         schoolId,
       });
       res.status(201).json(route);
+    },
+  );
+
+  // #46b — transport route edit (v3.3): routeName/amount ke saath
+  // vehicleNo/driverName/driverContact bhi badal sakte hain. Scope
+  // jaanch DELETE wali hi — route isi school ka hona lazmi.
+  app.put(
+    "/api/transport-routes/:id",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const result = updateTransportRouteBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const routes = await storage.getTransportRoutes(schoolId);
+      if (!routes.some((route) => route.id === id)) {
+        return res.status(404).json({ message: "Transport route not found" });
+      }
+      const updated = await storage.updateTransportRoute(id, {
+        ...result.data,
+        updatedAt: new Date(),
+      });
+      res.json(updated);
     },
   );
 
@@ -4258,14 +4450,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const findOwnStaffRecord = async (
     req: Request,
     schoolId: number,
-  ): Promise<Staff | null> => {
+    ): Promise<Staff | null> => {
     const me = await storage.getUser(req.user!.id);
     if (!me) return null;
+    const all = await storage.getStaff(schoolId, { includeInactive: true });
+    // v3.3: pehle pakka user_id link (principal ne POST
+    // /api/staff/:id/link-user se lagaya ho) — contact-match se
+    // zyada bharosemand hai.
+    const linked = all.find((member) => member.userId === me.id);
+    if (linked) return linked;
+    // Fallback: purana contact-match (phone/username == staff contact).
     const candidates = [me.phone, me.username].filter(
       (value): value is string => Boolean(value && value.trim()),
     );
     if (candidates.length === 0) return null;
-    const all = await storage.getStaff(schoolId, { includeInactive: true });
     return (
       all.find(
         (member) => member.contact != null && candidates.includes(member.contact),
@@ -4561,6 +4759,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           status: result.data.status,
           decidedBy: req.user!.id,
         });
+        // Audit (v3.3): leave ka faisla.
+        await logAudit(
+          req,
+          "leave.decision",
+          "leave_request",
+          id,
+          `${leave.kind} leave ${result.data.status}`,
+        );
         return res.json(updated);
       } catch (err) {
         console.error("PATCH /api/leaves/:id/decision failed:", err);
@@ -4646,6 +4852,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             dob: rowData.dob ?? null,
             address: rowData.address ?? null,
             category: rowData.category ?? null,
+            apaarId: rowData.apaarId ?? null,
           });
           created++;
 
@@ -4755,6 +4962,520 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       return res.json({ created, skipped, errors });
+    },
+  );
+
+  // =====================================================================
+  // v3.3 — Payment proofs (UPI screenshot) / Certificates register /
+  // Audit log / Staff-user link / Teacher assignments / Backup restore
+  // =====================================================================
+
+  // Proof ki rakam storage me NUMERIC (string) aati hai — client ko
+  // hamesha number bhejo.
+  const serializePaymentProof = (proof: PaymentProof) => ({
+    ...proof,
+    amount: Number(proof.amount),
+  });
+
+  // Parent UPI screenshot bhejta hai. Ownership: student parent ke
+  // linked baccho me hona lazmi — warna 404 (parent overview wala
+  // hi pattern: dusre ke bacche ka wajood hi nahi dikhta).
+  app.post(
+    "/api/parent/payment-proof",
+    requireAuth,
+    requireRole("parent"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createPaymentProofBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const linked = await parentLinkedStudentIds(req);
+      if (!linked.includes(result.data.studentId)) {
+        return res.status(404).json({ message: "Student not found" });
+      }
+      if (documentTooLarge(result.data.image)) {
+        return res.status(400).json({
+          message: "Screenshot bahut bada hai (adhiktam ~2 MB)",
+        });
+      }
+      const proof = await storage.createPaymentProof({
+        schoolId,
+        studentId: result.data.studentId,
+        parentUserId: req.user!.id,
+        amount: String(result.data.amount),
+        txnRef: result.data.txnRef ?? null,
+        image: result.data.image,
+        status: "pending",
+      });
+      return res.status(201).json(serializePaymentProof(proof));
+    },
+  );
+
+  // Parent ke APNE bheje hue proofs — Parents App ki "Meri bheji
+  // raseedein" list ke liye (merge fix v3.3: parent client ye
+  // endpoint pehle try karta hai). Sirf usi parent ke proofs jiska
+  // login hai (parentUserId match), naye pehle (storage ka order).
+  // Tasveer list me NAHI jati (bhaari hai) — hasImage flag aata hai.
+  app.get(
+    "/api/parent/payment-proofs",
+    requireAuth,
+    requireRole("parent"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const all = await storage.getPaymentProofs(schoolId);
+      const mine = all.filter((proof) => proof.parentUserId === req.user!.id);
+      const enriched = await Promise.all(
+        mine.map(async (proof) => {
+          const student =
+            proof.studentId != null
+              ? await storage.getStudent(proof.studentId)
+              : undefined;
+          const { image: _image, ...rest } = serializePaymentProof(proof);
+          return {
+            ...rest,
+            hasImage: Boolean(proof.image),
+            studentName: student?.name ?? null,
+          };
+        }),
+      );
+      return res.json(enriched);
+    },
+  );
+
+  // Daftar ki proof list — student ke naam/class ke saath. Tasveer
+  // (image) list me NAHI jati (bhaari hai); faisle se pehle ek
+  // proof dekhna ho to GET /api/payment-proofs/:id.
+  app.get(
+    "/api/payment-proofs",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const status =
+        typeof req.query.status === "string" ? req.query.status : undefined;
+      const proofs = await storage.getPaymentProofs(schoolId, { status });
+      const enriched = await Promise.all(
+        proofs.map(async (proof) => {
+          const student =
+            proof.studentId != null
+              ? await storage.getStudent(proof.studentId)
+              : undefined;
+          const { image: _image, ...rest } = serializePaymentProof(proof);
+          return {
+            ...rest,
+            hasImage: Boolean(proof.image),
+            studentName: student?.name ?? null,
+            studentClass: student?.class ?? null,
+            studentSection: student?.section ?? null,
+            admissionNo: student?.admissionNo ?? null,
+          };
+        }),
+      );
+      return res.json(enriched);
+    },
+  );
+
+  // Ek proof poora (tasveer ke saath) — faisle se pehle dekhne ke liye.
+  app.get(
+    "/api/payment-proofs/:id",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const proof = await storage.getPaymentProof(id);
+      if (!proof || proof.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Payment proof not found" });
+      }
+      const student =
+        proof.studentId != null
+          ? await storage.getStudent(proof.studentId)
+          : undefined;
+      return res.json({
+        ...serializePaymentProof(proof),
+        studentName: student?.name ?? null,
+        studentClass: student?.class ?? null,
+        studentSection: student?.section ?? null,
+        admissionNo: student?.admissionNo ?? null,
+      });
+    },
+  );
+
+  // Proof ka faisla. Approve = asal fee payment banta hai (maujooda
+  // payment system se — receipt no wagera khud banta hai) aur
+  // payment_id proof se jud jata hai. Sirf pending par faisla;
+  // dusri baar 400. Try/catch leave-decision jaisa (PATCH route).
+  app.patch(
+    "/api/payment-proofs/:id/decision",
+    requireAuth,
+    requireRole("principal", "accountant"),
+    async (req, res) => {
+      try {
+        const schoolId = requireSchoolId(req, res);
+        if (schoolId == null) return;
+        const id = parsePathId(req);
+        if (id == null) return res.status(400).json({ message: "Invalid ID" });
+        const result = paymentProofDecisionBodySchema.safeParse(req.body);
+        if (!result.success) return res.status(400).json(result.error);
+        const proof = await storage.getPaymentProof(id);
+        if (!proof || proof.schoolId !== schoolId) {
+          return res.status(404).json({ message: "Payment proof not found" });
+        }
+        if (proof.status !== "pending") {
+          return res.status(400).json({
+            message: "Is proof par pehle hi faisla ho chuka hai",
+          });
+        }
+
+        let paymentId: number | null = null;
+        if (result.data.status === "approved") {
+          const student =
+            proof.studentId != null
+              ? await storage.getStudent(proof.studentId)
+              : undefined;
+          if (!student || student.schoolId !== schoolId) {
+            return res
+              .status(400)
+              .json({ message: "Proof ka student is school me nahi mila" });
+          }
+          const now = new Date();
+          const monthName = now.toLocaleString("en-US", { month: "long" });
+          const payment = await storage.createFeePayment({
+            schoolId,
+            studentId: proof.studentId,
+            // feePayments.amount INTEGER hai — proof ki decimal
+            // rakam ko gol karke bhejo.
+            amount: Math.round(Number(proof.amount)),
+            month: monthName,
+            year: now.getFullYear(),
+            // Receipt no baaki payments ki tarah server hi banata hai.
+            receiptNo: await storage.getNextReceiptNo(schoolId),
+            paymentMethod: "UPI",
+            remarks: proof.txnRef
+              ? `UPI screenshot proof (Txn: ${proof.txnRef})`
+              : "UPI screenshot proof",
+          });
+          paymentId = payment.id;
+        }
+
+        const updated = await storage.updatePaymentProof(id, {
+          status: result.data.status,
+          decidedBy: req.user!.id,
+          decidedAt: new Date(),
+          paymentId,
+        });
+        // Audit (v3.3): proof ka faisla (+ banti hui payment).
+        await logAudit(
+          req,
+          "payment_proof.decision",
+          "payment_proof",
+          id,
+          result.data.status === "approved"
+            ? `Proof approved — ₹${proof.amount} ki payment #${paymentId} bani`
+            : `Proof rejected — ₹${proof.amount}`,
+        );
+        return res.json(serializePaymentProof(updated ?? proof));
+      } catch (err) {
+        console.error("PATCH /api/payment-proofs/:id/decision failed:", err);
+        return res.status(500).json({
+          message: "Faisla save nahi ho paya. Dobara koshish karein.",
+        });
+      }
+    },
+  );
+
+  // Certificate register — print ke samay record. Roles wahi jo
+  // Certificates page khol sakte hain (school ke staff roles).
+  app.post(
+    "/api/certificates/issued",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createIssuedCertificateBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const student = await storage.getStudent(result.data.studentId);
+      if (!student || student.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Student not found" });
+      }
+      const resolvedStudentName = result.data.studentName ?? student.name;
+      const entry = await storage.createIssuedCertificate({
+        schoolId,
+        studentId: result.data.studentId,
+        type: result.data.type,
+        studentName: resolvedStudentName,
+        className: result.data.className ?? student.class ?? null,
+        issuedBy: req.user!.id,
+      });
+      // Audit (v3.3): certificate issue.
+      await logAudit(
+        req,
+        "certificate.issue",
+        "certificate",
+        entry.id,
+        `${result.data.type} — ${resolvedStudentName}`,
+      );
+      return res.status(201).json(entry);
+    },
+  );
+
+  // Register ki list — ?studentId= se ek bacche ke saare certificates.
+  app.get(
+    "/api/certificates/issued",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const studentId = parseOptionalId(
+        typeof req.query.studentId === "string"
+          ? req.query.studentId
+          : undefined,
+      );
+      const rows = await storage.getIssuedCertificates(schoolId, {
+        studentId,
+      });
+      return res.json(rows);
+    },
+  );
+
+  // Audit log — sirf principal, naye pehle, adhiktam 200.
+  app.get(
+    "/api/audit-logs",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const rows = await storage.getAuditLogs(schoolId, 200);
+      return res.json(rows);
+    },
+  );
+
+  // Staff record ko uske login user se pakka jodo (v3.3) — leave
+  // matching iske baad contact-match par nirbhar nahi rehti. Dono
+  // (staff + user) ISI school ke hone lazmi; user teacher/staff/
+  // accountant role ka hi ho sakta hai.
+  app.post(
+    "/api/staff/:id/link-user",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const result = linkStaffUserBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const member = await storage.getStaffMember(id);
+      if (!member || member.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Staff not found" });
+      }
+      const user = await storage.getUser(result.data.userId);
+      if (!user || user.schoolId !== schoolId) {
+        return res.status(400).json({
+          message: "User is school ka nahi hai",
+        });
+      }
+      if (
+        user.role !== "teacher" &&
+        user.role !== "staff" &&
+        user.role !== "accountant"
+      ) {
+        return res.status(400).json({
+          message: "Sirf teacher/staff/accountant user ko staff record se jod sakte hain",
+        });
+      }
+      const updated = await storage.updateStaff(id, {
+        userId: user.id,
+        updatedAt: new Date(),
+      });
+      return res.json(updated);
+    },
+  );
+
+  // Teacher assignments — principal manage karta hai; teacher sirf
+  // apne assignments dekhta hai; principal/accountant poori list.
+  app.get(
+    "/api/teacher-assignments",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const rows =
+        req.user!.role === "teacher"
+          ? await storage.getTeacherAssignments(schoolId, {
+              userId: req.user!.id,
+            })
+          : await storage.getTeacherAssignments(schoolId);
+      const enriched = await Promise.all(
+        rows.map(async (row) => {
+          const user =
+            row.userId != null ? await storage.getUser(row.userId) : undefined;
+          return {
+            ...row,
+            teacherName: user?.name ?? null,
+            teacherUsername: user?.username ?? null,
+          };
+        }),
+      );
+      return res.json(enriched);
+    },
+  );
+
+  app.post(
+    "/api/teacher-assignments",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createTeacherAssignmentBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const user = await storage.getUser(result.data.userId);
+      if (!user || user.schoolId !== schoolId) {
+        return res.status(400).json({
+          message: "User is school ka nahi hai",
+        });
+      }
+      if (user.role !== "teacher") {
+        return res.status(400).json({
+          message: "Assignment sirf teacher user ko de sakte hain",
+        });
+      }
+      const created = await storage.createTeacherAssignment({
+        schoolId,
+        userId: result.data.userId,
+        className: result.data.className,
+        section: result.data.section ?? null,
+        subject: result.data.subject ?? null,
+        isClassTeacher: result.data.isClassTeacher ? 1 : 0,
+      });
+      return res.status(201).json(created);
+    },
+  );
+
+  app.delete(
+    "/api/teacher-assignments/:id",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const existing = await storage.getTeacherAssignment(id);
+      if (!existing || existing.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Assignment not found" });
+      }
+      await storage.deleteTeacherAssignment(id);
+      return res.json({ message: "Assignment hata diya gaya" });
+    },
+  );
+
+  // Backup restore (v3.3) — GET /api/export/school wala JSON wapas
+  // bharo. Sirf principal, sirf APNE school ki file: file ke
+  // school.id ka caller ke school se milna lazmi hai (warna 400),
+  // aur andar har row par schoolId token wala hi lagta hai.
+  // Users/logins ko restore chhoota hi nahi. Poori seema NOTES.md
+  // me hai.
+  app.post(
+    "/api/import/school",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = importSchoolBodySchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({
+          message:
+            "Backup file ka format sahi nahi hai — GET /api/export/school wali file chahiye",
+        });
+      }
+      const data = result.data;
+      // Dusri school ki file = saaf inkaar. Export me school ka id
+      // hota hai; wo caller ke school se na mile to restore nahi
+      // hoga. (Ek wajah ye bhi hai: admissionNo poore system me
+      // UNIQUE hai — dusri school ke admission numbers is school
+      // me ghus hi nahi sakte, takraav lazmi hoga.)
+      const fileSchoolId = (data.school as { id?: unknown }).id;
+      if (typeof fileSchoolId !== "number" || fileSchoolId !== schoolId) {
+        return res.status(400).json({
+          message:
+            "Ye backup file is school ki nahi hai — sirf apne school ki export file hi restore ho sakti hai",
+        });
+      }
+      const tableKeys = [
+        "students",
+        "staff",
+        "feeStructures",
+        "feePayments",
+        "studentDues",
+        "exams",
+        "marks",
+        "attendance",
+        "notices",
+        "transportRoutes",
+        "additionalFees",
+        "salaryPayments",
+        "expenses",
+      ] as const;
+      // Ek bhi pehchan-wali table na ho to ye backup file nahi hai.
+      if (!tableKeys.some((key) => Array.isArray(data[key]))) {
+        return res.status(400).json({
+          message:
+            "Backup file me koi data table nahi mili — sahi export file chahiye",
+        });
+      }
+      // Har row ek object honi chahiye jisme id ho (id-remap ke liye).
+      for (const key of tableKeys) {
+        const rows = data[key];
+        if (!rows) continue;
+        for (const row of rows as unknown[]) {
+          if (
+            typeof row !== "object" ||
+            row === null ||
+            typeof (row as { id?: unknown }).id !== "number"
+          ) {
+            return res.status(400).json({
+              message: `Backup file kharab hai (${key} ki ek row me id nahi hai)`,
+            });
+          }
+        }
+      }
+      try {
+        const counts = await storage.importSchoolData(
+          schoolId,
+          data as unknown as SchoolExportData,
+        );
+        // Audit (v3.3): restore khud ek bada faisla hai — record ho
+        // (restore audit_logs ko saaf nahi karta, isliye ye entry
+        // restore ke BAAD bhi bachi rehti hai).
+        await logAudit(
+          req,
+          "school.restore",
+          "school",
+          schoolId,
+          `Backup restore: ${counts.students} students, ${counts.staff} staff, ${counts.feePayments} payments, ${counts.exams} exams`,
+        );
+        return res.json({
+          message: "Backup restore ho gaya",
+          restored: counts,
+        });
+      } catch (err) {
+        console.error("POST /api/import/school failed:", err);
+        return res.status(500).json({
+          message:
+            "Restore nahi ho paya — purana data surakshit hai (aadha restore nahi hota). File jaanch kar dobara koshish karein.",
+        });
+      }
     },
   );
 

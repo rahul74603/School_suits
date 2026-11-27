@@ -7,9 +7,16 @@ import { useToast } from "@/hooks/use-toast";
 import { apiGet } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
-import { Award, School, Search } from "lucide-react";
+import { Award, RefreshCw, School, Search } from "lucide-react";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import {
   CertificateDialog,
+  CERT_TITLES,
   type CertificateStudent,
   type CertificateType,
 } from "@/components/Certificates";
@@ -39,6 +46,8 @@ function normalizeSchool(raw: any): IdCardSchool | null {
 
 function toCertificateStudent(s: any): CertificateStudent {
   return {
+    // 📜 id (v3.3) — print par register entry isi se banti hai.
+    id: s.id,
     name: s.name ?? "",
     fatherName: s.fatherName ?? s.father_name ?? "",
     motherName: s.motherName ?? null,
@@ -85,6 +94,11 @@ export default function CertificatesPage() {
   const [certStudent, setCertStudent] = useState<CertificateStudent | null>(null);
   const [certType, setCertType] = useState<CertificateType>("tc");
   const [isCertOpen, setIsCertOpen] = useState(false);
+
+  // 📜 Register (v3.3) — diye gaye certificates ka record:
+  // GET /api/certificates/issued. Tab khulne par load hota hai.
+  const [registerRows, setRegisterRows] = useState<any[] | null>(null);
+  const [registerLoading, setRegisterLoading] = useState(false);
 
   const schoolForCert = normalizeSchool(branding ?? school);
 
@@ -176,6 +190,26 @@ export default function CertificatesPage() {
     setIsCertOpen(true);
   };
 
+  // 📜 Register load — jawab ke field-naam lachile (studentName /
+  // type / issuedBy / issuedAt ke aam badlav chalenge)।
+  const loadRegister = async () => {
+    setRegisterLoading(true);
+    try {
+      const data = await apiGet<any>("/api/certificates/issued");
+      const list = Array.isArray(data) ? data : (data?.issued ?? []);
+      setRegisterRows(list);
+    } catch (error) {
+      toast({
+        title: "Register load nahi ho paya",
+        description:
+          error instanceof Error ? error.message : "Dobara koshish karein",
+        variant: "destructive",
+      });
+      setRegisterRows([]);
+    }
+    setRegisterLoading(false);
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
       <h1 className="flex items-center gap-2 text-2xl font-bold sm:text-3xl">
@@ -188,6 +222,18 @@ export default function CertificatesPage() {
         Sports Merit).
       </p>
 
+      <Tabs
+        defaultValue="make"
+        onValueChange={(v) => {
+          if (v === "register" && registerRows === null) void loadRegister();
+        }}
+      >
+        <TabsList className="grid w-full grid-cols-2 max-w-md">
+          <TabsTrigger value="make">Certificate Banao</TabsTrigger>
+          <TabsTrigger value="register">Register</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="make" className="mt-4">
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Baccha khojein</CardTitle>
@@ -247,6 +293,92 @@ export default function CertificatesPage() {
           </div>
         </CardContent>
       </Card>
+        </TabsContent>
+
+        {/* 📜 Register — kab, kisko, konsa, kisne diya */}
+        <TabsContent value="register" className="mt-4">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="text-lg">
+                  Diye Gaye Certificates ka Register
+                </CardTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void loadRegister()}
+                  disabled={registerLoading}
+                >
+                  <RefreshCw
+                    className={`h-4 w-4 mr-2 ${registerLoading ? "animate-spin" : ""}`}
+                  />
+                  Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {registerRows === null || registerLoading ? (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  Load ho raha hai…
+                </p>
+              ) : registerRows.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  Abhi koi certificate print nahi hua — pehla
+                  certificate print hote hi yahan entry ban jayegi.
+                </p>
+              ) : (
+                <div className="divide-y">
+                  {registerRows.map((r: any, i: number) => {
+                    const when = r.issuedAt ?? r.createdAt ?? "";
+                    const typeKey = (r.type ?? r.certificateType ?? "") as CertificateType;
+                    return (
+                      <div
+                        key={r.id ?? i}
+                        className="py-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium break-words">
+                            {r.studentName ?? r.student?.name ?? r.name ?? "—"}
+                            {(r.class || r.studentClass) && (
+                              <span className="text-xs text-muted-foreground ml-2">
+                                Class {r.class ?? r.studentClass}
+                                {r.section ? `-${r.section}` : ""}
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-sm text-slate-700">
+                            {CERT_TITLES[typeKey] ?? typeKey ?? "Certificate"}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-xs text-gray-500 sm:text-right">
+                          <p>
+                            {when
+                              ? new Date(when).toLocaleString("en-IN", {
+                                  day: "2-digit",
+                                  month: "short",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              : ""}
+                          </p>
+                          <p>
+                            Diya:{" "}
+                            {r.issuedByName ??
+                              r.issuedBy ??
+                              r.userName ??
+                              r.createdBy ??
+                              "—"}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       <CertificateDialog
         open={isCertOpen}

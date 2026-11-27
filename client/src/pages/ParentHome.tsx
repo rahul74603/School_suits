@@ -15,9 +15,14 @@ import {
   BookOpen,
   CalendarCheck,
   CalendarOff,
+  Copy,
   Home,
+  ImagePlus,
   Megaphone,
+  QrCode,
+  ReceiptText,
   RefreshCw,
+  Send,
 } from "lucide-react";
 
 // 🏠 Parent Home (v2.0, Arena port #5) — parent login ke baad ki
@@ -37,6 +42,15 @@ import {
 //  - Leave (v3.0): parent yahi se chutti lagata hai (sirf apne
 //    linked bacche ke liye — server unlinked ko 404 deta hai) aur
 //    apni leaves ka status (Pending/Approved/Rejected) dekhta hai.
+//  - UPI Fees (v3.3): school ne Settings me UPI ID / QR set kiya ho
+//    to fees ke neeche "Fees Online Bharein (UPI)" card aata hai —
+//    QR + UPI ID (copy button ke saath) overview ke paymentInfo se
+//    aata hai. Parent kisi bhi UPI app se bhej kar payment ka
+//    screenshot yahi lagata hai (POST /api/parent/payment-proof) —
+//    school jaanch karke fees me jodta hai. Apne bheje proofs ki
+//    sthiti (Jaanch baaki / Jud gaya / Mana kiya) alag card me
+//    dikhti hai. School ne UPI set NA kiya ho to card aata hi nahi
+//    (khaali jhoota card kabhi nahi).
 //  - v1.9 responsive niyam: sab w-full/min-w-0, koi fixed width
 //    nahi, page kabhi side me nahi bhagta.
 
@@ -147,6 +161,59 @@ function leaveStatusBadge(status: string) {
   }
 }
 
+// 💳 UPI payment jaankari (v3.3) — overview ke top-level par
+// server deta hai. School ne Settings me kuch set na kiya ho to
+// paymentInfo null/khaali aayega aur card dikhega hi nahi.
+// upiQr: QR photo ka base64 (data: URI ho to waisa hi chalega —
+// client dono roop sambhalta hai).
+interface ParentPaymentInfo {
+  upiId: string | null;
+  upiQr: string | null;
+}
+
+// 🧾 Parent ka bheja hua payment proof (v3.3) — sthiti school ke
+// faisle se badalti hai: pending (jaanch baaki) / approved (fees
+// me jud gaya) / rejected (school ne mana kiya).
+interface ParentPaymentProof {
+  id: number;
+  studentId: number;
+  studentName?: string | null;
+  amount: number;
+  txnRef: string | null;
+  status: string;
+  createdAt: string | null;
+}
+
+function proofStatusBadge(status: string) {
+  switch ((status || "").toLowerCase()) {
+    case "approved":
+    case "accepted":
+      return (
+        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+          ✅ Fees me jud gaya
+        </Badge>
+      );
+    case "rejected":
+      return (
+        <Badge className="bg-red-100 text-red-800 hover:bg-red-100">
+          ❌ School ne mana kiya
+        </Badge>
+      );
+    default:
+      return (
+        <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+          ⏳ Jaanch baaki hai
+        </Badge>
+      );
+  }
+}
+
+// QR ki value ko <img src> bana do — server data: URI bheje to
+// waisa hi, sirf base64 bheje to PNG maan kar prefix jodo.
+function qrImageSrc(qr: string): string {
+  return qr.startsWith("data:") ? qr : `data:image/png;base64,${qr}`;
+}
+
 interface ParentOverview {
   children: ParentOverviewChild[];
   notices: Array<{
@@ -156,6 +223,11 @@ interface ParentOverview {
     audience: string | null;
     createdAt: string | null;
   }>;
+  // v3.3: UPI payment (school ne set kiya ho tabhi bhara aayega)
+  paymentInfo?: ParentPaymentInfo | null;
+  // v3.3: agar server proofs overview me hi de de to yahi se
+  // uthenge; warna GET /api/parent/payment-proofs alag se hota hai.
+  paymentProofs?: ParentPaymentProof[];
 }
 
 const DAYS = [
@@ -210,6 +282,41 @@ export default function ParentHome() {
   });
   const [leaveSaving, setLeaveSaving] = useState(false);
 
+  // 🧾 UPI payment proofs (v3.3): apne bheje hue proofs + form.
+  // Form upar chune hue bacche ke liye hi hai (baccha-switcher se
+  // badalta hai) — isliye form ke andar alag baccha-chunav nahi;
+  // card me bacche ka naam saaf dikhta hai taaki galat bacche ke
+  // naam proof na chala jaye.
+  const [proofs, setProofs] = useState<ParentPaymentProof[]>([]);
+  const [proofForm, setProofForm] = useState({ amount: "", txnRef: "" });
+  const [proofImage, setProofImage] = useState<{
+    base64: string;
+    name: string;
+    mime: string;
+  } | null>(null);
+  const [proofSending, setProofSending] = useState(false);
+  const [proofSentNote, setProofSentNote] = useState(false);
+
+  // Proofs do jagah se aa sakte hain: overview ke paymentProofs
+  // se, ya alag GET /api/parent/payment-proofs se. Alag wala mile
+  // to wahi taaza maano; na mile (purana server) to overview wala.
+  const loadProofs = async (fromOverview?: ParentPaymentProof[]) => {
+    if (fromOverview) setProofs(fromOverview);
+    try {
+      const data = await apiGet<ParentPaymentProof[]>(
+        "/api/parent/payment-proofs",
+      );
+      if (Array.isArray(data)) setProofs(data);
+    } catch {
+      // Alag endpoint na ho to overview wali list hi chalegi.
+    }
+  };
+
+  useEffect(() => {
+    void loadProofs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadLeaves = async () => {
     try {
       const data = await apiGet<ParentLeaveRow[]>("/api/leaves");
@@ -228,6 +335,11 @@ export default function ParentHome() {
   // galti se na lag jaye.
   useEffect(() => {
     setLeaveForm({ fromDate: "", toDate: "", reason: "" });
+    // Payment proof ka form bhi saaf — screenshot/amount dusre
+    // bacche ke naam na chala jaye.
+    setProofForm({ amount: "", txnRef: "" });
+    setProofImage(null);
+    setProofSentNote(false);
   }, [childIndex]);
 
   const loadOverview = async () => {
@@ -235,6 +347,7 @@ export default function ParentHome() {
     try {
       const data = await apiGet<ParentOverview>("/api/parent/overview");
       setOverview(data);
+      if (data?.paymentProofs) void loadProofs(data.paymentProofs);
       setLoadedOnce(true);
       setChildIndex((prev) =>
         data && data.children.length > 0
@@ -305,6 +418,140 @@ export default function ParentHome() {
     } finally {
       setLeaveSaving(false);
     }
+  };
+
+  // 💳 UPI (v3.3): school ne UPI ID ya QR — kam se kam ek — set
+  // kiya ho tabhi payment card dikhega. Dono khaali = koi card
+  // nahi (jhoota khaali card kabhi nahi).
+  const paymentInfo = overview?.paymentInfo ?? null;
+  const hasUpi = !!(
+    paymentInfo &&
+    ((paymentInfo.upiId ?? "").trim() || (paymentInfo.upiQr ?? "").trim())
+  );
+
+  // UPI ID copy — WebView me clipboard kabhi fail hota hai, to
+  // purana tareeka (chhupa textarea + select) fallback rakha hai.
+  // Wo bhi na chale to toast me ID dikha do, parent likh lega.
+  const copyUpiId = async () => {
+    const upiId = (paymentInfo?.upiId ?? "").trim();
+    if (!upiId) return;
+    try {
+      await navigator.clipboard.writeText(upiId);
+      toast({ title: "✅ Copy ho gaya", description: `UPI ID: ${upiId}` });
+      return;
+    } catch {
+      // fallback neeche
+    }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = upiId;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      toast({ title: "✅ Copy ho gaya", description: `UPI ID: ${upiId}` });
+    } catch {
+      toast({
+        title: "UPI ID ye hai",
+        description: upiId,
+      });
+    }
+  };
+
+  // Screenshot file → base64 (documents wala hi pattern). Server
+  // ki limit ~2MB hai — badi photo yahi rok do, saaf sandesh ke
+  // saath, warna bhejne ke baad error aayega.
+  const PROOF_MAX_BYTES = 2 * 1024 * 1024;
+  const onProofFile = (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Photo hi lagayein",
+        description: "Payment ka screenshot (photo) chunein.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (file.size > PROOF_MAX_BYTES) {
+      toast({
+        title: "Photo bahut badi hai",
+        description: "2 MB se chhoti photo lagayein.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () =>
+      setProofImage({
+        base64: (reader.result?.toString() || "").split(",")[1] ?? "",
+        name: file.name,
+        mime: file.type || "image/png",
+      });
+    reader.onerror = () =>
+      toast({
+        title: "Photo nahi lagi",
+        description: "Dobara koshish karein.",
+        variant: "destructive",
+      });
+    reader.readAsDataURL(file);
+  };
+
+  const submitProof = async () => {
+    if (!child) return;
+    const amount = Number(proofForm.amount);
+    if (!amount || amount <= 0) {
+      toast({
+        title: "Amount likhein",
+        description: "Kitni fees bheji hai, wo rakam lazmi hai.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!proofImage?.base64) {
+      toast({
+        title: "Screenshot lagayein",
+        description: "Payment ka screenshot lagana lazmi hai.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setProofSending(true);
+    try {
+      await apiPost("/api/parent/payment-proof", {
+        studentId: child.student.id,
+        amount,
+        txnRef: proofForm.txnRef.trim() || undefined,
+        image: proofImage.base64,
+      });
+      toast({
+        title: "✅ School ko bhej diya gaya",
+        description:
+          "School jaanch karke fees me jod dega. Sthiti neeche dikhegi.",
+      });
+      setProofForm({ amount: "", txnRef: "" });
+      setProofImage(null);
+      setProofSentNote(true);
+      void loadProofs();
+    } catch (error) {
+      toast({
+        title: "Nahi bhej paya",
+        description:
+          error instanceof Error ? error.message : "Dobara koshish karein",
+        variant: "destructive",
+      });
+    } finally {
+      setProofSending(false);
+    }
+  };
+
+  // Proof kis bacche ka hai — server naam de to wahi, warna apni
+  // children list se studentId mila kar.
+  const proofChildName = (proof: ParentPaymentProof): string => {
+    if (proof.studentName) return proof.studentName;
+    const match = children.find((c) => c.student.id === proof.studentId);
+    return match ? match.student.name : "";
   };
 
   return (
@@ -548,6 +795,154 @@ export default function ParentHome() {
               )}
             </CardContent>
           </Card>
+
+          {/* 💳 Fees Online Bharein (UPI) — v3.3. Ye card SIRF
+              tab dikhta hai jab school ne Settings me UPI ID ya
+              QR set kiya ho (hasUpi). Parent QR/UPI par apne UPI
+              app se fees bhejta hai aur screenshot yahi lagata
+              hai — school jaanch karke asal fees me jodta hai,
+              isliye yahan bhejna fees "jama" hona nahi hai. */}
+          {hasUpi && (
+            <Card className="w-full min-w-0 border-emerald-200">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <QrCode className="h-5 w-5 text-emerald-600" /> Fees
+                  Online Bharein (UPI)
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  Kisi bhi UPI app (PhonePe / Google Pay / Paytm) se
+                  neeche wale QR code par ya UPI ID par fees bhejein.
+                  Payment ho jane ke baad usi ka{" "}
+                  <b>screenshot neeche lagana lazmi hai</b> — school
+                  jaanch karke aapki fees me jod dega.
+                </p>
+
+                {paymentInfo?.upiQr?.trim() && (
+                  <div className="flex justify-center">
+                    <img
+                      src={qrImageSrc(paymentInfo.upiQr)}
+                      alt="School ka UPI QR code"
+                      className="h-52 w-52 max-w-full rounded-xl border bg-white object-contain p-2"
+                    />
+                  </div>
+                )}
+
+                {paymentInfo?.upiId?.trim() && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-xs text-gray-500">UPI ID</div>
+                      <div className="break-all font-semibold text-slate-800">
+                        {paymentInfo.upiId}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="min-h-[40px] gap-2"
+                      onClick={() => void copyUpiId()}
+                    >
+                      <Copy className="h-4 w-4" /> Copy karein
+                    </Button>
+                  </div>
+                )}
+
+                <div className="space-y-3 border-t border-slate-100 pt-3">
+                  <p className="text-sm font-medium text-slate-700">
+                    Payment kar diya? Screenshot lagayein
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Fees kiske liye:{" "}
+                    <b className="text-slate-700">{child.student.name}</b>{" "}
+                    (Class {child.student.class})
+                    {children.length > 1
+                      ? " — dusre bacche ke liye upar se uska naam chunein."
+                      : ""}
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label>Kitni fees bheji (₹)</Label>
+                      <Input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        placeholder="Jaise: 1500"
+                        value={proofForm.amount}
+                        onChange={(e) =>
+                          setProofForm((prev) => ({
+                            ...prev,
+                            amount: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Transaction / UPI Ref No. (chaaho to)</Label>
+                      <Input
+                        placeholder="Payment app me mila number"
+                        value={proofForm.txnRef}
+                        onChange={(e) =>
+                          setProofForm((prev) => ({
+                            ...prev,
+                            txnRef: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Payment ka screenshot</Label>
+                    <label
+                      htmlFor="parent-proof-photo"
+                      className="flex min-h-[44px] w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700"
+                    >
+                      <ImagePlus className="h-5 w-5 text-emerald-600" />
+                      {proofImage
+                        ? proofImage.name
+                        : "Photo chunein (screenshot lagayein)"}
+                    </label>
+                    <input
+                      id="parent-proof-photo"
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        onProofFile(e.target.files?.[0] ?? null);
+                        e.target.value = "";
+                      }}
+                    />
+                    {proofImage && (
+                      <img
+                        src={`data:${proofImage.mime};base64,${proofImage.base64}`}
+                        alt="Payment screenshot"
+                        className="max-h-40 rounded-lg border object-contain"
+                      />
+                    )}
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => void submitProof()}
+                    disabled={proofSending}
+                    className="min-h-[44px] w-full gap-2 bg-emerald-600 hover:bg-emerald-700 sm:w-auto"
+                  >
+                    <Send className="h-4 w-4" />
+                    {proofSending
+                      ? "Bhej raha hai…"
+                      : "School ko bhej dein"}
+                  </Button>
+                  {proofSentNote && (
+                    <p className="rounded-lg bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
+                      ✅ School ko bhej diya gaya hai — school jaanch
+                      karke fees me jod dega. Sthiti neeche "Meri bheji
+                      raseedein" me dikhegi.
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
 
@@ -589,6 +984,53 @@ export default function ParentHome() {
                 ))}
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 🧾 Meri bheji raseedein (v3.3) — parent ke apne bheje
+          payment proofs aur unki sthiti. Sirf tab dikhta hai jab
+          kam se kam ek proof bheja ho. Saare baccho ke proofs ek
+          saath (baccha badalne par list nahi badalti). */}
+      {proofs.length > 0 && (
+        <Card className="w-full min-w-0">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ReceiptText className="h-5 w-5 text-emerald-600" /> Meri
+              bheji raseedein (Payment Proofs)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {proofs.map((proof) => (
+                <div
+                  key={proof.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2"
+                >
+                  <div className="min-w-0 text-sm">
+                    <span className="font-semibold text-slate-800">
+                      {rupees(proof.amount)}
+                    </span>
+                    {proofChildName(proof) && (
+                      <span className="text-gray-600">
+                        {" "}
+                        • {proofChildName(proof)}
+                      </span>
+                    )}
+                    <span className="block text-xs text-gray-400">
+                      {dateText(proof.createdAt)}
+                      {proof.txnRef ? ` • Ref: ${proof.txnRef}` : ""}
+                    </span>
+                  </div>
+                  {proofStatusBadge(proof.status)}
+                </div>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-gray-400">
+              "Fees me jud gaya" ka matlab hai school ne jaanch karke
+              payment aapki fees me jod diya hai — wo rakam upar Fees
+              wale hisse me dikhegi.
+            </p>
           </CardContent>
         </Card>
       )}

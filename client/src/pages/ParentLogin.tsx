@@ -34,6 +34,14 @@ import { Hash, Loader2, Lock, Phone } from "lucide-react";
 // Pehli baar office se bane account (mustChangePassword) ke liye neeche
 // chhota sa password-badal form bhi hai — bilkul wahi niyam jo school
 // app me hai, bas seedha-saada roop me.
+// v3.3: admission par bane NAYE parent accounts ab server se
+// mustChangePassword=1 ke saath aate hain (pehle 0 aata tha, isliye
+// ye form asal me kabhi aata hi nahi tha) — ab har naya parent pehle
+// login par apna password badlega hi badlega; bina badle Gate
+// (App.tsx) Parent Home kholta hi nahi. App band karke dobara khule
+// to bhi stored session par yahi badal-wali screen pehle aati hai
+// (us samay purana password haath se likhna hota hai — form me uske
+// liye hint de diya hai).
 // =============================================================================
 
 export default function ParentLogin() {
@@ -242,6 +250,10 @@ export default function ParentLogin() {
                     autoComplete="current-password"
                     autoFocus={!currentPw}
                   />
+                  <p className="text-xs text-slate-400">
+                    Purana password wahi hai jo school ne diya tha —
+                    aam taur par aapke bacche ka Admission No.
+                  </p>
                 </div>
 
                 <div className="space-y-2">

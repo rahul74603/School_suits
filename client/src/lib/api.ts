@@ -364,6 +364,24 @@ const RELATED_FAMILIES: Record<string, string[]> = {
   staff: ["salary", "financial"],
   salary: ["financial"],
   expenses: ["financial"],
+  // v3.3 naye hisse: proof approve ho to asal payment banta hai —
+  // fees/students/financial sab taaza hon; route badle to student
+  // ki transport jaankari bhi; school settings (UPI/branding) badle
+  // to branding cache bhi; restore ke baad lagbhag sab kuch.
+  "payment-proofs": ["payments", "fees", "students", "parent", "financial"],
+  "teacher-assignments": ["staff"],
+  "transport-routes": ["students"],
+  schools: ["branding"],
+  import: [
+    "students",
+    "staff",
+    "fees",
+    "payments",
+    "fee-structures",
+    "transport-routes",
+    "parent",
+    "financial",
+  ],
 };
 
 function familyOf(path: string): string | null {

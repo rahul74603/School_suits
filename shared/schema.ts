@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, timestamp, date, real, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, timestamp, date, real, numeric, primaryKey, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -33,6 +33,13 @@ export const schools = pgTable("schools", {
   // (routes.ts ka license guard). null = koi expiry nahi (hamesha chaalu).
   plan: text("plan").default("Basic"),
   licenseExpiry: text("license_expiry"),
+  // UPI payment jaankari (v3.3): Razorpay jaisa gateway setup jab tak
+  // na ho, school apna UPI ID + QR code Settings me daal sakta hai —
+  // wahi Parents App ke fees hisse me dikhta hai, parent UPI app se
+  // fees bhej kar screenshot proof bhej sakta hai (payment_proofs).
+  // upiQr = QR image ka base64 (client chhoti image bhejta hai).
+  upiId: text("upi_id"),
+  upiQr: text("upi_qr"),
   isActive: integer("is_active").default(1),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -98,6 +105,18 @@ export const students = pgTable("students", {
 
   category: text("category"),
 
+  // v3.3 naye khaane: APAAR ID (rashtriya student pehchan — sarkari
+  // reporting/UDISE ke liye), Class 11-12 ki stream (Science/Commerce/
+  // Arts — saada text, chhoti classes ke liye khaali), aur transfer
+  // admission par TC asal me MILA ya nahi + kab (upar wale tcNumber/
+  // tcIssueDate pichhle school ki TC ki jaankari hain; ye dono is
+  // school ke daftar ki raseed hain). tcReceived integer 0/1 (baaki
+  // switches wali hi parampara), tcReceivedDate text "YYYY-MM-DD".
+  apaarId: text("apaar_id"),
+  stream: text("stream"),
+  tcReceived: integer("tc_received").default(0),
+  tcReceivedDate: text("tc_received_date"),
+
   // Transport route link (Phase 2 §6.11) — Electron students table me
   // pehle se tha, Postgres me missing tha. transport_routes neeche
   // define hai; reference lazy callback se hai, isliye order chalega.
@@ -153,6 +172,11 @@ export const feePayments = pgTable("fee_payments", {
 export const staff = pgTable("staff", {
    id: serial("id").primaryKey(),
    schoolId: integer("school_id").references(() => schools.id),
+   // Login account se pakka link (v3.3): Principal kisi staff record
+   // ko uske user account se jod sakta hai (POST /api/staff/:id/
+   // link-user). Leave wali pehchan pehle isi link se hoti hai —
+   // contact-match sirf purana fallback hai. Null = link nahi hua.
+   userId: integer("user_id").references(() => users.id),
    // Parity columns (Phase 2 §6.16) — Electron staff table me pehle se hain.
    employeeId: text("employee_id").unique(),
    name: text("name").notNull(),
@@ -292,6 +316,12 @@ export const transportRoutes = pgTable("transport_routes", {
   schoolId: integer("school_id").references(() => schools.id),
   routeName: text("route_name").notNull(),
   amount: integer("amount").notNull().default(0),
+  // v3.3 (client workstream ki khoj): route ke saath gaadi + driver
+  // ki jaankari — Transport page par dikhegi, parent ko pata rahe
+  // baccha kis gaadi/driver ke saath aata-jata hai.
+  vehicleNo: text("vehicle_no"),
+  driverName: text("driver_name"),
+  driverContact: text("driver_contact"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -764,3 +794,121 @@ export const APP_VERSION_STAGES = ["testing", "released"] as const;
 export const appVersionStageSchema = z.enum(APP_VERSION_STAGES);
 
 export type AppVersion = typeof appVersions.$inferSelect;
+
+// ---------------------------------------------------------------------
+// v3.3 — UPI payment proofs, certificates register, audit log,
+// teacher assignments.
+//
+// Payment proofs: Razorpay setup jab tak na ho, parent school ke
+// UPI ID/QR par fees bhej kar screenshot bhej sakta hai. Proof
+// 'pending' se shuru hota hai; Principal/Accountant ke approve par
+// hi ASAL fee payment banta hai (fee_payments me) — bina faisle ke
+// proof sirf ek arzi hai, paisa "jama" nahi ginna jata. amount
+// NUMERIC hai (paise wala hisaab; asal payment integer me badal
+// kar banta hai). image = screenshot ka base64 (2MB limit routes
+// par hai, documents wali hi parampara).
+// ---------------------------------------------------------------------
+
+export const PAYMENT_PROOF_STATUSES = ["pending", "approved", "rejected"] as const;
+export type PaymentProofStatus = (typeof PAYMENT_PROOF_STATUSES)[number];
+export const paymentProofStatusSchema = z.enum(PAYMENT_PROOF_STATUSES);
+
+export const paymentProofs = pgTable("payment_proofs", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  studentId: integer("student_id").references(() => students.id),
+  parentUserId: integer("parent_user_id").references(() => users.id),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  txnRef: text("txn_ref"),
+  image: text("image"),
+  status: text("status").notNull().default("pending"),
+  decidedBy: integer("decided_by").references(() => users.id),
+  decidedAt: timestamp("decided_at"),
+  // Approve hone par bani asal fee_payments row ki pehchan.
+  paymentId: integer("payment_id").references(() => feePayments.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPaymentProofSchema = createInsertSchema(paymentProofs).omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  status: paymentProofStatusSchema.default("pending"),
+});
+
+export type PaymentProof = typeof paymentProofs.$inferSelect;
+export type InsertPaymentProof = z.infer<typeof insertPaymentProofSchema>;
+
+// Certificates register (v3.3): certificate PRINT hona ek baat hai,
+// daftar ke paas uska record hona dusri. Har print par ek row —
+// kab, kisko, konsa, kisne diya. studentName/className print ke
+// samay ki snapshot hain (baad me student ka naam/class badal jaye
+// to bhi register purani sachhi entry dikhata hai).
+export const issuedCertificates = pgTable("issued_certificates", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  studentId: integer("student_id").references(() => students.id),
+  type: text("type").notNull(),
+  studentName: text("student_name").notNull(),
+  className: text("class_name"),
+  issuedBy: integer("issued_by").references(() => users.id),
+  issuedAt: timestamp("issued_at").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertIssuedCertificateSchema = createInsertSchema(issuedCertificates).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type IssuedCertificate = typeof issuedCertificates.$inferSelect;
+export type InsertIssuedCertificate = z.infer<typeof insertIssuedCertificateSchema>;
+
+// Audit log (v3.3): "kisne kab kya badla" ka halka record — sirf
+// bade kaam (paisa, admission, accounts, settings, faisle). Helper
+// (routes ka logAudit) fail-safe hai: audit likhna fail ho to asal
+// kaam kabhi nahi rukta. detail = chhota manaviy varnan (JSON nahi).
+export const auditLogs = pgTable("audit_logs", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  userId: integer("user_id").references(() => users.id),
+  userName: text("user_name"),
+  action: text("action").notNull(),
+  entity: text("entity"),
+  entityId: integer("entity_id"),
+  detail: text("detail"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+
+// Teacher assignments (v3.3): konsa teacher konsi class/section me
+// konsa subject padhata hai + class-teacher hai ya nahi. user_id
+// users table ka hai (login account) — staff record se alag cheez
+// hai; assignment padhane wale account par lagta hai.
+export const teacherAssignments = pgTable("teacher_assignments", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  userId: integer("user_id").references(() => users.id),
+  className: text("class_name").notNull(),
+  section: text("section"),
+  subject: text("subject"),
+  isClassTeacher: integer("is_class_teacher").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertTeacherAssignmentSchema = createInsertSchema(teacherAssignments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type TeacherAssignment = typeof teacherAssignments.$inferSelect;
+export type InsertTeacherAssignment = z.infer<typeof insertTeacherAssignmentSchema>;

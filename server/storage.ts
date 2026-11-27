@@ -4,6 +4,7 @@ import {
     exams, marks, attendance, timetableEntries, transportRoutes, additionalFees, salaryPayments, expenses,
     studentDocuments, staffDocuments, notices, libraryBooks, libraryIssues,
     homework, leaveRequests, appVersions,
+    paymentProofs, issuedCertificates, auditLogs, teacherAssignments,
     type User, type InsertUser, type School, type InsertSchool,
     type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
     type FeePayment, type InsertFeePayment, type Staff, type InsertStaff,
@@ -23,10 +24,14 @@ import {
     type LibraryIssue, type InsertLibraryIssue,
     type Homework, type InsertHomework,
     type LeaveRequest, type InsertLeaveRequest,
-    type AppVersion
+    type AppVersion,
+    type PaymentProof, type InsertPaymentProof,
+    type IssuedCertificate, type InsertIssuedCertificate,
+    type AuditLog, type InsertAuditLog,
+    type TeacherAssignment, type InsertTeacherAssignment
  } from "@shared/schema";
 import { randomInt } from "crypto";
-import { eq, ilike, and, or } from "drizzle-orm";
+import { eq, ilike, and, or, inArray } from "drizzle-orm";
 import { db } from "./db";
 import * as schema from "@shared/schema";
 
@@ -462,6 +467,11 @@ export interface ParentOverview {
   // naye pehle, zyada se zyada 5. Main ke notices me class-targeting
   // hai hi nahi — audience hi ekmatra filter hai (NOTES me darj hai).
   notices: Array<Pick<Notice, "id" | "title" | "body" | "audience" | "createdAt">>;
+  // UPI payment jaankari (v3.3): school ki Settings wali upiId/upiQr
+  // — Parents App ke fees hisse me dikhti hai. upiQr ka khana SIRF
+  // tab aata hai jab school ne QR lagaya ho (design niyam); upiId
+  // na ho to null.
+  paymentInfo: { upiId: string | null; upiQr?: string | null };
 }
 
 // -----------------------------------------------------------------------------
@@ -484,11 +494,16 @@ export interface ParentOverview {
 //         kabhi nahi chedna.
 //   - Account na ho -> naya parent account banao: username = mobile,
 //     phone = mobile, naam = student ka fatherName (admission form ka
-//     parent-side naam), mustChangePassword = 0 (pehla login seedha
-//     chale — parent se zabardasti password badalna nahi mangte), aur
-//     shuru ka password = bacche ka Admission No. (uska hash route
-//     `makePasswordHash` se banakar deta hai — hash banana auth.ts ka
-//     kaam hai, storage sirf rakhta hai). Fir bacche ko link kar do.
+//     parent-side naam), mustChangePassword = 1 (v3.3 SURAKSHA:
+//     shuru ka password bacche ka Admission No. hai jo ID card/report
+//     card par chhapta hai — isliye pehle login par password badalna
+//     LAZMI hai, warna Admission No. jaanne wala koi bhi parent bankar
+//     bacche ka data dekh sakta hai), aur shuru ka password = bacche
+//     ka Admission No. (uska hash route `makePasswordHash` se banakar
+//     deta hai — hash banana auth.ts ka kaam hai, storage sirf
+//     rakhta hai). Fir bacche ko link kar do. Pehle se maujood parent
+//     accounts ko is badlav se haath NAHI lagta (upar wala link-only
+//     raasta unka password/flag nahi badalta).
 // Password kabhi plain text me nahi rakha jata — sirf hash aata hai.
 export interface EnsureParentResult {
   parentUserId: number;
@@ -577,7 +592,9 @@ export async function ensureParentForAdmissionImpl(
     role: "parent",
     name: student.fatherName,
     phone: mobile,
-    mustChangePassword: 0,
+    // v3.3: pehla password (Admission No.) pehle login par badalna
+    // lazmi — upar wale design note me wajah hai.
+    mustChangePassword: 1,
     isActive: 1,
   });
   await store.linkParentStudent({
@@ -762,7 +779,16 @@ export async function buildParentOverviewImpl(
     });
   }
 
-  return { children, notices };
+  // UPI jaankari (v3.3) school-level hai (har bacche ke liye ek
+  // jaisi) — school ki row se seedha. School na mile to dono null.
+  // upiQr ka khana sirf tab jodte hain jab QR asal me laga ho.
+  const school = await store.getSchool(schoolId);
+  const paymentInfo: ParentOverview["paymentInfo"] = {
+    upiId: school?.upiId ?? null,
+    ...(school?.upiQr ? { upiQr: school.upiQr } : {}),
+  };
+
+  return { children, notices, paymentInfo };
 }
 
 // ---------------------------------------------------------------------------
@@ -1122,9 +1148,10 @@ export interface IStorage {
   createAdditionalFee(fee: InsertAdditionalFee): Promise<AdditionalFee>;
   deleteAdditionalFee(id: number): Promise<void>;
 
-  // Transport (§5.5 #45–47)
+  // Transport (§5.5 #45–47; update v3.3)
   getTransportRoutes(schoolId: number): Promise<TransportRoute[]>;
   createTransportRoute(route: InsertTransportRoute): Promise<TransportRoute>;
+  updateTransportRoute(id: number, route: Partial<InsertTransportRoute>): Promise<TransportRoute>;
   deleteTransportRoute(id: number): Promise<void>;
 
   // Staff parity (§5.6 #51–53) — getStaff upar pehle se hai.
@@ -1321,6 +1348,53 @@ export interface IStorage {
       stage?: string;
     },
   ): Promise<AppVersion>;
+
+  // ---------------------------------------------------------------------
+  // v3.3 — Payment proofs / Certificates register / Audit / Teacher
+  // assignments / Backup restore. Padhne wale methods nayi tables
+  // par bhi purane usool par hain: table na ho (SQL baaki) to khaali
+  // jawab, crash nahi (DB impl me try/catch).
+  // ---------------------------------------------------------------------
+  createPaymentProof(proof: InsertPaymentProof): Promise<PaymentProof>;
+  getPaymentProof(id: number): Promise<PaymentProof | undefined>;
+  getPaymentProofs(
+    schoolId: number,
+    filters?: { status?: string },
+  ): Promise<PaymentProof[]>;
+  updatePaymentProof(
+    id: number,
+    update: Partial<InsertPaymentProof>,
+  ): Promise<PaymentProof | undefined>;
+
+  createIssuedCertificate(
+    entry: InsertIssuedCertificate,
+  ): Promise<IssuedCertificate>;
+  getIssuedCertificates(
+    schoolId: number,
+    filters?: { studentId?: number },
+  ): Promise<IssuedCertificate[]>;
+
+  createAuditLog(entry: InsertAuditLog): Promise<AuditLog>;
+  getAuditLogs(schoolId: number, limit?: number): Promise<AuditLog[]>;
+
+  getTeacherAssignments(
+    schoolId: number,
+    filters?: { userId?: number },
+  ): Promise<TeacherAssignment[]>;
+  getTeacherAssignment(id: number): Promise<TeacherAssignment | undefined>;
+  createTeacherAssignment(
+    entry: InsertTeacherAssignment,
+  ): Promise<TeacherAssignment>;
+  deleteTeacherAssignment(id: number): Promise<void>;
+
+  // Backup restore (v3.3): GET /api/export/school wale JSON ko APNE
+  // school me wapas bharna. Users/logins ko haath nahi lagta;
+  // schoolId har row par caller ka hi zabardasti lagta hai. Jawab =
+  // kitni rows aayin (pariksha/report ke liye).
+  importSchoolData(
+    schoolId: number,
+    data: SchoolExportData,
+  ): Promise<{ students: number; staff: number; feePayments: number; exams: number }>;
 } // <-- interface yahan band hona chahiye tha
 
 // 2. Database Implementation
@@ -1743,6 +1817,15 @@ export class DatabaseStorage implements IStorage {
   async createTransportRoute(route: InsertTransportRoute): Promise<TransportRoute> {
     const [created] = await db.insert(transportRoutes).values(route).returning();
     return created;
+  }
+
+  async updateTransportRoute(id: number, route: Partial<InsertTransportRoute>): Promise<TransportRoute> {
+    const [updated] = await db
+      .update(transportRoutes)
+      .set({ ...route, updatedAt: new Date() })
+      .where(eq(transportRoutes.id, id))
+      .returning();
+    return updated;
   }
 
   async deleteTransportRoute(id: number): Promise<void> {
@@ -2415,6 +2498,558 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return row;
   }
+
+  // -------------------------------------------------------------------
+  // v3.3 — Payment proofs / Certificates register / Audit / Teacher
+  // assignments / Backup restore (DB impl). Padhne wale methods
+  // try/catch me hain (v3.3 ka SQL na chala ho to khaali jawab,
+  // crash nahi — homework wala hi usool). Likhne wale par catch
+  // nahi: bina table ke jhooti safalta nahi dikhegi.
+  // -------------------------------------------------------------------
+  async createPaymentProof(proof: InsertPaymentProof): Promise<PaymentProof> {
+    const [created] = await db.insert(paymentProofs).values(proof).returning();
+    return created;
+  }
+
+  async getPaymentProof(id: number): Promise<PaymentProof | undefined> {
+    try {
+      const [row] = await db
+        .select()
+        .from(paymentProofs)
+        .where(eq(paymentProofs.id, id));
+      return row;
+    } catch (err) {
+      console.error(
+        "getPaymentProof failed (payment_proofs table missing? v3.3 SQL baaki hai):",
+        err,
+      );
+      return undefined;
+    }
+  }
+
+  async getPaymentProofs(
+    schoolId: number,
+    filters?: { status?: string },
+  ): Promise<PaymentProof[]> {
+    try {
+      let rows = await db
+        .select()
+        .from(paymentProofs)
+        .where(eq(paymentProofs.schoolId, schoolId));
+      if (filters?.status) {
+        rows = rows.filter((row) => row.status === filters.status);
+      }
+      // Naye pehle — daftar ki pending list me taza proof upar.
+      return rows.sort((a, b) => b.id - a.id);
+    } catch (err) {
+      console.error(
+        "getPaymentProofs failed (payment_proofs table missing? v3.3 SQL baaki hai):",
+        err,
+      );
+      return [];
+    }
+  }
+
+  async updatePaymentProof(
+    id: number,
+    update: Partial<InsertPaymentProof>,
+  ): Promise<PaymentProof | undefined> {
+    const [updated] = await db
+      .update(paymentProofs)
+      .set({ ...update, updatedAt: new Date() })
+      .where(eq(paymentProofs.id, id))
+      .returning();
+    return updated;
+  }
+
+  async createIssuedCertificate(
+    entry: InsertIssuedCertificate,
+  ): Promise<IssuedCertificate> {
+    const [created] = await db
+      .insert(issuedCertificates)
+      .values(entry)
+      .returning();
+    return created;
+  }
+
+  async getIssuedCertificates(
+    schoolId: number,
+    filters?: { studentId?: number },
+  ): Promise<IssuedCertificate[]> {
+    try {
+      let rows = await db
+        .select()
+        .from(issuedCertificates)
+        .where(eq(issuedCertificates.schoolId, schoolId));
+      if (filters?.studentId != null) {
+        rows = rows.filter((row) => row.studentId === filters.studentId);
+      }
+      return rows.sort((a, b) => b.id - a.id);
+    } catch (err) {
+      console.error(
+        "getIssuedCertificates failed (issued_certificates table missing? v3.3 SQL baaki hai):",
+        err,
+      );
+      return [];
+    }
+  }
+
+  async createAuditLog(entry: InsertAuditLog): Promise<AuditLog> {
+    const [created] = await db.insert(auditLogs).values(entry).returning();
+    return created;
+  }
+
+  async getAuditLogs(schoolId: number, limit = 200): Promise<AuditLog[]> {
+    try {
+      const rows = await db
+        .select()
+        .from(auditLogs)
+        .where(eq(auditLogs.schoolId, schoolId));
+      // Naye pehle, limit tak.
+      return rows.sort((a, b) => b.id - a.id).slice(0, Math.max(1, limit));
+    } catch (err) {
+      console.error(
+        "getAuditLogs failed (audit_logs table missing? v3.3 SQL baaki hai):",
+        err,
+      );
+      return [];
+    }
+  }
+
+  async getTeacherAssignments(
+    schoolId: number,
+    filters?: { userId?: number },
+  ): Promise<TeacherAssignment[]> {
+    try {
+      let rows = await db
+        .select()
+        .from(teacherAssignments)
+        .where(eq(teacherAssignments.schoolId, schoolId));
+      if (filters?.userId != null) {
+        rows = rows.filter((row) => row.userId === filters.userId);
+      }
+      return rows.sort((a, b) => a.id - b.id);
+    } catch (err) {
+      console.error(
+        "getTeacherAssignments failed (teacher_assignments table missing? v3.3 SQL baaki hai):",
+        err,
+      );
+      return [];
+    }
+  }
+
+  async getTeacherAssignment(
+    id: number,
+  ): Promise<TeacherAssignment | undefined> {
+    try {
+      const [row] = await db
+        .select()
+        .from(teacherAssignments)
+        .where(eq(teacherAssignments.id, id));
+      return row;
+    } catch (err) {
+      console.error(
+        "getTeacherAssignment failed (teacher_assignments table missing? v3.3 SQL baaki hai):",
+        err,
+      );
+      return undefined;
+    }
+  }
+
+  async createTeacherAssignment(
+    entry: InsertTeacherAssignment,
+  ): Promise<TeacherAssignment> {
+    const [created] = await db
+      .insert(teacherAssignments)
+      .values(entry)
+      .returning();
+    return created;
+  }
+
+  async deleteTeacherAssignment(id: number): Promise<void> {
+    await db.delete(teacherAssignments).where(eq(teacherAssignments.id, id));
+  }
+
+  // Backup restore (v3.3) — poora badlaav EK transaction me: beech
+  // me kuch fail ho to purana data jyon ka tyon (aadha restore
+  // kabhi nahi). Niyam:
+  //  - Sirf isi school ki rows saaf/bhari jati hain; dusri schools
+  //    ko haath nahi lagta.
+  //  - Users/logins HAATH NAHI lagte. Parent-student links
+  //    admissionNo (jo har bacche ki sthir pehchan hai) ke zariye
+  //    naye student ids par dobara jud jate hain.
+  //  - Har row par schoolId caller ka hi lagta hai — backup file
+  //    me likha schoolId andekha hota hai.
+  //  - Jo tables export me NAHI hain lekin students/staff se FK se
+  //    judi hain (documents, leaves, timetable, library issues) —
+  //    unki is school ki rows saaf hoti hain, warna purane ids ke
+  //    dangling links restore ko gira denge. Homework class-based
+  //    hai (koi student/staff FK nahi), wo rehta hai.
+  async importSchoolData(
+    schoolId: number,
+    data: SchoolExportData,
+  ): Promise<{ students: number; staff: number; feePayments: number; exams: number }> {
+    return await db.transaction(async (tx) => {
+      const oldStudents = await tx
+        .select()
+        .from(students)
+        .where(eq(students.schoolId, schoolId));
+      const oldStudentIds = oldStudents.map((s) => s.id);
+      const oldExams = await tx
+        .select()
+        .from(exams)
+        .where(eq(exams.schoolId, schoolId));
+      const oldExamIds = oldExams.map((e) => e.id);
+      const oldStaff = await tx
+        .select()
+        .from(staff)
+        .where(eq(staff.schoolId, schoolId));
+      const oldStaffIds = oldStaff.map((s) => s.id);
+
+      // Parent links pehle mehfooz: (parentUserId, admissionNo).
+      const admissionNoByStudentId = new Map(
+        oldStudents.map((s) => [s.id, s.admissionNo] as const),
+      );
+      const savedLinks: Array<{ parentUserId: number; admissionNo: string }> =
+        [];
+      if (oldStudentIds.length > 0) {
+        const links = await tx
+          .select()
+          .from(parentStudents)
+          .where(inArray(parentStudents.studentId, oldStudentIds));
+        for (const link of links) {
+          const admissionNo = admissionNoByStudentId.get(link.studentId);
+          if (admissionNo) {
+            savedLinks.push({
+              parentUserId: link.parentUserId,
+              admissionNo,
+            });
+          }
+        }
+      }
+
+      // --- Saaf karo (bacche pehle, fir bade) ---
+      // v3.3 ki apni tables: payment_proofs fee_payments + students
+      // dono se FK se judi hai, issued_certificates students se —
+      // ye pehle saaf hongi warna delete FK par atke ga. Dono
+      // export me nahi aati (proofs ka nateeja payment banke export
+      // me aa jata hai; register print-history hai).
+      await tx
+        .delete(paymentProofs)
+        .where(eq(paymentProofs.schoolId, schoolId));
+      await tx
+        .delete(issuedCertificates)
+        .where(eq(issuedCertificates.schoolId, schoolId));
+      if (oldExamIds.length > 0) {
+        await tx.delete(marks).where(inArray(marks.examId, oldExamIds));
+      }
+      if (oldStudentIds.length > 0) {
+        await tx
+          .delete(attendance)
+          .where(inArray(attendance.studentId, oldStudentIds));
+        await tx
+          .delete(studentDues)
+          .where(inArray(studentDues.studentId, oldStudentIds));
+        await tx
+          .delete(studentDocuments)
+          .where(inArray(studentDocuments.studentId, oldStudentIds));
+        await tx
+          .delete(parentStudents)
+          .where(inArray(parentStudents.studentId, oldStudentIds));
+      }
+      if (oldStaffIds.length > 0) {
+        await tx
+          .delete(staffDocuments)
+          .where(inArray(staffDocuments.staffId, oldStaffIds));
+      }
+      await tx
+        .delete(libraryIssues)
+        .where(eq(libraryIssues.schoolId, schoolId));
+      await tx
+        .delete(leaveRequests)
+        .where(eq(leaveRequests.schoolId, schoolId));
+      await tx
+        .delete(timetableEntries)
+        .where(eq(timetableEntries.schoolId, schoolId));
+      await tx.delete(feePayments).where(eq(feePayments.schoolId, schoolId));
+      await tx
+        .delete(salaryPayments)
+        .where(eq(salaryPayments.schoolId, schoolId));
+      await tx.delete(exams).where(eq(exams.schoolId, schoolId));
+      await tx.delete(notices).where(eq(notices.schoolId, schoolId));
+      await tx
+        .delete(additionalFees)
+        .where(eq(additionalFees.schoolId, schoolId));
+      await tx.delete(expenses).where(eq(expenses.schoolId, schoolId));
+      await tx
+        .delete(feeStructures)
+        .where(eq(feeStructures.schoolId, schoolId));
+      await tx.delete(students).where(eq(students.schoolId, schoolId));
+      await tx.delete(staff).where(eq(staff.schoolId, schoolId));
+      await tx
+        .delete(transportRoutes)
+        .where(eq(transportRoutes.schoolId, schoolId));
+
+      // --- Bharo (bade pehle; purana id -> naya id ke nakse) ---
+      const transportIdMap = new Map<number, number>();
+      for (const row of data.transportRoutes ?? []) {
+        const [created] = await tx
+          .insert(transportRoutes)
+          .values({
+            schoolId,
+            routeName: row.routeName,
+            amount: row.amount,
+            vehicleNo: row.vehicleNo ?? null,
+            driverName: row.driverName ?? null,
+            driverContact: row.driverContact ?? null,
+          })
+          .returning();
+        transportIdMap.set(row.id, created.id);
+      }
+
+      const staffIdMap = new Map<number, number>();
+      for (const row of data.staff ?? []) {
+        const [created] = await tx
+          .insert(staff)
+          .values({
+            schoolId,
+            userId: null,
+            employeeId: row.employeeId,
+            name: row.name,
+            fatherName: row.fatherName,
+            designation: row.designation,
+            department: row.department,
+            qualification: row.qualification,
+            experience: row.experience,
+            address: row.address,
+            contact: row.contact,
+            email: row.email,
+            basicSalary: row.basicSalary,
+            advanceGiven: row.advanceGiven,
+            joinDate: row.joinDate,
+            isActive: row.isActive,
+          })
+          .returning();
+        staffIdMap.set(row.id, created.id);
+      }
+
+      const studentIdMap = new Map<number, number>();
+      const newStudentIdByAdmissionNo = new Map<string, number>();
+      for (const row of data.students ?? []) {
+        const [created] = await tx
+          .insert(students)
+          .values({
+            schoolId,
+            admissionNo: row.admissionNo,
+            name: row.name,
+            fatherName: row.fatherName,
+            motherName: row.motherName,
+            class: row.class,
+            section: row.section,
+            rollNo: row.rollNo,
+            aadhaar: row.aadhaar,
+            birthCertificateNo: row.birthCertificateNo,
+            previousSchoolName: row.previousSchoolName,
+            previousClass: row.previousClass,
+            tcNumber: row.tcNumber,
+            tcIssueDate: row.tcIssueDate,
+            tcSubmitted: row.tcSubmitted,
+            reportCardSubmitted: row.reportCardSubmitted,
+            category: row.category,
+            apaarId: row.apaarId ?? null,
+            stream: row.stream ?? null,
+            tcReceived: row.tcReceived ?? 0,
+            tcReceivedDate: row.tcReceivedDate ?? null,
+            transportId:
+              row.transportId != null
+                ? (transportIdMap.get(row.transportId) ?? null)
+                : null,
+            dob: row.dob,
+            contact: row.contact,
+            address: row.address,
+            photo: row.photo,
+            isActive: row.isActive,
+            isPromoted: row.isPromoted,
+          })
+          .returning();
+        studentIdMap.set(row.id, created.id);
+        newStudentIdByAdmissionNo.set(row.admissionNo, created.id);
+      }
+
+      for (const row of data.feeStructures ?? []) {
+        await tx.insert(feeStructures).values({
+          schoolId,
+          class: row.class,
+          monthlyFee: row.monthlyFee,
+          admissionFee: row.admissionFee,
+          examFee: row.examFee,
+          otherFee: row.otherFee,
+        });
+      }
+
+      let paymentCount = 0;
+      for (const row of data.feePayments ?? []) {
+        await tx.insert(feePayments).values({
+          schoolId,
+          studentId:
+            row.studentId != null
+              ? (studentIdMap.get(row.studentId) ?? null)
+              : null,
+          amount: row.amount,
+          month: row.month,
+          year: row.year,
+          paymentDate: row.paymentDate
+            ? new Date(row.paymentDate as unknown as string)
+            : new Date(),
+          receiptNo: row.receiptNo,
+          paymentMethod: row.paymentMethod,
+          remarks: row.remarks,
+          breakdown: row.breakdown,
+        });
+        paymentCount++;
+      }
+
+      for (const row of data.studentDues ?? []) {
+        const newStudentId =
+          row.studentId != null ? studentIdMap.get(row.studentId) : undefined;
+        if (newStudentId == null) continue;
+        await tx.insert(studentDues).values({
+          studentId: newStudentId,
+          feeName: row.feeName,
+          amount: row.amount,
+          dueDate: new Date(row.dueDate as unknown as string),
+          isPaid: row.isPaid,
+        });
+      }
+
+      const examIdMap = new Map<number, number>();
+      for (const row of data.exams ?? []) {
+        const [created] = await tx
+          .insert(exams)
+          .values({
+            schoolId,
+            examName: row.examName,
+            examType: row.examType,
+            class: row.class,
+            section: row.section,
+            subject: row.subject,
+            maxMarks: row.maxMarks,
+            passingMarks: row.passingMarks,
+            resultsStatus: row.resultsStatus,
+            examDate: row.examDate,
+            session: row.session,
+          })
+          .returning();
+        examIdMap.set(row.id, created.id);
+      }
+
+      for (const row of data.marks ?? []) {
+        const newExamId = row.examId != null ? examIdMap.get(row.examId) : undefined;
+        const newStudentId =
+          row.studentId != null ? studentIdMap.get(row.studentId) : undefined;
+        if (newExamId == null || newStudentId == null) continue;
+        await tx.insert(marks).values({
+          schoolId,
+          examId: newExamId,
+          studentId: newStudentId,
+          marksObtained: row.marksObtained,
+          remarks: row.remarks,
+        });
+      }
+
+      for (const row of data.attendance ?? []) {
+        const newStudentId =
+          row.studentId != null ? studentIdMap.get(row.studentId) : undefined;
+        if (newStudentId == null) continue;
+        await tx.insert(attendance).values({
+          schoolId,
+          studentId: newStudentId,
+          date: row.date,
+          status: row.status,
+          remarks: row.remarks ?? null,
+          markedBy: row.markedBy ?? null,
+        });
+      }
+
+      for (const row of data.notices ?? []) {
+        await tx.insert(notices).values({
+          schoolId,
+          title: row.title,
+          body: row.body,
+          audience: row.audience,
+          createdBy: row.createdBy,
+        });
+      }
+
+      for (const row of data.additionalFees ?? []) {
+        await tx.insert(additionalFees).values({
+          schoolId,
+          class: row.class,
+          feeName: row.feeName,
+          amount: row.amount,
+          dueMonth: row.dueMonth,
+        });
+      }
+
+      for (const row of data.salaryPayments ?? []) {
+        const newStaffId =
+          row.staffId != null ? staffIdMap.get(row.staffId) : undefined;
+        if (newStaffId == null) continue;
+        await tx.insert(salaryPayments).values({
+          schoolId,
+          staffId: newStaffId,
+          amount: row.amount,
+          month: row.month,
+          year: row.year,
+          baseSalary: row.baseSalary,
+          bonus: row.bonus,
+          deduction: row.deduction,
+          paymentMode: row.paymentMode,
+          paymentDate: row.paymentDate,
+          remarks: row.remarks,
+        });
+      }
+
+      for (const row of data.expenses ?? []) {
+        await tx.insert(expenses).values({
+          schoolId,
+          title: row.title,
+          amount: row.amount,
+          category: row.category,
+          expenseDate: row.expenseDate,
+          remarks: row.remarks,
+        });
+      }
+
+      // Parent links wapas: parent user ab bhi maujood ho aur ISI
+      // school ka ho, tabhi link banta hai (users ko restore ne
+      // haath nahi lagaya, isliye ye jaanch asal hai).
+      for (const link of savedLinks) {
+        const newStudentId = newStudentIdByAdmissionNo.get(link.admissionNo);
+        if (newStudentId == null) continue;
+        const [parent] = await tx
+          .select()
+          .from(users)
+          .where(eq(users.id, link.parentUserId));
+        if (!parent || parent.schoolId !== schoolId) continue;
+        await tx
+          .insert(parentStudents)
+          .values({
+            parentUserId: link.parentUserId,
+            studentId: newStudentId,
+            relation: null,
+          })
+          .onConflictDoNothing();
+      }
+
+      return {
+        students: studentIdMap.size,
+        staff: staffIdMap.size,
+        feePayments: paymentCount,
+        exams: examIdMap.size,
+      };
+    });
+  }
 }
 
 // 3. Mock Storage
@@ -2438,6 +3073,8 @@ export class MockStorage implements IStorage {
       admissionStart: 1,
       plan: "Basic",
       licenseExpiry: null,
+      upiId: null,
+      upiQr: null,
       isActive: 1,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -2612,6 +3249,8 @@ export class MockStorage implements IStorage {
       admissionStart: school.admissionStart ?? 1,
       plan: school.plan ?? "Basic",
       licenseExpiry: school.licenseExpiry ?? null,
+      upiId: school.upiId ?? null,
+      upiQr: school.upiQr ?? null,
       isActive: school.isActive ?? 1,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -2654,7 +3293,10 @@ export class MockStorage implements IStorage {
       previousSchoolName: student.previousSchoolName ?? null, previousClass: student.previousClass ?? null,
       tcNumber: student.tcNumber ?? null, tcIssueDate: student.tcIssueDate ?? null,
       tcSubmitted: student.tcSubmitted ?? 0, reportCardSubmitted: student.reportCardSubmitted ?? 0,
-      category: student.category ?? null, transportId: student.transportId ?? null,
+      category: student.category ?? null,
+      apaarId: student.apaarId ?? null, stream: student.stream ?? null,
+      tcReceived: student.tcReceived ?? 0, tcReceivedDate: student.tcReceivedDate ?? null,
+      transportId: student.transportId ?? null,
       dob: student.dob ?? null, contact: student.contact,
       address: student.address ?? null, photo: student.photo ?? null, isActive: student.isActive ?? 1,
       isPromoted: student.isPromoted ?? 0, createdAt: new Date(), updatedAt: new Date(),
@@ -2705,7 +3347,7 @@ export class MockStorage implements IStorage {
   }
 
   async createStaff(staffMember: InsertStaff): Promise<Staff> {
-    const created: Staff = { id: this.nextStaffId++, schoolId: staffMember.schoolId ?? 1, employeeId: staffMember.employeeId ?? null, name: staffMember.name, fatherName: staffMember.fatherName ?? null, designation: staffMember.designation, department: staffMember.department ?? null, qualification: staffMember.qualification ?? null, experience: staffMember.experience ?? null, address: staffMember.address ?? null, contact: staffMember.contact, email: staffMember.email ?? null, basicSalary: staffMember.basicSalary, advanceGiven: staffMember.advanceGiven ?? 0, joinDate: staffMember.joinDate ?? null, isActive: staffMember.isActive ?? 1, createdAt: new Date(), updatedAt: new Date() };
+    const created: Staff = { id: this.nextStaffId++, schoolId: staffMember.schoolId ?? 1, userId: staffMember.userId ?? null, employeeId: staffMember.employeeId ?? null, name: staffMember.name, fatherName: staffMember.fatherName ?? null, designation: staffMember.designation, department: staffMember.department ?? null, qualification: staffMember.qualification ?? null, experience: staffMember.experience ?? null, address: staffMember.address ?? null, contact: staffMember.contact, email: staffMember.email ?? null, basicSalary: staffMember.basicSalary, advanceGiven: staffMember.advanceGiven ?? 0, joinDate: staffMember.joinDate ?? null, isActive: staffMember.isActive ?? 1, createdAt: new Date(), updatedAt: new Date() };
     this.staffData.push(created);
     return created;
   }
@@ -2898,10 +3540,25 @@ export class MockStorage implements IStorage {
     const created: TransportRoute = {
       id: this.nextTransportRouteId++, schoolId: route.schoolId ?? null,
       routeName: route.routeName, amount: route.amount ?? 0,
+      vehicleNo: route.vehicleNo ?? null,
+      driverName: route.driverName ?? null,
+      driverContact: route.driverContact ?? null,
       createdAt: new Date(), updatedAt: new Date(),
     };
     this.transportRoutesData.push(created);
     return created;
+  }
+
+  async updateTransportRoute(id: number, route: Partial<InsertTransportRoute>): Promise<TransportRoute> {
+    const index = this.transportRoutesData.findIndex((item) => item.id === id);
+    if (index < 0) throw new Error("Transport route not found");
+    const updated: TransportRoute = {
+      ...this.transportRoutesData[index],
+      ...route,
+      updatedAt: new Date(),
+    };
+    this.transportRoutesData[index] = updated;
+    return updated;
   }
 
   async deleteTransportRoute(id: number): Promise<void> {
@@ -3584,6 +4241,481 @@ export class MockStorage implements IStorage {
     };
     this.appVersionsData.push(row);
     return row;
+  }
+
+  // -------------------------------------------------------------------
+  // v3.3 — Payment proofs / Certificates register / Audit / Teacher
+  // assignments / Backup restore (Mock impl; vyavhaar DatabaseStorage
+  // jaisa hi).
+  // -------------------------------------------------------------------
+  private paymentProofsData: PaymentProof[] = [];
+  private nextPaymentProofId = 1;
+  private issuedCertificatesData: IssuedCertificate[] = [];
+  private nextIssuedCertificateId = 1;
+  private auditLogsData: AuditLog[] = [];
+  private nextAuditLogId = 1;
+  private teacherAssignmentsData: TeacherAssignment[] = [];
+  private nextTeacherAssignmentId = 1;
+
+  async createPaymentProof(proof: InsertPaymentProof): Promise<PaymentProof> {
+    const created: PaymentProof = {
+      id: this.nextPaymentProofId++,
+      schoolId: proof.schoolId ?? null,
+      studentId: proof.studentId ?? null,
+      parentUserId: proof.parentUserId ?? null,
+      amount: proof.amount,
+      txnRef: proof.txnRef ?? null,
+      image: proof.image ?? null,
+      status: proof.status ?? "pending",
+      decidedBy: proof.decidedBy ?? null,
+      decidedAt: proof.decidedAt ?? null,
+      paymentId: proof.paymentId ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.paymentProofsData.push(created);
+    return created;
+  }
+
+  async getPaymentProof(id: number): Promise<PaymentProof | undefined> {
+    return this.paymentProofsData.find((item) => item.id === id);
+  }
+
+  async getPaymentProofs(
+    schoolId: number,
+    filters?: { status?: string },
+  ): Promise<PaymentProof[]> {
+    let rows = this.paymentProofsData.filter(
+      (item) => item.schoolId === schoolId,
+    );
+    if (filters?.status) {
+      rows = rows.filter((item) => item.status === filters.status);
+    }
+    return rows.sort((a, b) => b.id - a.id);
+  }
+
+  async updatePaymentProof(
+    id: number,
+    update: Partial<InsertPaymentProof>,
+  ): Promise<PaymentProof | undefined> {
+    const index = this.paymentProofsData.findIndex((item) => item.id === id);
+    if (index === -1) return undefined;
+    const updated: PaymentProof = {
+      ...this.paymentProofsData[index],
+      ...update,
+      updatedAt: new Date(),
+    };
+    this.paymentProofsData[index] = updated;
+    return updated;
+  }
+
+  async createIssuedCertificate(
+    entry: InsertIssuedCertificate,
+  ): Promise<IssuedCertificate> {
+    const created: IssuedCertificate = {
+      id: this.nextIssuedCertificateId++,
+      schoolId: entry.schoolId ?? null,
+      studentId: entry.studentId ?? null,
+      type: entry.type,
+      studentName: entry.studentName,
+      className: entry.className ?? null,
+      issuedBy: entry.issuedBy ?? null,
+      issuedAt: entry.issuedAt ?? new Date(),
+      createdAt: new Date(),
+    };
+    this.issuedCertificatesData.push(created);
+    return created;
+  }
+
+  async getIssuedCertificates(
+    schoolId: number,
+    filters?: { studentId?: number },
+  ): Promise<IssuedCertificate[]> {
+    let rows = this.issuedCertificatesData.filter(
+      (item) => item.schoolId === schoolId,
+    );
+    if (filters?.studentId != null) {
+      rows = rows.filter((item) => item.studentId === filters.studentId);
+    }
+    return rows.sort((a, b) => b.id - a.id);
+  }
+
+  async createAuditLog(entry: InsertAuditLog): Promise<AuditLog> {
+    const created: AuditLog = {
+      id: this.nextAuditLogId++,
+      schoolId: entry.schoolId ?? null,
+      userId: entry.userId ?? null,
+      userName: entry.userName ?? null,
+      action: entry.action,
+      entity: entry.entity ?? null,
+      entityId: entry.entityId ?? null,
+      detail: entry.detail ?? null,
+      createdAt: new Date(),
+    };
+    this.auditLogsData.push(created);
+    return created;
+  }
+
+  async getAuditLogs(schoolId: number, limit = 200): Promise<AuditLog[]> {
+    return this.auditLogsData
+      .filter((item) => item.schoolId === schoolId)
+      .sort((a, b) => b.id - a.id)
+      .slice(0, Math.max(1, limit));
+  }
+
+  async getTeacherAssignments(
+    schoolId: number,
+    filters?: { userId?: number },
+  ): Promise<TeacherAssignment[]> {
+    let rows = this.teacherAssignmentsData.filter(
+      (item) => item.schoolId === schoolId,
+    );
+    if (filters?.userId != null) {
+      rows = rows.filter((item) => item.userId === filters.userId);
+    }
+    return rows.sort((a, b) => a.id - b.id);
+  }
+
+  async getTeacherAssignment(
+    id: number,
+  ): Promise<TeacherAssignment | undefined> {
+    return this.teacherAssignmentsData.find((item) => item.id === id);
+  }
+
+  async createTeacherAssignment(
+    entry: InsertTeacherAssignment,
+  ): Promise<TeacherAssignment> {
+    const created: TeacherAssignment = {
+      id: this.nextTeacherAssignmentId++,
+      schoolId: entry.schoolId ?? null,
+      userId: entry.userId ?? null,
+      className: entry.className,
+      section: entry.section ?? null,
+      subject: entry.subject ?? null,
+      isClassTeacher: entry.isClassTeacher ?? 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.teacherAssignmentsData.push(created);
+    return created;
+  }
+
+  async deleteTeacherAssignment(id: number): Promise<void> {
+    this.teacherAssignmentsData = this.teacherAssignmentsData.filter(
+      (item) => item.id !== id,
+    );
+  }
+
+  // Backup restore (Mock) — DatabaseStorage wale hi niyam: sirf apne
+  // school ki rows, users haath nahi, parent links admissionNo se
+  // dobara, schoolId har jagah apna hi.
+  async importSchoolData(
+    schoolId: number,
+    data: SchoolExportData,
+  ): Promise<{ students: number; staff: number; feePayments: number; exams: number }> {
+    const oldStudents = this.studentsData.filter(
+      (s) => s.schoolId === schoolId,
+    );
+    const oldStudentIds = new Set(oldStudents.map((s) => s.id));
+    const oldExamIds = new Set(
+      this.examsData.filter((e) => e.schoolId === schoolId).map((e) => e.id),
+    );
+    const oldStaffIds = new Set(
+      this.staffData.filter((s) => s.schoolId === schoolId).map((s) => s.id),
+    );
+    const admissionNoByStudentId = new Map(
+      oldStudents.map((s) => [s.id, s.admissionNo] as const),
+    );
+    const savedLinks = this.parentStudentsData
+      .filter((link) => oldStudentIds.has(link.studentId))
+      .map((link) => ({
+        parentUserId: link.parentUserId,
+        admissionNo: admissionNoByStudentId.get(link.studentId)!,
+      }))
+      .filter((link) => Boolean(link.admissionNo));
+
+    // Saaf karo. (v3.3: payment proofs + certificates register bhi —
+    // DatabaseStorage wala hi niyam.)
+    this.paymentProofsData = this.paymentProofsData.filter(
+      (p) => p.schoolId !== schoolId,
+    );
+    this.issuedCertificatesData = this.issuedCertificatesData.filter(
+      (c) => c.schoolId !== schoolId,
+    );
+    this.marksData = this.marksData.filter((m) => !oldExamIds.has(m.examId));
+    this.attendanceData = this.attendanceData.filter(
+      (a) => !oldStudentIds.has(a.studentId),
+    );
+    this.studentDuesData = this.studentDuesData.filter(
+      (d) => d.studentId == null || !oldStudentIds.has(d.studentId),
+    );
+    this.studentDocumentsData = this.studentDocumentsData.filter(
+      (d) => !oldStudentIds.has(d.studentId),
+    );
+    this.staffDocumentsData = this.staffDocumentsData.filter(
+      (d) => !oldStaffIds.has(d.staffId),
+    );
+    this.parentStudentsData = this.parentStudentsData.filter(
+      (link) => !oldStudentIds.has(link.studentId),
+    );
+    this.libraryIssuesData = this.libraryIssuesData.filter(
+      (i) => i.schoolId !== schoolId,
+    );
+    this.leaveRequestsData = this.leaveRequestsData.filter(
+      (l) => l.schoolId !== schoolId,
+    );
+    this.timetableEntriesData = this.timetableEntriesData.filter(
+      (t) => t.schoolId !== schoolId,
+    );
+    this.feePaymentsData = this.feePaymentsData.filter(
+      (p) => p.schoolId !== schoolId,
+    );
+    this.salaryPaymentsData = this.salaryPaymentsData.filter(
+      (p) => p.schoolId !== schoolId,
+    );
+    this.examsData = this.examsData.filter((e) => e.schoolId !== schoolId);
+    this.noticesData = this.noticesData.filter(
+      (n) => n.schoolId !== schoolId,
+    );
+    this.additionalFeesData = this.additionalFeesData.filter(
+      (f) => f.schoolId !== schoolId,
+    );
+    this.expensesData = this.expensesData.filter(
+      (e) => e.schoolId !== schoolId,
+    );
+    this.feeStructuresData = this.feeStructuresData.filter(
+      (f) => f.schoolId !== schoolId,
+    );
+    this.studentsData = this.studentsData.filter(
+      (s) => s.schoolId !== schoolId,
+    );
+    this.staffData = this.staffData.filter((s) => s.schoolId !== schoolId);
+    this.transportRoutesData = this.transportRoutesData.filter(
+      (t) => t.schoolId !== schoolId,
+    );
+
+    // Bharo.
+    const transportIdMap = new Map<number, number>();
+    for (const row of data.transportRoutes ?? []) {
+      const created: TransportRoute = {
+        id: this.nextTransportRouteId++,
+        schoolId,
+        routeName: row.routeName,
+        amount: row.amount,
+        vehicleNo: row.vehicleNo ?? null,
+        driverName: row.driverName ?? null,
+        driverContact: row.driverContact ?? null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.transportRoutesData.push(created);
+      transportIdMap.set(row.id, created.id);
+    }
+
+    const staffIdMap = new Map<number, number>();
+    for (const row of data.staff ?? []) {
+      const created: Staff = {
+        id: this.nextStaffId++,
+        schoolId,
+        userId: null,
+        employeeId: row.employeeId,
+        name: row.name,
+        fatherName: row.fatherName,
+        designation: row.designation,
+        department: row.department,
+        qualification: row.qualification,
+        experience: row.experience,
+        address: row.address,
+        contact: row.contact,
+        email: row.email,
+        basicSalary: row.basicSalary,
+        advanceGiven: row.advanceGiven,
+        joinDate: row.joinDate,
+        isActive: row.isActive,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.staffData.push(created);
+      staffIdMap.set(row.id, created.id);
+    }
+
+    const studentIdMap = new Map<number, number>();
+    const newStudentIdByAdmissionNo = new Map<string, number>();
+    for (const row of data.students ?? []) {
+      const created: Student = {
+        ...row,
+        id: this.nextStudentId++,
+        schoolId,
+        apaarId: row.apaarId ?? null,
+        stream: row.stream ?? null,
+        tcReceived: row.tcReceived ?? 0,
+        tcReceivedDate: row.tcReceivedDate ?? null,
+        transportId:
+          row.transportId != null
+            ? (transportIdMap.get(row.transportId) ?? null)
+            : null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.studentsData.push(created);
+      studentIdMap.set(row.id, created.id);
+      newStudentIdByAdmissionNo.set(row.admissionNo, created.id);
+    }
+
+    for (const row of data.feeStructures ?? []) {
+      this.feeStructuresData.push({
+        ...row,
+        id: this.nextFeeStructureId++,
+        schoolId,
+        createdAt: new Date(),
+      });
+    }
+
+    let paymentCount = 0;
+    for (const row of data.feePayments ?? []) {
+      this.feePaymentsData.push({
+        ...row,
+        id: this.nextFeePaymentId++,
+        schoolId,
+        studentId:
+          row.studentId != null
+            ? (studentIdMap.get(row.studentId) ?? null)
+            : null,
+        paymentDate: row.paymentDate ? new Date(row.paymentDate as unknown as string) : new Date(),
+        createdAt: new Date(),
+      });
+      paymentCount++;
+    }
+
+    for (const row of data.studentDues ?? []) {
+      const newStudentId =
+        row.studentId != null ? studentIdMap.get(row.studentId) : undefined;
+      if (newStudentId == null) continue;
+      this.studentDuesData.push({
+        ...row,
+        id: this.nextStudentDueId++,
+        studentId: newStudentId,
+        dueDate: new Date(row.dueDate as unknown as string),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    const examIdMap = new Map<number, number>();
+    for (const row of data.exams ?? []) {
+      const created: Exam = {
+        ...row,
+        id: this.nextExamId++,
+        schoolId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.examsData.push(created);
+      examIdMap.set(row.id, created.id);
+    }
+
+    for (const row of data.marks ?? []) {
+      const newExamId = row.examId != null ? examIdMap.get(row.examId) : undefined;
+      const newStudentId =
+        row.studentId != null ? studentIdMap.get(row.studentId) : undefined;
+      if (newExamId == null || newStudentId == null) continue;
+      this.marksData.push({
+        ...row,
+        id: this.nextMarkId++,
+        schoolId,
+        examId: newExamId,
+        studentId: newStudentId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    for (const row of data.attendance ?? []) {
+      const newStudentId =
+        row.studentId != null ? studentIdMap.get(row.studentId) : undefined;
+      if (newStudentId == null) continue;
+      this.attendanceData.push({
+        ...row,
+        id: this.nextAttendanceId++,
+        schoolId,
+        studentId: newStudentId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    for (const row of data.notices ?? []) {
+      this.noticesData.push({
+        ...row,
+        id: this.nextNoticeId++,
+        schoolId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    for (const row of data.additionalFees ?? []) {
+      this.additionalFeesData.push({
+        ...row,
+        id: this.nextAdditionalFeeId++,
+        schoolId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    for (const row of data.salaryPayments ?? []) {
+      const newStaffId =
+        row.staffId != null ? staffIdMap.get(row.staffId) : undefined;
+      if (newStaffId == null) continue;
+      this.salaryPaymentsData.push({
+        ...row,
+        id: this.nextSalaryPaymentId++,
+        schoolId,
+        staffId: newStaffId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    for (const row of data.expenses ?? []) {
+      this.expensesData.push({
+        ...row,
+        id: this.nextExpenseId++,
+        schoolId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    // Parent links wapas (parent user isi school ka ho tabhi).
+    for (const link of savedLinks) {
+      const newStudentId = newStudentIdByAdmissionNo.get(link.admissionNo);
+      if (newStudentId == null) continue;
+      const parent = this.usersData.find((u) => u.id === link.parentUserId);
+      if (!parent || parent.schoolId !== schoolId) continue;
+      if (
+        this.parentStudentsData.some(
+          (l) => l.parentUserId === link.parentUserId && l.studentId === newStudentId,
+        )
+      ) {
+        continue;
+      }
+      this.parentStudentsData.push({
+        parentUserId: link.parentUserId,
+        studentId: newStudentId,
+        relation: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    return {
+      students: studentIdMap.size,
+      staff: staffIdMap.size,
+      feePayments: paymentCount,
+      exams: examIdMap.size,
+    };
   }
 }
 

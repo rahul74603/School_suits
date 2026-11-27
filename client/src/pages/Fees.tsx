@@ -6,11 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, CheckCircle2, School, Download, Layers } from "lucide-react";
+import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, CheckCircle2, School, Download, Layers, Inbox } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useReactToPrint } from "react-to-print";
 import { apiGet, apiPost, apiDel, ApiError } from "@/lib/api";
 import { openExternal } from "@/lib/openExternal";
+import PaymentProofsInbox from "@/components/PaymentProofsInbox";
 import { downloadCsv, todayStamp } from "@/lib/exportCsv";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
@@ -91,6 +92,9 @@ export default function Fees() {
   const [instError, setInstError] = useState("");
   
   // Receipt State
+  // 📥 Payment Proofs inbox (v3.3) — Parents App se aaye UPI
+  // payment ke screenshots yahan approve/reject hote hain.
+  const [proofsOpen, setProofsOpen] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const [currentReceipt, setCurrentReceipt] = useState<any>(null);
   const receiptRef = useRef<HTMLDivElement>(null);
@@ -670,10 +674,21 @@ export default function Fees() {
 
   return (
     <div className="p-4 h-screen flex flex-col bg-slate-50 overflow-hidden">
+      {/* 📥 Payment Proofs inbox (v3.3) — faisle par fees data refresh */}
+      <PaymentProofsInbox
+        open={proofsOpen}
+        onOpenChange={setProofsOpen}
+        onDecided={() => void loadStudentData()}
+      />
       {/* HEADER */}
       <div className="flex flex-wrap gap-2 justify-between items-center shrink-0 bg-white p-3 rounded-xl shadow-sm border mb-3">
         <h1 className="text-2xl font-bold flex items-center gap-2 text-slate-800"><IndianRupee className="text-green-600" /> Fees Dashboard</h1>
         {selectedStudent && <div className="font-bold text-lg">{selectedStudent.name} ({selectedStudent.class}) - {selectedStudent.admission_no}</div>}
+        {canManageFees && (
+          <Button onClick={() => setProofsOpen(true)} variant="outline" className="border-green-500 text-green-800 hover:bg-green-50 shrink-0">
+            <Inbox className="h-4 w-4 mr-2" /> Payment Proofs
+          </Button>
+        )}
         {canManageFees && (
           <Button onClick={() => void openInstDialog()} className="bg-purple-600 hover:bg-purple-700 shrink-0">
             <Layers className="h-4 w-4 mr-2" /> Kishten Banao

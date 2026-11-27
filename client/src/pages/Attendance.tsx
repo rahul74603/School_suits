@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost } from "@/lib/api";
+import { openExternal } from "@/lib/openExternal";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 import {
@@ -23,6 +24,7 @@ import {
   CheckCheck,
   ClipboardList,
   Phone,
+  MessageCircle,
 } from "lucide-react";
 
 // 📅 Attendance (v1.5) — roz ki hajri.
@@ -67,6 +69,9 @@ interface RosterRow {
   class: string;
   section: string;
   status: string | null;
+  // 📲 Absent suchna (v3.3) — parent ka number student record ke
+  // contact se hi aata hai (Fees defaulter reminder wala usool)।
+  contact: string | null;
 }
 
 // GET /api/students ka jawab — v1.8 se roster (students ki list) ka
@@ -78,6 +83,7 @@ interface StudentLite {
   rollNo: string | null;
   class: string;
   section: string;
+  contact?: string | null;
 }
 
 // Server ke DATE_TEXT_RE / MONTH_TEXT_RE wale hi pattern — khaali ya
@@ -142,7 +148,7 @@ function currentMonthText(): string {
 
 export default function Attendance() {
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, school } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
   const isParent = user?.role === "parent";
   const canMark = user?.role === "principal" || user?.role === "teacher";
@@ -227,6 +233,7 @@ export default function Attendance() {
       class: student.class,
       section: student.section,
       status: null,
+      contact: student.contact ?? null,
     }));
     setRoster(base);
     const next: Record<number, AttendanceStatus> = {};
@@ -267,6 +274,35 @@ export default function Attendance() {
     }
     return c;
   }, [roster, statuses]);
+
+  // 📲 Absent suchna (v3.3) — Fees defaulter reminder wala hi
+  // pattern: parent ka number student ke contact se, 10-digit par
+  // 91 aage, wa.me link openExternal se (Chrome nahi khulta,
+  // WhatsApp seedha khulta hai). Har bacche ke liye alag button —
+  // teacher khud chun kar bheje, koi auto-spam nahi.
+  const absentRows = useMemo(
+    () => roster.filter((row) => statuses[row.studentId] === "absent"),
+    [roster, statuses],
+  );
+
+  const notifyAbsentParent = (row: RosterRow) => {
+    const digits = (row.contact || "").replace(/\D/g, "");
+    const mobile = digits.length === 10 ? `91${digits}` : digits;
+    if (!mobile) {
+      toast({
+        title: "Number nahi mila",
+        description: `${row.name} ke record me parent ka number nahi hai — Students me jaakar number jodein.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    const schoolName = school?.name || "School";
+    const effectiveDate = DATE_TEXT_RE.test(date) ? date : todayText();
+    const msg = `Namaste, ${schoolName} se suchna hai ki aapka baccha ${row.name} (Class ${row.class}-${row.section}) aaj (${effectiveDate}) school nahi aaya hai. Agar koi khaas wajah hai to kripya school ko bata dein. Dhanyavaad, ${schoolName}`;
+    void openExternal(
+      `https://wa.me/${mobile}?text=${encodeURIComponent(msg)}`,
+    );
+  };
 
   const markAllPresent = () => {
     const next: Record<number, AttendanceStatus> = {};
@@ -561,6 +597,49 @@ export default function Attendance() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 📲 Aaj ke absent — parent ko WhatsApp suchna (v3.3) */}
+      {absentRows.length > 0 && (
+        <Card className="border-t-4 border-t-red-500">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <MessageCircle className="h-5 w-5 text-green-600" /> Aaj
+              ke Absent — Parent ko Suchna bhejein ({absentRows.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-xs text-gray-500">
+              Hajri save karne ke baad, har absent bacche ke parent ko
+              ek-ek karke WhatsApp par suchna bhej sakte hain — sandesh
+              pehle se bhara milega, sirf bhejna hai.
+            </p>
+            {absentRows.map((row) => (
+              <div
+                key={row.studentId}
+                className="flex flex-wrap items-center justify-between gap-2 border rounded-md px-3 py-2 bg-white"
+              >
+                <div className="min-w-0">
+                  <span className="font-medium text-sm break-words">
+                    {row.name}
+                  </span>
+                  <span className="text-xs text-gray-500 ml-2">
+                    Class {row.class}-{row.section}
+                    {row.contact ? ` • ${row.contact}` : " • number nahi hai"}
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700 shrink-0 min-h-[38px]"
+                  onClick={() => notifyAbsentParent(row)}
+                >
+                  <MessageCircle className="h-4 w-4 mr-1" /> WhatsApp
+                  Suchna
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardContent className="pt-4">

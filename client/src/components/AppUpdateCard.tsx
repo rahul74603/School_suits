@@ -57,23 +57,23 @@ interface RowState {
 }
 
 const RELEASE_BASE =
-  "https://github.com/rahul74603/School_suits/releases/download/v3.2";
+  "https://github.com/rahul74603/School_suits/releases/download/v3.3";
 
 const APPS: Array<{ key: AppKey; label: string; defaultApk: string }> = [
   {
     key: "school",
     label: "School App",
-    defaultApk: `${RELEASE_BASE}/school-guardian-suite-v3.2.apk`,
+    defaultApk: `${RELEASE_BASE}/school-guardian-suite-v3.3.apk`,
   },
   {
     key: "parent",
     label: "Parents App",
-    defaultApk: `${RELEASE_BASE}/school-guardian-parent-v3.2.apk`,
+    defaultApk: `${RELEASE_BASE}/school-guardian-parent-v3.3.apk`,
   },
   {
     key: "master",
     label: "Master App (tumhari)",
-    defaultApk: `${RELEASE_BASE}/school-guardian-master-v3.2.apk`,
+    defaultApk: `${RELEASE_BASE}/school-guardian-master-v3.3.apk`,
   },
 ];
 
