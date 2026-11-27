@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 // 📲 Parent App invite (v2.1) — parent ko WhatsApp par app ka link
 // bhejne wala button (shared component, Admissions par bhi yahi hai).
@@ -85,6 +85,9 @@ export default function StudentProfile() {
   // dikhega.
   const { user, school } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  // Document approve/reject (v3.0) sirf Principal — server par bhi
+  // PATCH .../documents/:docId/status requireRole("principal") hai.
+  const isPrincipal = user?.role === "principal";
 
   const [admNo, setAdmNo] = useState("");
   const [loading, setLoading] = useState(false);
@@ -147,6 +150,10 @@ export default function StudentProfile() {
       }
     : null;
 
+  // Fee certificate (80C) ka kul jama — payments se asal jod;
+  // load na ho to null (certificate par "—" chhapta hai).
+  const [certFeeTotal, setCertFeeTotal] = useState<number | null>(null);
+
   const certificateStudent: CertificateStudent | null = student
     ? {
         name: student.name,
@@ -157,12 +164,78 @@ export default function StudentProfile() {
         admissionNo: student.admission_no ?? student.admissionNo ?? "",
         dob: student.dob ?? null,
         contact: student.contact ?? null,
+        feePaidTotal: certFeeTotal,
       }
     : null;
 
-  const openCertificate = (type: CertificateType) => {
+  const openCertificate = async (type: CertificateType) => {
+    if (type === "fee" && student?.id) {
+      try {
+        const payments = await apiGet<Array<{ amount: number }>>(
+          `/api/payments?studentId=${student.id}`,
+        );
+        setCertFeeTotal(
+          (payments ?? []).reduce(
+            (sum, payment) => sum + (payment.amount ?? 0),
+            0,
+          ),
+        );
+      } catch {
+        setCertFeeTotal(null);
+      }
+    }
     setCertType(type);
     setIsCertOpen(true);
+  };
+
+  // Document ka status badge (v3.0) — pending/approved/rejected.
+  const docStatusBadge = (status: string | null | undefined) => {
+    switch (status) {
+      case "approved":
+        return (
+          <span className="text-green-700 text-xs bg-green-100 px-2 py-1 rounded-full font-bold">
+            Approved ✅
+          </span>
+        );
+      case "rejected":
+        return (
+          <span className="text-red-700 text-xs bg-red-100 px-2 py-1 rounded-full font-bold">
+            Rejected ❌
+          </span>
+        );
+      default:
+        return (
+          <span className="text-amber-700 text-xs bg-amber-100 px-2 py-1 rounded-full font-bold">
+            Pending ⏳
+          </span>
+        );
+    }
+  };
+
+  const setDocStatus = async (
+    docId: number,
+    status: "approved" | "rejected",
+  ) => {
+    if (!student?.id) return;
+    try {
+      await apiPatch(
+        `/api/students/${student.id}/documents/${docId}/status`,
+        { status },
+      );
+      toast({
+        title:
+          status === "approved"
+            ? "✅ Document approved"
+            : "Document rejected",
+      });
+      void refreshDocs();
+    } catch (e: any) {
+      toast({
+        title: "Status nahi badal paya",
+        description: e?.message || "Dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
   };
 
   // --- REST adapters (Phase 3 Batch C) ---------------------------------
@@ -633,11 +706,7 @@ export default function StudentProfile() {
                         <Icon className="h-4 w-4 text-orange-600" />
                         {d.label}
                       </span>
-                      {doc && (
-                        <span className="text-green-600 text-xs bg-green-100 px-2 py-1 rounded-full font-bold">
-                          Uploaded
-                        </span>
-                      )}
+                      {doc && docStatusBadge((doc as any).status)}
                     </div>
                     
                     {/* Show Open Button if uploaded, else show Upload */}
@@ -697,8 +766,9 @@ export default function StudentProfile() {
                         <Icon className="h-5 w-5" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-sm text-gray-800 truncate">
+                        <div className="font-semibold text-sm text-gray-800 truncate flex flex-wrap items-center gap-2">
                           {docTypeInfo?.label || doc.doc_type}
+                          {docStatusBadge((doc as any).status)}
                         </div>
                         <div className="text-xs text-gray-500 truncate" title={doc.file_name}>
                           {doc.file_name}
@@ -708,15 +778,37 @@ export default function StudentProfile() {
                         </div>
                       </div>
                     </div>
-                    
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="text-green-700 hover:text-green-800 hover:bg-green-100"
-                      onClick={() => openDoc(doc.file_path)}
-                    >
-                      <Eye className="h-4 w-4 mr-1" /> View
-                    </Button>
+
+                    <div className="flex flex-wrap items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-green-700 hover:text-green-800 hover:bg-green-100"
+                        onClick={() => openDoc(doc.file_path)}
+                      >
+                        <Eye className="h-4 w-4 mr-1" /> View
+                      </Button>
+                      {isPrincipal && (doc as any).status !== "approved" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-green-700 hover:bg-green-100"
+                          onClick={() => setDocStatus(doc.id, "approved")}
+                        >
+                          Approve
+                        </Button>
+                      )}
+                      {isPrincipal && (doc as any).status !== "rejected" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-700 hover:bg-red-100"
+                          onClick={() => setDocStatus(doc.id, "rejected")}
+                        >
+                          Reject
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 );
               })}

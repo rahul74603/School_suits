@@ -23,6 +23,7 @@ import {
   type Student,
   type Staff,
   type StudentDues,
+  type LeaveRequest,
 } from "@shared/schema";
 import {
   hashPassword,
@@ -393,6 +394,101 @@ const createLibraryIssueBodySchema = z.object({
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
+// ---------------------------------------------------------------------------
+// v2.3 GAP BATCH — Homework / Leaves / CSV bulk / Document status ke
+// request schemas. Tareekhein DATE_TEXT_RE ("YYYY-MM-DD") wali hi
+// parampara par hain — string tulna se hi from<=to aur overdue jaanch
+// ho jati hai.
+// ---------------------------------------------------------------------------
+const createHomeworkBodySchema = z.object({
+  className: z.string().min(1),
+  // section na aaye/null ho = poori class ka homework.
+  section: z.string().min(1).nullable().optional(),
+  subject: z.string().min(1),
+  title: z.string().min(1).max(200),
+  description: z.string().max(2000).nullable().optional(),
+  dueDate: z.string().regex(DATE_TEXT_RE),
+});
+
+const createLeaveBodySchema = z.object({
+  kind: z.enum(["student", "staff"]),
+  studentId: z.number().int().positive().optional(),
+  staffId: z.number().int().positive().optional(),
+  fromDate: z.string().regex(DATE_TEXT_RE),
+  toDate: z.string().regex(DATE_TEXT_RE),
+  reason: z.string().min(1).max(1000),
+});
+
+// Leave ka faisla aur document ka faisla — dono jagah sirf yehi do
+// values chalengi ('pending' wapas karna faisla nahi hota).
+const leaveDecisionBodySchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+});
+
+const documentStatusBodySchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+});
+
+// CSV bulk import (v2.3): client CSV parse karke rows bhejta hai.
+// Poori file ek saath reject NAHI hoti — har row alag jaanchi jati
+// hai (bulkStudentRowSchema), galat row skip + errors me report,
+// baaki banti hain. Isliye bahari schema sirf itna dekhta hai ki
+// rows ki list hai aur 500 se zyada nahi (ek saath poora school
+// ghusana aaram se ho jaye; isse zyada matlab galat file hai).
+const bulkStudentsBodySchema = z.object({
+  students: z.array(z.unknown()).min(1).max(500),
+});
+
+const bulkStaffBodySchema = z.object({
+  staff: z.array(z.unknown()).min(1).max(500),
+});
+
+// Ek CSV student row: admission form ke lazmi khet (name, class,
+// fatherName, contact) + aam vaikalpik khet. admissionNo na aaye to
+// route getNextAdmissionNo se banayega; section na aaye to "A".
+const bulkStudentRowSchema = z.object({
+  name: z.string().min(1),
+  class: z.string().min(1),
+  section: z.string().min(1).optional(),
+  rollNo: z.string().min(1).optional(),
+  admissionNo: z.string().min(1).optional(),
+  fatherName: z.string().min(1),
+  motherName: z.string().min(1).optional(),
+  contact: z.string().min(1),
+  dob: z.string().min(1).optional(),
+  address: z.string().min(1).optional(),
+  category: z.string().min(1).optional(),
+});
+
+// Ek CSV staff row: staff form ke lazmi khet (name, designation,
+// contact). basicSalary na aaye to 0; employeeId na aaye to route
+// POST /api/staff wala hi EMP-<id> khud banayega.
+// App Version publish (v3.0): Master App se Super Admin bhejta hai.
+const upsertAppVersionBodySchema = z.object({
+  versionName: z.string().trim().min(1).max(20),
+  versionCode: z.number().int().positive().max(1000000),
+  apkUrl: z.string().trim().min(1).max(500),
+  notes: z.string().trim().max(1000).optional().nullable(),
+  mandatory: z.boolean().optional().default(false),
+  stage: z.enum(["testing", "released"]).optional().default("testing"),
+});
+const APP_VERSION_APP_NAMES = new Set(["school", "parent", "master"]);
+
+const bulkStaffRowSchema = z.object({
+  name: z.string().min(1),
+  designation: z.string().min(1),
+  contact: z.string().min(1),
+  fatherName: z.string().min(1).optional(),
+  department: z.string().min(1).optional(),
+  qualification: z.string().min(1).optional(),
+  experience: z.string().min(1).optional(),
+  email: z.string().min(1).optional(),
+  address: z.string().min(1).optional(),
+  basicSalary: z.number().int().nonnegative().optional(),
+  joinDate: z.string().min(1).optional(),
+  employeeId: z.string().min(1).optional(),
+});
+
 // Online payment (Razorpay, v1.7) — order sirf rakam + student leta
 // hai; verify Razorpay ke teeno ids ke saath wahi payment jaankari
 // leta hai jo manual POST /api/payments leta hai (breakdown wagera),
@@ -689,6 +785,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
       user: serializeUser(updated ?? user),
     });
   });
+
+  // =======================================================================
+  // App Version / Update system (v3.0) — Master App se publish, teeno
+  // apps login se PEHLE check karte hain isliye GET PUBLIC hai.
+  // Isme SIRF version jaankari hoti hai (naam/code/link/notes) —
+  // kisi school ka data kabhi nahi; jawab har school ke liye ek
+  // jaisa hai.
+  //
+  // STAGED ROLLOUT: school/parent ko row tabhi milta hai jab
+  // stage = 'released' ho — pehle update sirf Master ke paas
+  // 'testing' me rehta hai, user check karke "Push to All" karta
+  // hai tab sab ko jata hai. Master app apni row hamesha dekhta
+  // hai (wohi to testing kar raha hai).
+  //
+  // Jagah jaan-boojh kar license guard se PEHLE hai: license-expired
+  // school ko bhi update milna chahiye (naya version hi fix ho
+  // sakta hai), aur bina-login check guard ke token-jaanch me
+  // fasna nahi chahiye.
+  // =======================================================================
+  app.get("/api/app-version", async (req, res) => {
+    const appName =
+      typeof req.query.app === "string" ? req.query.app : "";
+    if (!APP_VERSION_APP_NAMES.has(appName)) {
+      return res.status(400).json({
+        message: "app query parameter galat hai (school | parent | master)",
+      });
+    }
+    const noUpdate = {
+      app: appName,
+      versionName: null as string | null,
+      versionCode: 0,
+      apkUrl: null as string | null,
+      notes: null as string | null,
+      mandatory: 0,
+      stage: "none",
+    };
+    const row = await storage.getAppVersion(appName);
+    if (!row) return res.json(noUpdate);
+    // Super Admin (Master App) management ke liye poori row dekhta
+    // hai — testing wala bhi. Bina token ke (aam apps ka check)
+    // testing wala update dikhta hi nahi.
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const payload = verifyAccessToken(
+        authHeader.slice("Bearer ".length).trim(),
+      );
+      if (payload && payload.role === "super_admin") {
+        return res.json({
+          app: row.app,
+          versionName: row.versionName,
+          versionCode: row.versionCode,
+          apkUrl: row.apkUrl,
+          notes: row.notes,
+          mandatory: row.mandatory ?? 0,
+          stage: row.stage ?? "testing",
+          updatedAt: row.updatedAt,
+        });
+      }
+    }
+    // Testing wala update aam apps ko dikhta hi nahi.
+    if (appName !== "master" && row.stage !== "released") {
+      return res.json(noUpdate);
+    }
+    return res.json({
+      app: row.app,
+      versionName: row.versionName,
+      versionCode: row.versionCode,
+      apkUrl: row.apkUrl,
+      notes: row.notes,
+      mandatory: row.mandatory ?? 0,
+      stage: row.stage ?? "testing",
+      updatedAt: row.updatedAt,
+    });
+  });
+
+  // Publish: sirf Super Admin (Master App). Master ki apni row
+  // hamesha 'released' — wo user ki apni app hai, testing stage
+  // uske liye bekaar hai.
+  app.put(
+    "/api/app-version/:app",
+    requireAuth,
+    requireRole("super_admin"),
+    async (req, res) => {
+      const appName = req.params.app;
+      if (!APP_VERSION_APP_NAMES.has(appName)) {
+        return res.status(400).json({ message: "App name galat hai" });
+      }
+      const result = upsertAppVersionBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const row = await storage.upsertAppVersion(appName, {
+        versionName: result.data.versionName,
+        versionCode: result.data.versionCode,
+        apkUrl: result.data.apkUrl,
+        notes: result.data.notes ?? null,
+        mandatory: result.data.mandatory ? 1 : 0,
+        stage: appName === "master" ? "released" : result.data.stage,
+      });
+      return res.json(row);
+    },
+  );
 
   // =======================================================================
   // License guard (v1.7, NICHOD #15) — expiry beet jane par school ke
@@ -1994,6 +2190,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
+  // #29d — document approve/reject (v2.3, Arena port #8). Sirf
+  // Principal faisla karega; jawab list wala hi documentMeta shape
+  // hai (status ke saath) taaki client usi row ko taaza kar sake.
+  app.patch(
+    "/api/students/:id/documents/:docId/status",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const loaded = await loadStudentInScope(req, res);
+      if (!loaded) return;
+      const docId = parseInt(req.params.docId, 10);
+      if (Number.isNaN(docId)) {
+        return res.status(400).json({ message: "Invalid ID" });
+      }
+      const doc = await storage.getStudentDocument(docId);
+      if (!doc || doc.studentId !== loaded.student.id) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+      const result = documentStatusBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const updated = await storage.updateStudentDocumentStatus(
+        docId,
+        result.data.status,
+      );
+      if (!updated) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+      res.json(documentMeta(updated));
+    },
+  );
+
   // #39 — ek student ke dues (parent: sirf apne bacche ke).
   app.get(
     "/api/students/:id/dues",
@@ -2422,6 +2649,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       await storage.deleteStaffDocument(docId);
       res.json({ message: "Document deleted" });
+    },
+  );
+
+  // #54f — staff document approve/reject (v2.3, Arena port #8).
+  // Sirf Principal; jawab documentMeta shape (status ke saath).
+  app.patch(
+    "/api/staff/:id/documents/:docId/status",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const loaded = await loadStaffInScope(req, res);
+      if (!loaded) return;
+      const docId = parseInt(req.params.docId, 10);
+      if (Number.isNaN(docId)) {
+        return res.status(400).json({ message: "Invalid ID" });
+      }
+      const doc = await storage.getStaffDocument(docId);
+      if (!doc || doc.staffId !== loaded.member.id) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+      const result = documentStatusBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const updated = await storage.updateStaffDocumentStatus(
+        docId,
+        result.data.status,
+      );
+      if (!updated) {
+        return res.status(404).json({ message: "Document not found" });
+      }
+      res.json(documentMeta(updated));
     },
   );
 
@@ -3296,19 +3553,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     },
   );
 
-  // #78 — Poora school data ek JSON me (backup). SIRF principal:
+  // #78 — Poora school data ek JSON me (backup). Principal (apna
+  // school) + v3.0 se Super Admin (?schoolId=, Master App testing):
   // jawab me salary ki rakam aur saare students ka personal data
-  // hota hai, isliye accountant/teacher ko bhi nahi. Seedha JSON
+  // hota hai, isliye accountant/teacher ko nahi. Seedha JSON
   // response hai (koi zip library nahi) — client use file banakar
   // download karta hai. Users/password-hash isme kabhi nahi jate
   // (storage ke SchoolExportData ka design note dekho).
   app.get(
     "/api/export/school",
     requireAuth,
-    requireRole("principal"),
+    requireRole("principal", "super_admin"),
     async (req, res) => {
-      const schoolId = requireSchoolId(req, res);
-      if (schoolId == null) return;
+      // v3.0: Super Admin (Master App, apni testing ke liye) ko
+      // ?schoolId= ke saath kisi ek school ka backup lene ki chhoot —
+      // principal ke liye pehle jaisa hi token wala school. Jawab
+      // hamesha SIRF usi ek school ka data (storage schoolId par
+      // filter karta hai) — dusre school ka data mix nahi hota.
+      let schoolId: number | null;
+      if (req.user!.role === "super_admin") {
+        const raw = Number(req.query.schoolId);
+        if (!Number.isInteger(raw) || raw <= 0) {
+          return res
+            .status(400)
+            .json({ message: "schoolId query parameter is required" });
+        }
+        const school = await storage.getSchool(raw);
+        if (!school) {
+          return res.status(404).json({ message: "School not found" });
+        }
+        schoolId = raw;
+      } else {
+        schoolId = requireSchoolId(req, res);
+        if (schoolId == null) return;
+      }
       const data = await storage.getSchoolExport(schoolId);
       res.setHeader(
         "Content-Disposition",
@@ -3950,6 +4228,518 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.status(201).json(payment);
+    },
+  );
+
+  // =======================================================================
+  // v3.0 GAP BATCH — Homework, Leaves (chutti), CSV Bulk Import
+  // (Document status PATCH routes apni jagah #29d/#54f par hain.)
+  //
+  // ISOLATION (user ka sakht niyam — "data mix na ho"): har route
+  // token ke schoolId se bandha hai; dusre school ki cheez maangna
+  // hamesha 404 hai (hai hi nahi jaisa jawab). Parent ke raste
+  // parent_students link se bandhe hain — unlinked baccha 404.
+  // =======================================================================
+
+  // Staff ki apni staff-record pehchan (v1 jod): staff table me
+  // user_id nahi hai, isliye login-user ke phone/username ko staff
+  // ke contact se milate hain. Na mile to null (route imaandari se
+  // 400 deta hai — andaze se dusre ki record nahi pakadta).
+  const findOwnStaffRecord = async (
+    req: Request,
+    schoolId: number,
+  ): Promise<Staff | null> => {
+    const me = await storage.getUser(req.user!.id);
+    if (!me) return null;
+    const candidates = [me.phone, me.username].filter(
+      (value): value is string => Boolean(value && value.trim()),
+    );
+    if (candidates.length === 0) return null;
+    const all = await storage.getStaff(schoolId, { includeInactive: true });
+    return (
+      all.find(
+        (member) => member.contact != null && candidates.includes(member.contact),
+      ) ?? null
+    );
+  };
+
+  // -------------------------------------------------------------------
+  // Homework — banana: principal/teacher; dekhna: school ke staff
+  // roles (parent ka homework Parent Overview se aata hai);
+  // mitana: principal koi bhi, teacher sirf apna banaya hua.
+  // -------------------------------------------------------------------
+  app.post(
+    "/api/homework",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createHomeworkBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const created = await storage.createHomework({
+        schoolId,
+        className: result.data.className,
+        section: result.data.section ?? null,
+        subject: result.data.subject,
+        title: result.data.title,
+        description: result.data.description ?? null,
+        dueDate: result.data.dueDate,
+        createdBy: req.user!.id,
+      });
+      return res.status(201).json(created);
+    },
+  );
+
+  app.get(
+    "/api/homework",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const classFilter =
+        typeof req.query.class === "string" && req.query.class !== "all"
+          ? req.query.class
+          : undefined;
+      const sectionFilter =
+        typeof req.query.section === "string" && req.query.section !== "all"
+          ? req.query.section
+          : undefined;
+      const dateFilter =
+        typeof req.query.date === "string" ? req.query.date : undefined;
+      const rows = await storage.getHomework(schoolId, {
+        className: classFilter,
+        section: sectionFilter,
+        dueDate: dateFilter,
+      });
+      return res.json(rows);
+    },
+  );
+
+  app.delete(
+    "/api/homework/:id",
+    requireAuth,
+    requireRole("principal", "teacher"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const row = await storage.getHomeworkById(id);
+      // Dusre school ka homework = hai hi nahi (404). Teacher sirf
+      // apna banaya mita sakta hai — dusre ka bhi uske liye 404.
+      if (!row || row.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Homework not found" });
+      }
+      if (req.user!.role === "teacher" && row.createdBy !== req.user!.id) {
+        return res.status(404).json({ message: "Homework not found" });
+      }
+      await storage.deleteHomework(id);
+      return res.json({ ok: true });
+    },
+  );
+
+  // -------------------------------------------------------------------
+  // Leaves (chutti) — parent: sirf apne linked bacche ke liye;
+  // teacher/staff: staff wali sirf apni record ke liye; principal:
+  // kisi ke liye bhi record + faisla (approve/reject) sirf wahi.
+  // -------------------------------------------------------------------
+  app.post(
+    "/api/leaves",
+    requireAuth,
+    requireRole("parent", "principal", "teacher", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = createLeaveBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const data = result.data;
+      if (data.toDate < data.fromDate) {
+        return res.status(400).json({
+          message: "To date, from date se pehle nahi ho sakti",
+        });
+      }
+      const role = req.user!.role;
+
+      let studentId: number | null = null;
+      let staffId: number | null = null;
+
+      if (data.kind === "student") {
+        if (data.studentId == null) {
+          return res
+            .status(400)
+            .json({ message: "studentId is required for student leave" });
+        }
+        if (role === "parent") {
+          // Parent sirf apne LINKED bacche ke liye — unlinked (ya
+          // dusre school ka) baccha = 404, hai hi nahi jaisa.
+          const linked = await parentLinkedStudentIds(req);
+          if (!linked.includes(data.studentId)) {
+            return res.status(404).json({ message: "Student not found" });
+          }
+        } else if (role === "principal" || role === "teacher") {
+          const student = await storage.getStudent(data.studentId);
+          if (!student || student.schoolId !== schoolId) {
+            return res.status(404).json({ message: "Student not found" });
+          }
+        } else {
+          return res
+            .status(403)
+            .json({ message: "Staff student leave nahi laga sakta" });
+        }
+        studentId = data.studentId;
+      } else {
+        // kind === "staff"
+        if (role === "parent") {
+          return res
+            .status(403)
+            .json({ message: "Parent staff leave nahi laga sakta" });
+        }
+        if (role === "principal") {
+          if (data.staffId == null) {
+            return res
+              .status(400)
+              .json({ message: "staffId is required for staff leave" });
+          }
+          const member = await storage.getStaffMember(data.staffId);
+          if (!member || member.schoolId !== schoolId) {
+            return res.status(404).json({ message: "Staff not found" });
+          }
+          staffId = data.staffId;
+        } else {
+          // teacher/staff: sirf APNI record — body ka staffId
+          // andekha; pehchan login se (contact-match).
+          const own = await findOwnStaffRecord(req, schoolId);
+          if (!own) {
+            return res.status(400).json({
+              message:
+                "Aapki staff record nahi mili — kripya office/principal se sampark karein",
+            });
+          }
+          staffId = own.id;
+        }
+      }
+
+      const created = await storage.createLeaveRequest({
+        schoolId,
+        kind: data.kind,
+        studentId,
+        staffId,
+        applicantUserId: req.user!.id,
+        fromDate: data.fromDate,
+        toDate: data.toDate,
+        reason: data.reason,
+        status: "pending",
+        decidedBy: null,
+      });
+      return res.status(201).json(created);
+    },
+  );
+
+  app.get(
+    "/api/leaves",
+    requireAuth,
+    requireRole("principal", "accountant", "teacher", "staff", "parent"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const role = req.user!.role;
+      const kindFilter =
+        typeof req.query.kind === "string" ? req.query.kind : undefined;
+      const statusFilter =
+        typeof req.query.status === "string" ? req.query.status : undefined;
+
+      let rows: LeaveRequest[];
+      if (role === "principal" || role === "accountant") {
+        rows = await storage.getLeaveRequests(schoolId, {
+          kind: kindFilter,
+          status: statusFilter,
+        });
+      } else if (role === "parent") {
+        const linked = await parentLinkedStudentIds(req);
+        rows = await storage.getLeaveRequests(schoolId, {
+          kind: "student",
+          status: statusFilter,
+          studentIds: linked,
+        });
+      } else {
+        // teacher/staff: apni lagayi hui + apni staff-record wali.
+        const own = await findOwnStaffRecord(req, schoolId);
+        const byApplicant = await storage.getLeaveRequests(schoolId, {
+          status: statusFilter,
+          applicantUserId: req.user!.id,
+        });
+        const byStaff = own
+          ? await storage.getLeaveRequests(schoolId, {
+              status: statusFilter,
+              staffId: own.id,
+            })
+          : [];
+        const seen = new Set<number>();
+        rows = [...byApplicant, ...byStaff]
+          .filter((row) => {
+            if (seen.has(row.id)) return false;
+            seen.add(row.id);
+            return true;
+          })
+          .sort((a, b) => b.id - a.id);
+        if (kindFilter) rows = rows.filter((row) => row.kind === kindFilter);
+      }
+
+      // Naam saath bhejo (client ke paas parent jaise roles ke liye
+      // students/staff list ka access nahi hota) — har naam usi
+      // school se jaanch kar.
+      const studentNames = new Map<number, string>();
+      const staffNames = new Map<number, string>();
+      const enriched = [] as Array<
+        LeaveRequest & { studentName: string | null; staffName: string | null }
+      >;
+      for (const row of rows) {
+        let studentName: string | null = null;
+        let staffName: string | null = null;
+        if (row.studentId != null) {
+          if (!studentNames.has(row.studentId)) {
+            const student = await storage.getStudent(row.studentId);
+            studentNames.set(
+              row.studentId,
+              student && student.schoolId === schoolId ? student.name : "",
+            );
+          }
+          studentName = studentNames.get(row.studentId) || null;
+        }
+        if (row.staffId != null) {
+          if (!staffNames.has(row.staffId)) {
+            const member = await storage.getStaffMember(row.staffId);
+            staffNames.set(
+              row.staffId,
+              member && member.schoolId === schoolId ? member.name : "",
+            );
+          }
+          staffName = staffNames.get(row.staffId) || null;
+        }
+        enriched.push({ ...row, studentName, staffName });
+      }
+      return res.json(enriched);
+    },
+  );
+
+  // Faisla sirf principal, sirf pending par (ek baar faisla ho jaye
+  // to badla nahi jata — galti ho to nayi leave record hoti hai).
+  app.patch(
+    "/api/leaves/:id/decision",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const id = parsePathId(req);
+      if (id == null) return res.status(400).json({ message: "Invalid ID" });
+      const result = leaveDecisionBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+      const leave = await storage.getLeaveRequest(id);
+      if (!leave || leave.schoolId !== schoolId) {
+        return res.status(404).json({ message: "Leave not found" });
+      }
+      if (leave.status !== "pending") {
+        return res.status(400).json({
+          message: "Is leave par pehle hi faisla ho chuka hai",
+        });
+      }
+      const updated = await storage.updateLeaveRequest(id, {
+        status: result.data.status,
+        decidedBy: req.user!.id,
+      });
+      return res.json(updated);
+    },
+  );
+
+  // -------------------------------------------------------------------
+  // CSV Bulk Import — Students (principal/staff) + Staff (principal).
+  // Har row alag jaancha jata hai: kharab row skip + error list me,
+  // achhi rows ban jati hain (ek kharab row poora import nahi
+  // rokta). Students ke liye v2.1 wala parent auto-link bhi chalta
+  // hai. Import SIRF importer ke school me hota hai — schoolId
+  // hamesha token se, body se kabhi nahi.
+  // -------------------------------------------------------------------
+  app.post(
+    "/api/students/bulk",
+    requireAuth,
+    requireRole("principal", "staff"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = bulkStudentsBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+
+      let created = 0;
+      let skipped = 0;
+      const errors: Array<{ row: number; message: string }> = [];
+      const seenAdmissionNos = new Set<string>();
+
+      for (let i = 0; i < result.data.students.length; i++) {
+        const lineNo = i + 2; // CSV ki line (1 = header)
+        const parsed = bulkStudentRowSchema.safeParse(result.data.students[i]);
+        if (!parsed.success) {
+          skipped++;
+          errors.push({
+            row: lineNo,
+            message:
+              "Zaroori jaankari adhuri hai (name, class, fatherName, contact lazmi hain)",
+          });
+          continue;
+        }
+        const rowData = parsed.data;
+        try {
+          let admissionNo = rowData.admissionNo?.trim() || null;
+          if (admissionNo) {
+            if (seenAdmissionNos.has(admissionNo)) {
+              skipped++;
+              errors.push({
+                row: lineNo,
+                message: `Admission No. ${admissionNo} is file me do baar hai`,
+              });
+              continue;
+            }
+            const clash = await storage.getStudentByAdmissionNo(
+              schoolId,
+              admissionNo,
+            );
+            if (clash) {
+              skipped++;
+              errors.push({
+                row: lineNo,
+                message: `Admission No. ${admissionNo} pehle se maujood hai`,
+              });
+              continue;
+            }
+            seenAdmissionNos.add(admissionNo);
+          } else {
+            admissionNo = await storage.getNextAdmissionNo(schoolId);
+          }
+
+          const student = await storage.createStudent({
+            schoolId,
+            name: rowData.name,
+            class: rowData.class,
+            section: rowData.section?.trim() || "A",
+            rollNo: rowData.rollNo ?? null,
+            admissionNo,
+            fatherName: rowData.fatherName,
+            motherName: rowData.motherName ?? null,
+            contact: rowData.contact,
+            dob: rowData.dob ?? null,
+            address: rowData.address ?? null,
+            category: rowData.category ?? null,
+          });
+          created++;
+
+          // v2.1 niyam: admission par parent login khud banta hai.
+          // Isme gadbad ho to row fail nahi hoti (student ban gaya
+          // hai) — parent baad me Students page se bhi jud sakta hai.
+          try {
+            await ensureParentForAdmission(
+              schoolId,
+              student,
+              async () => await hashPassword(student.admissionNo),
+            );
+          } catch (error) {
+            console.error("bulk import: parent auto-link failed:", error);
+          }
+        } catch (error) {
+          console.error("bulk import student row failed:", error);
+          skipped++;
+          errors.push({ row: lineNo, message: "Row save nahi ho payi" });
+        }
+      }
+      return res.json({ created, skipped, errors });
+    },
+  );
+
+  app.post(
+    "/api/staff/bulk",
+    requireAuth,
+    requireRole("principal"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const result = bulkStaffBodySchema.safeParse(req.body);
+      if (!result.success) return res.status(400).json(result.error);
+
+      let created = 0;
+      let skipped = 0;
+      const errors: Array<{ row: number; message: string }> = [];
+      const seenEmployeeIds = new Set<string>();
+
+      for (let i = 0; i < result.data.staff.length; i++) {
+        const lineNo = i + 2;
+        const parsed = bulkStaffRowSchema.safeParse(result.data.staff[i]);
+        if (!parsed.success) {
+          skipped++;
+          errors.push({
+            row: lineNo,
+            message:
+              "Zaroori jaankari adhuri hai (name, designation, contact lazmi hain)",
+          });
+          continue;
+        }
+        const rowData = parsed.data;
+        try {
+          const employeeId = rowData.employeeId?.trim() || null;
+          if (employeeId) {
+            if (seenEmployeeIds.has(employeeId)) {
+              skipped++;
+              errors.push({
+                row: lineNo,
+                message: `Employee ID ${employeeId} is file me do baar hai`,
+              });
+              continue;
+            }
+            const existing = await storage.getStaff(schoolId, {
+              includeInactive: true,
+            });
+            if (existing.some((member) => member.employeeId === employeeId)) {
+              skipped++;
+              errors.push({
+                row: lineNo,
+                message: `Employee ID ${employeeId} pehle se maujood hai`,
+              });
+              continue;
+            }
+            seenEmployeeIds.add(employeeId);
+          }
+
+          const member = await storage.createStaff({
+            schoolId,
+            employeeId,
+            name: rowData.name,
+            fatherName: rowData.fatherName ?? null,
+            designation: rowData.designation,
+            department: rowData.department ?? null,
+            qualification: rowData.qualification ?? null,
+            experience: rowData.experience ?? null,
+            contact: rowData.contact,
+            email: rowData.email ?? null,
+            address: rowData.address ?? null,
+            joinDate: rowData.joinDate ?? null,
+            basicSalary: rowData.basicSalary ?? 0,
+            status: "active",
+          });
+          // POST /api/staff jaisa hi niyam: employeeId na ho to
+          // EMP-<id> khud lag jata hai.
+          if (!member.employeeId) {
+            await storage.updateStaff(member.id, {
+              employeeId: `EMP-${member.id}`,
+            });
+          }
+          created++;
+        } catch (error) {
+          console.error("bulk import staff row failed:", error);
+          skipped++;
+          errors.push({ row: lineNo, message: "Row save nahi ho payi" });
+        }
+      }
+      return res.json({ created, skipped, errors });
     },
   );
 

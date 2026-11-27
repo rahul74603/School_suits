@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
+import { APP_VERSION_NAME } from "@/lib/appVersion";
 import { GraduationCap, Hash, Loader2, Lock, Phone } from "lucide-react";
 
 // =============================================================================
@@ -281,7 +282,7 @@ export default function ParentLogin() {
         </Card>
 
         <p className="text-center text-[11px] text-slate-500">
-          Guardian Parent — Version 2.2
+          Guardian Parent — Version {APP_VERSION_NAME}
         </p>
       </div>
     </div>

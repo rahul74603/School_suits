@@ -11,8 +11,9 @@
 // Gate us haalat me super_admin ko MasterShell deta hai (sirf Schools
 // screen + Demo School button); koi dusra role login kare to "ye app
 // sirf Master (Super Admin) ke liye hai" wali screen. Flag na ho to aam
-// school app hai — bartav me ZEERO farak (Super Admin school app me bhi
-// Schools screen pehle ki tarah dekh sakta hai).
+// school app hai. (v3.0: school app build me super_admin ko Gate par
+// "Guardian Master App use karein" wali screen milti hai — Master App
+// hai to School App me Super Admin ki jagah nahi, user ka design.)
 // Android me ye build `master` Gradle flavor ke saath jata hai
 // (applicationId com.schoolguardian.master) — workflow dekho.
 // lib/parentApp.ts ka jodidaar — wahi pattern, wahi imaandari: gate

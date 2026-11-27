@@ -3,6 +3,7 @@ import {
     parentStudents,
     exams, marks, attendance, timetableEntries, transportRoutes, additionalFees, salaryPayments, expenses,
     studentDocuments, staffDocuments, notices, libraryBooks, libraryIssues,
+    homework, leaveRequests, appVersions,
     type User, type InsertUser, type School, type InsertSchool,
     type Student, type InsertStudent, type FeeStructure, type InsertFeeStructure,
     type FeePayment, type InsertFeePayment, type Staff, type InsertStaff,
@@ -19,7 +20,10 @@ import {
     type StaffDocument, type InsertStaffDocument,
     type Notice, type InsertNotice,
     type LibraryBook, type InsertLibraryBook,
-    type LibraryIssue, type InsertLibraryIssue
+    type LibraryIssue, type InsertLibraryIssue,
+    type Homework, type InsertHomework,
+    type LeaveRequest, type InsertLeaveRequest,
+    type AppVersion
  } from "@shared/schema";
 import { randomInt } from "crypto";
 import { eq, ilike, and, or } from "drizzle-orm";
@@ -437,6 +441,19 @@ export interface ParentOverviewChild {
   // Bacche ki class ka hafta — withTeacherName wala hi teacherName
   // saath (parent /api/staff nahi padh sakta).
   timetable: Array<TimetableEntry & { teacherName: string | null }>;
+  // 📚 Homework (v2.3): bacche ki class ka homework — section wala
+  // niyam: homework ki section khaali (null) ho to poori class ka
+  // hai; section bhari ho to sirf usi section ke baccho ka. Naye
+  // pehle, zyada se zyada 10. overdue = dueDate aaj se pehle ki hai
+  // (dono "YYYY-MM-DD" text hain — string tulna hi sahi hai).
+  homework: Array<{
+    id: number;
+    subject: string;
+    title: string;
+    description: string | null;
+    dueDate: string;
+    overdue: boolean;
+  }>;
 }
 
 export interface ParentOverview {
@@ -693,6 +710,24 @@ export async function buildParentOverviewImpl(
       timetable.push({ ...row, teacherName });
     }
 
+    // 📚 Homework (v2.3): bacche ki class ka homework. Storage se
+    // class ke saare rows aate hain (naye pehle); section wala niyam
+    // yahan lagta hai — homework.section null = poori class, warna
+    // sirf wahi section jo bacche ki hai. Dusri class ka homework
+    // yahan aa hi nahi sakta (storage school + class se bandha hai).
+    const todayText = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const homework = (await store.getHomework(schoolId, { className: student.class }))
+      .filter((row) => row.section == null || row.section === student.section)
+      .slice(0, 10)
+      .map((row) => ({
+        id: row.id,
+        subject: row.subject,
+        title: row.title,
+        description: row.description ?? null,
+        dueDate: row.dueDate,
+        overdue: row.dueDate < todayText,
+      }));
+
     children.push({
       student: {
         id: student.id,
@@ -723,6 +758,7 @@ export async function buildParentOverviewImpl(
       },
       results: { exams },
       timetable,
+      homework,
     });
   }
 
@@ -1224,6 +1260,67 @@ export interface IStorage {
     student: Student,
     makePasswordHash: () => Promise<string>,
   ): Promise<EnsureParentResult | null>;
+
+  // ---------------------------------------------------------------------
+  // v2.3 GAP BATCH — Homework, Leaves, Document approve/reject.
+  // ---------------------------------------------------------------------
+  // Homework: list hamesha naye pehle (createdAt/id desc). DB impl
+  // padhne wale methods par try/catch rakhta hai — v2.3 ki nayi
+  // tables wala SQL na chala ho to list khaali milegi, crash nahi
+  // (parent overview bhi isi par chalta hai, wo nahi rukna chahiye).
+  getHomework(
+    schoolId: number,
+    filters?: { className?: string; section?: string; dueDate?: string },
+  ): Promise<Homework[]>;
+  getHomeworkById(id: number): Promise<Homework | undefined>;
+  createHomework(entry: InsertHomework): Promise<Homework>;
+  deleteHomework(id: number): Promise<void>;
+
+  // Leaves: filters jo diye jayein wahi lagte hain; list naye pehle.
+  createLeaveRequest(leave: InsertLeaveRequest): Promise<LeaveRequest>;
+  getLeaveRequest(id: number): Promise<LeaveRequest | undefined>;
+  getLeaveRequests(
+    schoolId: number,
+    filters?: {
+      kind?: string;
+      status?: string;
+      studentId?: number;
+      staffId?: number;
+      applicantUserId?: number;
+      studentIds?: number[];
+    },
+  ): Promise<LeaveRequest[]>;
+  updateLeaveRequest(
+    id: number,
+    update: Partial<InsertLeaveRequest>,
+  ): Promise<LeaveRequest | undefined>;
+
+  // Document approve/reject (v2.3): sirf status badalta hai; document
+  // na mile to undefined.
+  updateStudentDocumentStatus(
+    id: number,
+    status: string,
+  ): Promise<StudentDocument | undefined>;
+  updateStaffDocumentStatus(
+    id: number,
+    status: string,
+  ): Promise<StaffDocument | undefined>;
+
+  // App Versions (v3.0): update ghoshna — sirf version jaankari,
+  // kisi school ka data nahi. getAppVersion pre-migration par
+  // undefined (table na ho to bhi app crash nahi).
+  getAppVersion(app: string): Promise<AppVersion | undefined>;
+  upsertAppVersion(
+    app: string,
+    data: {
+      versionName: string;
+      versionCode: number;
+      apkUrl: string;
+      notes?: string | null;
+      mandatory?: number;
+      stage?: string;
+    },
+  ): Promise<AppVersion>;
 } // <-- interface yahan band hona chahiye tha
 
 // 2. Database Implementation
@@ -2110,6 +2207,214 @@ export class DatabaseStorage implements IStorage {
   ): Promise<EnsureParentResult | null> {
     return ensureParentForAdmissionImpl(this, schoolId, student, makePasswordHash);
   }
+
+  // -------------------------------------------------------------------
+  // v2.3 GAP BATCH — Homework / Leaves / Document status (DB impl).
+  // Padhne wale methods try/catch me hain: v2.3 ka SQL (homework +
+  // leave_requests tables) na chala ho to list khaali milegi aur
+  // parent overview jaisi purani screens chalti rahengi — crash
+  // kabhi nahi. Likhne wale methods par catch NAHI hai: SQL ke bina
+  // homework/leave banna imaandari se fail hoga (route 500 dega),
+  // jhooti safalta nahi dikhegi. NOTES ka SQL hissa dekho.
+  // -------------------------------------------------------------------
+  async getHomework(
+    schoolId: number,
+    filters?: { className?: string; section?: string; dueDate?: string },
+  ): Promise<Homework[]> {
+    try {
+      const conditions = [eq(homework.schoolId, schoolId)];
+      if (filters?.className) conditions.push(eq(homework.className, filters.className));
+      if (filters?.section) conditions.push(eq(homework.section, filters.section));
+      if (filters?.dueDate) conditions.push(eq(homework.dueDate, filters.dueDate));
+      const rows = await db
+        .select()
+        .from(homework)
+        .where(and(...conditions));
+      // Naye pehle (parent overview + Homework page dono yahi chahte hain).
+      return rows.sort((a, b) => {
+        const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (tb !== ta) return tb - ta;
+        return b.id - a.id;
+      });
+    } catch (err) {
+      console.error(
+        "getHomework failed (homework table missing? v2.3 SQL baaki hai):",
+        err,
+      );
+      return [];
+    }
+  }
+
+  async getHomeworkById(id: number): Promise<Homework | undefined> {
+    try {
+      const [row] = await db.select().from(homework).where(eq(homework.id, id));
+      return row;
+    } catch (err) {
+      console.error(
+        "getHomeworkById failed (homework table missing? v2.3 SQL baaki hai):",
+        err,
+      );
+      return undefined;
+    }
+  }
+
+  async createHomework(entry: InsertHomework): Promise<Homework> {
+    const [created] = await db.insert(homework).values(entry).returning();
+    return created;
+  }
+
+  async deleteHomework(id: number): Promise<void> {
+    await db.delete(homework).where(eq(homework.id, id));
+  }
+
+  async createLeaveRequest(leave: InsertLeaveRequest): Promise<LeaveRequest> {
+    const [created] = await db.insert(leaveRequests).values(leave).returning();
+    return created;
+  }
+
+  async getLeaveRequest(id: number): Promise<LeaveRequest | undefined> {
+    try {
+      const [row] = await db
+        .select()
+        .from(leaveRequests)
+        .where(eq(leaveRequests.id, id));
+      return row;
+    } catch (err) {
+      console.error(
+        "getLeaveRequest failed (leave_requests table missing? v2.3 SQL baaki hai):",
+        err,
+      );
+      return undefined;
+    }
+  }
+
+  async getLeaveRequests(
+    schoolId: number,
+    filters?: {
+      kind?: string;
+      status?: string;
+      studentId?: number;
+      staffId?: number;
+      applicantUserId?: number;
+      studentIds?: number[];
+    },
+  ): Promise<LeaveRequest[]> {
+    try {
+      let rows = await db
+        .select()
+        .from(leaveRequests)
+        .where(eq(leaveRequests.schoolId, schoolId));
+      if (filters?.kind) rows = rows.filter((row) => row.kind === filters.kind);
+      if (filters?.status) rows = rows.filter((row) => row.status === filters.status);
+      if (filters?.studentId != null) {
+        rows = rows.filter((row) => row.studentId === filters.studentId);
+      }
+      if (filters?.staffId != null) {
+        rows = rows.filter((row) => row.staffId === filters.staffId);
+      }
+      if (filters?.applicantUserId != null) {
+        rows = rows.filter((row) => row.applicantUserId === filters.applicantUserId);
+      }
+      if (filters?.studentIds) {
+        const wanted = new Set(filters.studentIds);
+        rows = rows.filter(
+          (row) => row.studentId != null && wanted.has(row.studentId),
+        );
+      }
+      // Naye pehle (getLibraryIssues wala hi tareeka).
+      return rows.sort((a, b) => b.id - a.id);
+    } catch (err) {
+      console.error(
+        "getLeaveRequests failed (leave_requests table missing? v2.3 SQL baaki hai):",
+        err,
+      );
+      return [];
+    }
+  }
+
+  async updateLeaveRequest(
+    id: number,
+    update: Partial<InsertLeaveRequest>,
+  ): Promise<LeaveRequest | undefined> {
+    const [updated] = await db
+      .update(leaveRequests)
+      .set(update)
+      .where(eq(leaveRequests.id, id))
+      .returning();
+    return updated;
+  }
+
+  async updateStudentDocumentStatus(
+    id: number,
+    status: string,
+  ): Promise<StudentDocument | undefined> {
+    const [updated] = await db
+      .update(studentDocuments)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(studentDocuments.id, id))
+      .returning();
+    return updated;
+  }
+
+  async updateStaffDocumentStatus(
+    id: number,
+    status: string,
+  ): Promise<StaffDocument | undefined> {
+    const [updated] = await db
+      .update(staffDocuments)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(staffDocuments.id, id))
+      .returning();
+    return updated;
+  }
+
+  // App Versions (v3.0): read pre-migration par khaali (table na ho
+  // to bhi public version-check crash nahi karta — "no update"
+  // jawab banta hai). Upsert = app PK par conflict-update.
+  async getAppVersion(app: string): Promise<AppVersion | undefined> {
+    try {
+      const [row] = await db
+        .select()
+        .from(appVersions)
+        .where(eq(appVersions.app, app));
+      return row;
+    } catch (error) {
+      console.error("getAppVersion failed (table missing?):", error);
+      return undefined;
+    }
+  }
+
+  async upsertAppVersion(
+    app: string,
+    data: {
+      versionName: string;
+      versionCode: number;
+      apkUrl: string;
+      notes?: string | null;
+      mandatory?: number;
+      stage?: string;
+    },
+  ): Promise<AppVersion> {
+    const values = {
+      app,
+      versionName: data.versionName,
+      versionCode: data.versionCode,
+      apkUrl: data.apkUrl,
+      notes: data.notes ?? null,
+      mandatory: data.mandatory ?? 0,
+      stage: data.stage ?? "testing",
+    };
+    const [row] = await db
+      .insert(appVersions)
+      .values(values)
+      .onConflictDoUpdate({
+        target: appVersions.app,
+        set: { ...values, updatedAt: new Date() },
+      })
+      .returning();
+    return row;
+  }
 }
 
 // 3. Mock Storage
@@ -2159,6 +2464,9 @@ export class MockStorage implements IStorage {
   private noticesData: Notice[] = [];
   private libraryBooksData: LibraryBook[] = [];
   private libraryIssuesData: LibraryIssue[] = [];
+  // v2.3 gap batch — homework + leave requests.
+  private homeworkData: Homework[] = [];
+  private leaveRequestsData: LeaveRequest[] = [];
 
   private nextUserId = 1;
   private nextSchoolId = 2;
@@ -2180,6 +2488,8 @@ export class MockStorage implements IStorage {
   private nextNoticeId = 1;
   private nextLibraryBookId = 1;
   private nextLibraryIssueId = 1;
+  private nextHomeworkId = 1;
+  private nextLeaveRequestId = 1;
 
   async getUser(id: number): Promise<User | undefined> {
     return this.usersData.find((item) => item.id === id);
@@ -2476,6 +2786,7 @@ export class MockStorage implements IStorage {
       studentId: doc.studentId, docType: doc.docType ?? null,
       fileName: doc.fileName, filePath: doc.filePath ?? null,
       fileData: doc.fileData ?? null, mimeType: doc.mimeType ?? null,
+      status: doc.status ?? "pending",
       createdAt: new Date(), updatedAt: new Date(),
     };
     this.studentDocumentsData.push(created);
@@ -2500,6 +2811,7 @@ export class MockStorage implements IStorage {
       staffId: doc.staffId, docType: doc.docType ?? null,
       fileName: doc.fileName, filePath: doc.filePath ?? null,
       fileData: doc.fileData ?? null, mimeType: doc.mimeType ?? null,
+      status: doc.status ?? "pending",
       createdAt: new Date(), updatedAt: new Date(),
     };
     this.staffDocumentsData.push(created);
@@ -3091,6 +3403,187 @@ export class MockStorage implements IStorage {
     makePasswordHash: () => Promise<string>,
   ): Promise<EnsureParentResult | null> {
     return ensureParentForAdmissionImpl(this, schoolId, student, makePasswordHash);
+  }
+
+  // v2.3 GAP BATCH — Homework / Leaves / Document status (Mock impl;
+  // vyavhaar DatabaseStorage jaisa hi rakha gaya hai).
+  async getHomework(
+    schoolId: number,
+    filters?: { className?: string; section?: string; dueDate?: string },
+  ): Promise<Homework[]> {
+    let rows = this.homeworkData.filter((item) => item.schoolId === schoolId);
+    if (filters?.className) rows = rows.filter((item) => item.className === filters.className);
+    if (filters?.section) rows = rows.filter((item) => item.section === filters.section);
+    if (filters?.dueDate) rows = rows.filter((item) => item.dueDate === filters.dueDate);
+    return rows.sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (tb !== ta) return tb - ta;
+      return b.id - a.id;
+    });
+  }
+
+  async getHomeworkById(id: number): Promise<Homework | undefined> {
+    return this.homeworkData.find((item) => item.id === id);
+  }
+
+  async createHomework(entry: InsertHomework): Promise<Homework> {
+    const created: Homework = {
+      id: this.nextHomeworkId++,
+      schoolId: entry.schoolId ?? null,
+      className: entry.className,
+      section: entry.section ?? null,
+      subject: entry.subject,
+      title: entry.title,
+      description: entry.description ?? null,
+      dueDate: entry.dueDate,
+      createdBy: entry.createdBy ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.homeworkData.push(created);
+    return created;
+  }
+
+  async deleteHomework(id: number): Promise<void> {
+    this.homeworkData = this.homeworkData.filter((item) => item.id !== id);
+  }
+
+  async createLeaveRequest(leave: InsertLeaveRequest): Promise<LeaveRequest> {
+    const created: LeaveRequest = {
+      id: this.nextLeaveRequestId++,
+      schoolId: leave.schoolId ?? null,
+      kind: leave.kind ?? "student",
+      studentId: leave.studentId ?? null,
+      staffId: leave.staffId ?? null,
+      applicantUserId: leave.applicantUserId ?? null,
+      fromDate: leave.fromDate,
+      toDate: leave.toDate,
+      reason: leave.reason,
+      status: leave.status ?? "pending",
+      decidedBy: leave.decidedBy ?? null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.leaveRequestsData.push(created);
+    return created;
+  }
+
+  async getLeaveRequest(id: number): Promise<LeaveRequest | undefined> {
+    return this.leaveRequestsData.find((item) => item.id === id);
+  }
+
+  async getLeaveRequests(
+    schoolId: number,
+    filters?: {
+      kind?: string;
+      status?: string;
+      studentId?: number;
+      staffId?: number;
+      applicantUserId?: number;
+      studentIds?: number[];
+    },
+  ): Promise<LeaveRequest[]> {
+    let rows = this.leaveRequestsData.filter((item) => item.schoolId === schoolId);
+    if (filters?.kind) rows = rows.filter((item) => item.kind === filters.kind);
+    if (filters?.status) rows = rows.filter((item) => item.status === filters.status);
+    if (filters?.studentId != null) {
+      rows = rows.filter((item) => item.studentId === filters.studentId);
+    }
+    if (filters?.staffId != null) {
+      rows = rows.filter((item) => item.staffId === filters.staffId);
+    }
+    if (filters?.applicantUserId != null) {
+      rows = rows.filter((item) => item.applicantUserId === filters.applicantUserId);
+    }
+    if (filters?.studentIds) {
+      const wanted = new Set(filters.studentIds);
+      rows = rows.filter(
+        (item) => item.studentId != null && wanted.has(item.studentId),
+      );
+    }
+    return rows.sort((a, b) => b.id - a.id);
+  }
+
+  async updateLeaveRequest(
+    id: number,
+    update: Partial<InsertLeaveRequest>,
+  ): Promise<LeaveRequest | undefined> {
+    const index = this.leaveRequestsData.findIndex((item) => item.id === id);
+    if (index === -1) return undefined;
+    const updated: LeaveRequest = {
+      ...this.leaveRequestsData[index],
+      ...update,
+      updatedAt: new Date(),
+    };
+    this.leaveRequestsData[index] = updated;
+    return updated;
+  }
+
+  async updateStudentDocumentStatus(
+    id: number,
+    status: string,
+  ): Promise<StudentDocument | undefined> {
+    const doc = this.studentDocumentsData.find((item) => item.id === id);
+    if (!doc) return undefined;
+    doc.status = status;
+    doc.updatedAt = new Date();
+    return doc;
+  }
+
+  async updateStaffDocumentStatus(
+    id: number,
+    status: string,
+  ): Promise<StaffDocument | undefined> {
+    const doc = this.staffDocumentsData.find((item) => item.id === id);
+    if (!doc) return undefined;
+    doc.status = status;
+    doc.updatedAt = new Date();
+    return doc;
+  }
+
+  // App Versions (v3.0) — Mock.
+  private appVersionsData: AppVersion[] = [];
+
+  async getAppVersion(app: string): Promise<AppVersion | undefined> {
+    return this.appVersionsData.find((item) => item.app === app);
+  }
+
+  async upsertAppVersion(
+    app: string,
+    data: {
+      versionName: string;
+      versionCode: number;
+      apkUrl: string;
+      notes?: string | null;
+      mandatory?: number;
+      stage?: string;
+    },
+  ): Promise<AppVersion> {
+    const existing = this.appVersionsData.find((item) => item.app === app);
+    if (existing) {
+      existing.versionName = data.versionName;
+      existing.versionCode = data.versionCode;
+      existing.apkUrl = data.apkUrl;
+      existing.notes = data.notes ?? null;
+      existing.mandatory = data.mandatory ?? 0;
+      existing.stage = data.stage ?? existing.stage ?? "testing";
+      existing.updatedAt = new Date();
+      return existing;
+    }
+    const row: AppVersion = {
+      app,
+      versionName: data.versionName,
+      versionCode: data.versionCode,
+      apkUrl: data.apkUrl,
+      notes: data.notes ?? null,
+      mandatory: data.mandatory ?? 0,
+      stage: data.stage ?? "testing",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.appVersionsData.push(row);
+    return row;
   }
 }
 

@@ -23,6 +23,13 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, apiPut, apiDel } from "@/lib/api";
 import { downloadTextFile, todayStamp } from "@/lib/exportCsv";
+import {
+  backupStorageKey,
+  getLastBackupAt,
+  markBackupDone,
+  shareOrDownloadBackup,
+} from "@/lib/backup";
+import { isBackupDue } from "@/lib/updateLogic";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 import {
@@ -202,6 +209,7 @@ export default function SettingsPage() {
         JSON.stringify(data, null, 2),
         "application/json",
       );
+      setLastBackupAt(markBackupDone(backupStorageKey(user?.schoolId ?? null)));
       toast({
         title: "Backup download ho gaya",
         description: `Students: ${data?.students?.length ?? 0} • Staff: ${data?.staff?.length ?? 0} • Payments: ${data?.feePayments?.length ?? 0} • Dues: ${data?.studentDues?.length ?? 0}. File sambhal kar rakhein — isme school ka saara data hai.`,
@@ -214,6 +222,54 @@ export default function SettingsPage() {
       });
     }
     setExporting(false);
+  };
+
+  // ☁️ Drive Backup (v3.0) — wahi poora export, lekin file phone ke
+  // share sheet se Google Drive me jati hai (user ke APNE Drive me).
+  // Aakhri backup ka samay isi phone par yaad rehta hai; 24 ghante
+  // se purana ho to app khulne par upar banner bhi yaad dilata hai
+  // (BackupBanner). Seedha server→Drive upload ke liye Google
+  // OAuth setup chahiye jo abhi nahi hai — jhooti "connected"
+  // halat nahi dikhayi jati.
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
+  const [sharingBackup, setSharingBackup] = useState(false);
+
+  useEffect(() => {
+    setLastBackupAt(getLastBackupAt(backupStorageKey(user?.schoolId ?? null)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.schoolId]);
+
+  const shareDriveBackup = async () => {
+    setSharingBackup(true);
+    try {
+      const data = await apiGet<any>("/api/export/school");
+      const result = await shareOrDownloadBackup(
+        data,
+        `school-backup-${todayStamp()}.json`,
+      );
+      if (result === "cancelled") {
+        toast({
+          title: "Backup ruka",
+          description: "Share band kar diya gaya — file save nahi hui.",
+        });
+        return;
+      }
+      setLastBackupAt(markBackupDone(backupStorageKey(user?.schoolId ?? null)));
+      toast({
+        title: "✅ Backup taiyaar hai",
+        description:
+          result === "shared"
+            ? "Share sheet me Google Drive chunein — backup aapke apne Drive me save hoga."
+            : "Backup file download ho gayi — use apne Google Drive me upload karke sambhal lein.",
+      });
+    } catch (e: any) {
+      toast({
+        title: "Backup nahi ban paya",
+        description: e?.message || "Kuch galat hua — dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setSharingBackup(false);
   };
 
   // Save School Info
@@ -673,14 +729,46 @@ export default function SettingsPage() {
               Drive) par sambhal kar rakhein. Account aur password is file
               me <b>kabhi nahi</b> hote.
             </p>
-            <Button
-              onClick={() => void downloadFullBackup()}
-              className="bg-indigo-600 hover:bg-indigo-700"
-              disabled={exporting}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              {exporting ? "Backup ban raha hai…" : "Poora Data Download (JSON)"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => void downloadFullBackup()}
+                className="bg-indigo-600 hover:bg-indigo-700"
+                disabled={exporting}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                {exporting ? "Backup ban raha hai…" : "Poora Data Download (JSON)"}
+              </Button>
+              <Button
+                onClick={() => void shareDriveBackup()}
+                variant="outline"
+                className="border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                disabled={sharingBackup}
+              >
+                <Database className="h-4 w-4 mr-2" />
+                {sharingBackup
+                  ? "Backup ban raha hai…"
+                  : "Backup banao — Google Drive me save karein"}
+              </Button>
+            </div>
+            <p className="text-sm text-gray-600">
+              Aakhri backup:{" "}
+              <b>
+                {lastBackupAt
+                  ? new Date(lastBackupAt).toLocaleString("hi-IN")
+                  : "abhi tak koi backup nahi (is phone par)"}
+              </b>
+              {isBackupDue(lastBackupAt, new Date()) && (
+                <span className="ml-2 font-medium text-amber-700">
+                  — Backup due hai!
+                </span>
+              )}
+            </p>
+            <p className="text-[11px] text-gray-400">
+              Drive wala button phone ka share sheet kholta hai —
+              wahan Google Drive chunein, backup aapke apne Drive me
+              rahega. Backup 24 ghante se purana ho to app khulne par
+              upar yaad bhi dilaya jata hai.
+            </p>
             <p className="text-[11px] text-gray-400">
               List-wise CSV chahiye to Students page se students ki aur
               Fees page se payments / pending dues ki CSV alag se milti hai.

@@ -17,6 +17,7 @@ import { ApiError } from "@/lib/api";
 // 👨‍👩‍👧 Parent App build (v2.1) — labels parent ke hisaab se (mobile
 // number hi username hai). Aam build par koi farak nahi.
 import { PARENT_APP } from "@/lib/parentApp";
+import { APP_VERSION_NAME } from "@/lib/appVersion";
 import { GraduationCap, KeyRound, Loader2, Lock, User } from "lucide-react";
 
 // =============================================================================
@@ -253,7 +254,7 @@ export default function Login() {
           <p className="text-center text-xs text-slate-400 mt-6">
             School Guardian Suite — har school ka apna login
           </p>
-          <p className="text-center text-[11px] text-slate-400 mt-1">Version 2.2</p>
+          <p className="text-center text-[11px] text-slate-400 mt-1">Version {APP_VERSION_NAME}</p>
         </CardContent>
       </Card>
 

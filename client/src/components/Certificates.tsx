@@ -35,16 +35,26 @@ export type CertificateType =
   | "bonafide"
   | "character"
   | "migration"
-  | "birth";
+  | "birth"
+  | "fee"
+  | "provisional"
+  | "sports";
 
 // Har type ka poora title — dialog heading, certificate ki title
 // strip aur print window ka <title> teeno yahi se lete hain.
+// (v3.0: fee/provisional/sports judne se kul 8 templates — Arena
+// wali list poori. Fee certificate ka total caller Fees wale
+// numbers se bhar kar deta hai — component khud koi rakam andaze
+// se nahi banata.)
 export const CERT_TITLES: Record<CertificateType, string> = {
   tc: "Transfer Certificate",
   bonafide: "Bonafide Certificate",
   character: "Character Certificate",
   migration: "Migration Certificate",
   birth: "Birth Verification Certificate",
+  fee: "Tuition & School Fee Certificate",
+  provisional: "Provisional Passing Certificate",
+  sports: "Sports & Co-Curricular Merit Certificate",
 };
 
 export interface CertificateStudent {
@@ -56,6 +66,11 @@ export interface CertificateStudent {
   admissionNo: string;
   dob?: string | null;
   contact?: string | null;
+  // Fee certificate (80C) ke liye kul jama fee — caller (Students /
+  // StudentProfile / Certificates page) payments jod kar deta hai.
+  // Na mile to null: certificate par "—" chhapta hai, nakli rakam
+  // kabhi nahi.
+  feePaidTotal?: number | null;
 }
 
 export type CertificateSchool = IdCardSchool;
@@ -131,6 +146,14 @@ export function CertificateDialog({
   // Birth Verification ka editable field (v2.0) — janm sthan schema
   // me hai hi nahi, isliye sirf yahi haath se bhara jata hai (optional).
   const [birthPlace, setBirthPlace] = useState<string>("");
+  // Fee Certificate (v3.0) ka editable field — kis session ki fee.
+  const [feeSession, setFeeSession] = useState<string>("");
+  // Provisional Passing (v3.0) ka editable field — parinaam ki line.
+  const [provisionalResult, setProvisionalResult] = useState<string>(
+    "Passed — promoted to the next higher class.",
+  );
+  // Sports Merit (v3.0) ka editable field — uplabdhi ki line.
+  const [sportsAchievement, setSportsAchievement] = useState<string>("");
   const certRef = useRef<HTMLDivElement>(null);
 
   // Dialog khulte hi type + defaults taaze — purane student ke bhare
@@ -149,7 +172,10 @@ export function CertificateDialog({
     );
     setMigrationTo("");
     setBirthPlace("");
-  }, [open, initialType, student]);
+    setFeeSession(school?.session ?? "");
+    setProvisionalResult("Passed — promoted to the next higher class.");
+    setSportsAchievement("");
+  }, [open, initialType, student, school]);
 
   if (!student || !school) {
     return (
@@ -254,6 +280,33 @@ export function CertificateDialog({
           >
             Birth Verification
           </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={type === "fee" ? "default" : "outline"}
+            className={type === "fee" ? "bg-blue-600 hover:bg-blue-700" : ""}
+            onClick={() => setType("fee")}
+          >
+            Fee (80C)
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={type === "provisional" ? "default" : "outline"}
+            className={type === "provisional" ? "bg-blue-600 hover:bg-blue-700" : ""}
+            onClick={() => setType("provisional")}
+          >
+            Provisional Passing
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={type === "sports" ? "default" : "outline"}
+            className={type === "sports" ? "bg-blue-600 hover:bg-blue-700" : ""}
+            onClick={() => setType("sports")}
+          >
+            Sports Merit
+          </Button>
         </div>
 
         {/* Print se pehle ke editable fields — ye bhi print nahi hote */}
@@ -317,6 +370,41 @@ export function CertificateDialog({
                 value={migrationTo}
                 onChange={(e) => setMigrationTo(e.target.value)}
                 placeholder="e.g. CBSE, New Delhi / MP Board, Bhopal"
+                className="w-full"
+              />
+            </div>
+          </div>
+        ) : type === "fee" ? (
+          <div className="grid grid-cols-1 min-w-0 gap-3 no-print">
+            <div className="space-y-1 min-w-0">
+              <Label>Session (kis saal ki fee ka certificate hai)</Label>
+              <Input
+                value={feeSession}
+                onChange={(e) => setFeeSession(e.target.value)}
+                placeholder="e.g. 2026-27"
+                className="w-full"
+              />
+            </div>
+          </div>
+        ) : type === "provisional" ? (
+          <div className="grid grid-cols-1 min-w-0 gap-3 no-print">
+            <div className="space-y-1 min-w-0">
+              <Label>Result (parinaam ki line)</Label>
+              <Input
+                value={provisionalResult}
+                onChange={(e) => setProvisionalResult(e.target.value)}
+                className="w-full"
+              />
+            </div>
+          </div>
+        ) : type === "sports" ? (
+          <div className="grid grid-cols-1 min-w-0 gap-3 no-print">
+            <div className="space-y-1 min-w-0">
+              <Label>Achievement (uplabdhi — khel/competition, sthan)</Label>
+              <Input
+                value={sportsAchievement}
+                onChange={(e) => setSportsAchievement(e.target.value)}
+                placeholder="e.g. 1st Position — Inter-House Cricket Tournament"
                 className="w-full"
               />
             </div>
@@ -531,6 +619,152 @@ export function CertificateDialog({
                     </tr>
                   </tbody>
                 </table>
+              </>
+            ) : type === "fee" ? (
+              <>
+                <p className="cert-body">
+                  This is to certify that <b>{student.name}</b>, whose
+                  father&apos;s name is <b>{student.fatherName}</b>
+                  {student.motherName ? (
+                    <> and mother&apos;s name is <b>{student.motherName}</b></>
+                  ) : null}
+                  , is a bona fide student of this school, studying in{" "}
+                  <b>Class {student.class} - {student.section}</b>
+                  {feeSession.trim() || school.session ? (
+                    <>
+                      {" "}
+                      during the academic session{" "}
+                      <b>{feeSession.trim() || school.session}</b>
+                    </>
+                  ) : null}
+                  . The tuition and school fees paid by the parent for
+                  this student, as per the school records, are as under.
+                  This certificate is issued on the request of the
+                  parent for the purpose of claiming deduction under{" "}
+                  <b>Section 80C of the Income Tax Act, 1961</b>{" "}
+                  (tuition fees).
+                </p>
+                <table className="cert-fields">
+                  <tbody>
+                    <tr>
+                      <td className="k">Admission No.</td>
+                      <td>{student.admissionNo}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Date of Birth</td>
+                      <td>{student.dob ? formatDobText(student.dob) : "—"}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Class</td>
+                      <td>
+                        {student.class} - {student.section}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="k">Session</td>
+                      <td>{feeSession.trim() || school.session || "—"}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Total Fee Paid</td>
+                      <td>
+                        {student.feePaidTotal != null
+                          ? `₹${student.feePaidTotal.toLocaleString("en-IN")}`
+                          : "—"}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                {student.feePaidTotal == null ? (
+                  <p className="cert-body" style={{ marginTop: 12 }}>
+                    Note: Fee payment details could not be loaded —
+                    please verify the total from the Fees records before
+                    issuing this certificate.
+                  </p>
+                ) : null}
+              </>
+            ) : type === "provisional" ? (
+              <>
+                <p className="cert-body">
+                  This is to certify that <b>{student.name}</b>, whose
+                  father&apos;s name is <b>{student.fatherName}</b>
+                  {student.motherName ? (
+                    <> and mother&apos;s name is <b>{student.motherName}</b></>
+                  ) : null}
+                  , was a bona fide student of this school and studied
+                  in <b>Class {student.class} - {student.section}</b>
+                  {school.session ? (
+                    <> during the academic session <b>{school.session}</b></>
+                  ) : null}{" "}
+                  and appeared in the annual examination of the school.
+                </p>
+                <p className="cert-body" style={{ marginTop: 12 }}>
+                  Result:{" "}
+                  <b>
+                    {provisionalResult.trim() ||
+                      "Passed — promoted to the next higher class."}
+                  </b>{" "}
+                  This provisional certificate is issued on the request
+                  of the student/parent, pending the issue of the final
+                  marksheet / transfer certificate.
+                </p>
+                <table className="cert-fields">
+                  <tbody>
+                    <tr>
+                      <td className="k">Admission No.</td>
+                      <td>{student.admissionNo}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Date of Birth</td>
+                      <td>{student.dob ? formatDobText(student.dob) : "—"}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Class</td>
+                      <td>
+                        {student.class} - {student.section}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </>
+            ) : type === "sports" ? (
+              <>
+                <p className="cert-body">
+                  This is to certify that <b>{student.name}</b>, whose
+                  father&apos;s name is <b>{student.fatherName}</b>
+                  {student.motherName ? (
+                    <> and mother&apos;s name is <b>{student.motherName}</b></>
+                  ) : null}
+                  , is a bona fide student of this school, studying in{" "}
+                  <b>Class {student.class} - {student.section}</b>
+                  {school.session ? (
+                    <> during the academic session <b>{school.session}</b></>
+                  ) : null}
+                  , and has brought honour to the school through
+                  outstanding performance in sports / co-curricular
+                  activities.
+                </p>
+                <table className="cert-fields">
+                  <tbody>
+                    <tr>
+                      <td className="k">Admission No.</td>
+                      <td>{student.admissionNo}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Class</td>
+                      <td>
+                        {student.class} - {student.section}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="k">Achievement</td>
+                      <td>{sportsAchievement.trim() || "—"}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p className="cert-body" style={{ marginTop: 12 }}>
+                  The school congratulates the student on this
+                  achievement and wishes them continued success.
+                </p>
               </>
             ) : (
               <>

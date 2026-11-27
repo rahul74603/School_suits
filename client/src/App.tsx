@@ -18,6 +18,17 @@ import { PARENT_APP } from "./lib/parentApp";
 // 👑 Master App build flag (v2.2) — VITE_MASTER_APP=1 wale build me
 // Gate sirf Super Admin ka hissa deta hai (neeche MasterShell dekho).
 import { MASTER_APP } from "./lib/masterApp";
+// 🔢 Is build ka version (v3.0) — ek hi jagah (lib/appVersion);
+// neeche teeno shells ke version-text yahi se aate hain.
+import { APP_VERSION_NAME } from "./lib/appVersion";
+// 🔄 Update check (v3.0) — har shell me mount; naya version
+// released ho to sandesh deta hai.
+import UpdateCheck from "@/components/UpdateCheck";
+// 📲 Master App: App Update publish card (v3.0).
+import AppUpdateCard from "@/components/AppUpdateCard";
+// 💾 Master App: Backup card (v3.0) + School App ka backup banner.
+import BackupCard from "@/components/BackupCard";
+import BackupBanner from "@/components/BackupBanner";
 import Login from "@/pages/Login";
 // 👨‍👩‍👧 Parent App ki APNI login screen (v2.2) — School ID (Code) +
 // Mobile + Password wali seedhi screen; school wali Login se alag.
@@ -40,6 +51,16 @@ import Attendance from "@/pages/Attendance";
 // 📢 Notices (v1.6): school ki suchnayein — server API Phase 2 se thi,
 // screen ab bani (list sab roles ko, banana principal/teacher ko)
 import Notices from "@/pages/Notices";
+
+// 📚 Homework (v3.0): teacher/principal homework dete hain, parent
+// apne app me wahi dekhta hai.
+import Homework from "@/pages/Homework";
+// 🌴 Leaves (v3.0): students/staff ki chutti — record + principal
+// ka faisla (approve/reject).
+import Leaves from "@/pages/Leaves";
+// 📜 Certificates page (v3.0): baccha chuno → 8 certificates —
+// pehle ye sirf Student Profile ke andar chhupe the.
+import CertificatesPage from "@/pages/CertificatesPage";
 
 // 🏠 Parent Home (v2.0): parent login ke baad ki pehli screen —
 // bacche ki hajri/fees/notices/results/timetable ek hi jagah
@@ -84,6 +105,7 @@ import {
   BookOpen,         // 🗓️ Timetable (v1.7)
   LayoutGrid,       // 📊 Broadsheet (v1.7)
   Megaphone,        // 📢 Notices (v1.6)
+  CalendarOff,      // 🌴 Leaves (v3.0)
   Award,
   Calculator,
   IndianRupee,      // 🟢 NEW ICON
@@ -118,6 +140,8 @@ function Sidebar({
     { href: "/attendance", label: "Attendance", icon: CalendarCheck },
     { href: "/timetable", label: "Timetable", icon: BookOpen },
     { href: "/notices", label: "Notices", icon: Megaphone },
+    { href: "/homework", label: "Homework", icon: BookOpen },
+    { href: "/leaves", label: "Leaves (Chutti)", icon: CalendarOff },
     { href: "/library", label: "Library", icon: BookOpen },
     { href: "/admissions", label: "Admissions", icon: UserPlus },
     { href: "/student-profile", label: "Student Profile", icon: FileText },
@@ -127,6 +151,7 @@ function Sidebar({
     { href: "/exams", label: "Examinations", icon: GraduationCap },
     { href: "/exam-results", label: "Marks Entry", icon: Calculator },
     { href: "/report-cards", label: "Report Cards", icon: Award },
+    { href: "/certificates", label: "Certificates", icon: Award },
     { href: "/broadsheet", label: "Broadsheet", icon: LayoutGrid },
     
     { href: "/staff", label: "Staff", icon: Briefcase },
@@ -179,7 +204,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 2.2</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version {APP_VERSION_NAME}</div>
     </div>
   );
 }
@@ -257,6 +282,10 @@ function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
 function Router() {
   // 🏫 Schools ka route bhi sirf super_admin ke liye register hota hai —
   // dusra role /schools khole to NotFound milega (server bhi 403 dega).
+  // v3.0: School App build me super_admin Gate par hi ruk jata hai
+  // (SuperAdminGateScreen), isliye ye route yahan asal me Master/
+  // web ke purane bartav ke liye bacha hai — SA is build me Router
+  // tak aata hi nahi.
   const { user } = useAuth();
   const [location] = useLocation();
 
@@ -284,6 +313,10 @@ function Router() {
         <TopBar onMenuClick={() => setSidebarOpen(true)} />
 
         <main className="flex-1 min-w-0 w-full overflow-y-auto overflow-x-clip p-2">
+          {/* 🔄💾 v3.0: update check (har shell me) + principal ke
+              liye backup-due banner (24 ghante se backup na hua ho). */}
+          <UpdateCheck />
+          <BackupBanner />
           <Switch>
             {user?.role === "super_admin" && (
               <Route path="/schools" component={Schools} />
@@ -302,6 +335,8 @@ function Router() {
             <Route path="/attendance" component={Attendance} />
             <Route path="/timetable" component={Timetable} />
             <Route path="/notices" component={Notices} />
+            <Route path="/homework" component={Homework} />
+            <Route path="/leaves" component={Leaves} />
             <Route path="/library" component={Library} />
             <Route path="/admissions" component={Admissions} />
             <Route path="/student-profile" component={StudentProfile} />
@@ -311,6 +346,7 @@ function Router() {
             <Route path="/exams" component={Exams} />
             <Route path="/exam-results" component={ExamResults} />
             <Route path="/report-cards" component={ReportCards} />
+            <Route path="/certificates" component={CertificatesPage} />
             <Route path="/broadsheet" component={Broadsheet} />
             
             <Route path="/staff" component={Staff} />
@@ -418,6 +454,7 @@ function ParentShell() {
       </div>
 
       <main className="mx-auto w-full min-w-0 max-w-3xl flex-1 overflow-x-clip p-2">
+        <UpdateCheck />
         <Switch>
           <Route path="/report-cards" component={ReportCards} />
           <Route path="/" component={ParentHome} />
@@ -426,7 +463,7 @@ function ParentShell() {
       </main>
 
       <div className="pb-3 text-center text-[11px] text-slate-400">
-        Version 2.2
+        Version {APP_VERSION_NAME}
       </div>
     </div>
   );
@@ -518,8 +555,12 @@ function MasterShell() {
       </div>
 
       <main className="w-full min-w-0 flex-1 overflow-x-clip">
-        <div className="p-4 sm:p-6 pb-0 max-w-[1600px] mx-auto w-full min-w-0">
+        <UpdateCheck />
+        <div className="p-4 sm:p-6 pb-0 max-w-[1600px] mx-auto w-full min-w-0 space-y-6">
           <DemoSchoolCard />
+          {/* 📲💾 v3.0: update publish + backup (apni testing ke liye) */}
+          <AppUpdateCard />
+          <BackupCard />
         </div>
         <Switch>
           <Route path="/" component={Schools} />
@@ -528,7 +569,7 @@ function MasterShell() {
       </main>
 
       <div className="pb-3 text-center text-[11px] text-slate-400">
-        Version 2.2
+        Version {APP_VERSION_NAME}
       </div>
     </div>
   );
@@ -559,6 +600,42 @@ function MasterOnlyScreen() {
           iske liye nahi hai — kripya apna wala app kholein (school ke
           kaam ke liye <b>School Guardian Suite</b>, bacche ki jaankari
           ke liye <b>Guardian Parent</b>).
+        </p>
+        <Button
+          className="w-full min-h-[44px] gap-2"
+          variant="outline"
+          onClick={() => {
+            void logout();
+          }}
+        >
+          <LogOut className="h-4 w-4" /> Logout
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// 🚫 School App build me Super Admin (v3.0) — Master App hai to
+// School App me Super Admin ki jagah nahi (user ka design): SA
+// login kare to ye vinamr screen — "Aap Master hain, Guardian
+// Master App use karein" + Logout. Isi wajah se Router ka
+// /schools route is build me SA tak pahunchta hi nahi (Gate hi
+// rok deta hai). Server ke roles bilkul pehle jaise — Master App
+// super_admin APIs hi istemal karta hai.
+function SuperAdminGateScreen() {
+  const { logout } = useAuth();
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-xl space-y-4">
+        <div className="text-4xl">👑</div>
+        <h1 className="text-xl font-bold text-slate-800">
+          Aap Master hain — kripya Guardian Master App use karein
+        </h1>
+        <p className="text-sm text-gray-600">
+          Ye <b>School Guardian Suite</b> (School App) ek school ke
+          roz ke kaam ke liye hai. Saare schools ka control — school
+          banana, approve/block, accounts aur app updates — sirf{" "}
+          <b>Guardian Master</b> app me hai, wahi aapka app hai.
         </p>
         <Button
           className="w-full min-h-[44px] gap-2"
@@ -620,6 +697,14 @@ function Gate() {
       return <MasterOnlyScreen />;
     }
     return <MasterShell />;
+  }
+
+  // 👑 School App build (v3.0): Super Admin yahan nahi — uska
+  // control panel Master App hai. SA ko gate screen milegi aur
+  // Router (jisme /schools route hai) us tak pahunchega hi nahi.
+  // Baaki roles bilkul pehle jaise.
+  if (user.role === "super_admin") {
+    return <SuperAdminGateScreen />;
   }
 
   return <Router />;

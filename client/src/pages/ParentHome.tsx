@@ -2,8 +2,11 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 import {
@@ -11,6 +14,7 @@ import {
   Banknote,
   BookOpen,
   CalendarCheck,
+  CalendarOff,
   Home,
   Megaphone,
   RefreshCw,
@@ -27,9 +31,12 @@ import {
 //    bacche ka hai. Notices school-level hain (sab baccho ke liye ek).
 //  - Fees ka hisaab server par getStudentStatus se aata hai — Fees
 //    page wala hi hisaab, yahan koi alag jod-ghatav nahi hota.
-//  - Homework: main me abhi module hai hi nahi — neeche sirf ek
-//    saaf placeholder card hai; homework port aate hi ye card asal
-//    list dikhayega (koi nakli data nahi).
+//  - Homework (v3.0): overview me bacche ki class/section ka asal
+//    homework aata hai (server filter karke deta hai) — placeholder
+//    hata, asal list lagi.
+//  - Leave (v3.0): parent yahi se chutti lagata hai (sirf apne
+//    linked bacche ke liye — server unlinked ko 404 deta hai) aur
+//    apni leaves ka status (Pending/Approved/Rejected) dekhta hai.
 //  - v1.9 responsive niyam: sab w-full/min-w-0, koi fixed width
 //    nahi, page kabhi side me nahi bhagta.
 
@@ -98,6 +105,46 @@ interface ParentOverviewChild {
     teacherId: number | null;
     teacherName: string | null;
   }>;
+  homework: Array<{
+    id: number;
+    subject: string;
+    title: string;
+    description: string | null;
+    dueDate: string;
+    overdue: boolean;
+  }>;
+}
+
+interface ParentLeaveRow {
+  id: number;
+  studentId: number | null;
+  fromDate: string;
+  toDate: string;
+  reason: string;
+  status: string;
+}
+
+function leaveStatusBadge(status: string) {
+  switch (status) {
+    case "approved":
+      return (
+        <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+          Approved ✅
+        </Badge>
+      );
+    case "rejected":
+      return (
+        <Badge className="bg-red-100 text-red-800 hover:bg-red-100">
+          Rejected ❌
+        </Badge>
+      );
+    default:
+      return (
+        <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+          Pending ⏳
+        </Badge>
+      );
+  }
 }
 
 interface ParentOverview {
@@ -153,6 +200,36 @@ export default function ParentHome() {
   const [loadedOnce, setLoadedOnce] = useState(false);
   const [childIndex, setChildIndex] = useState(0);
 
+  // 🌴 Leave (v3.0): apni lagayi leaves + form. List server se
+  // sirf apne linked baccho ki aati hai.
+  const [leaves, setLeaves] = useState<ParentLeaveRow[]>([]);
+  const [leaveForm, setLeaveForm] = useState({
+    fromDate: "",
+    toDate: "",
+    reason: "",
+  });
+  const [leaveSaving, setLeaveSaving] = useState(false);
+
+  const loadLeaves = async () => {
+    try {
+      const data = await apiGet<ParentLeaveRow[]>("/api/leaves");
+      setLeaves(data ?? []);
+    } catch {
+      setLeaves([]);
+    }
+  };
+
+  useEffect(() => {
+    void loadLeaves();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Baccha badle to form saaf — ek bacche ki chutti dusre ke naam
+  // galti se na lag jaye.
+  useEffect(() => {
+    setLeaveForm({ fromDate: "", toDate: "", reason: "" });
+  }, [childIndex]);
+
   const loadOverview = async () => {
     setLoading(true);
     try {
@@ -187,6 +264,48 @@ export default function ParentHome() {
     child.fees.pendingDuesTotal === 0 &&
     child.fees.admissionBalance === 0 &&
     child.fees.dueMonths.length === 0;
+
+  const childLeaves =
+    child != null
+      ? leaves.filter((leave) => leave.studentId === child.student.id)
+      : [];
+
+  const submitLeave = async () => {
+    if (!child) return;
+    if (!leaveForm.fromDate || !leaveForm.toDate || !leaveForm.reason.trim()) {
+      toast({
+        title: "Adhuri jaankari",
+        description: "Kab se, kab tak aur karan — teeno lazmi hain.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setLeaveSaving(true);
+    try {
+      await apiPost("/api/leaves", {
+        kind: "student",
+        studentId: child.student.id,
+        fromDate: leaveForm.fromDate,
+        toDate: leaveForm.toDate,
+        reason: leaveForm.reason.trim(),
+      });
+      toast({
+        title: "✅ Chutti lag gayi",
+        description: "Principal ke faisle ke baad status yahi dikhega.",
+      });
+      setLeaveForm({ fromDate: "", toDate: "", reason: "" });
+      void loadLeaves();
+    } catch (error) {
+      toast({
+        title: "Chutti nahi lag payi",
+        description:
+          error instanceof Error ? error.message : "Dobara koshish karein",
+        variant: "destructive",
+      });
+    } finally {
+      setLeaveSaving(false);
+    }
+  };
 
   return (
     <div className="mx-auto w-full min-w-0 max-w-3xl space-y-4">
@@ -597,23 +716,141 @@ export default function ParentHome() {
             </CardContent>
           </Card>
 
-          {/* 📚 Homework — PLACEHOLDER (jaankari ke liye):
-              Main me homework module abhi hai hi nahi (Arena port #2
-              baaki hai). Ye card sirf jagah aur aasha set karta hai —
-              koi nakli homework data nahi dikhaya jata. Port aate hi
-              yahi card asal homework list se badal jayega. */}
-          <Card className="w-full min-w-0 border-dashed bg-slate-50">
-            <CardContent className="flex flex-wrap items-center gap-3 py-4">
-              <BookOpen className="h-5 w-5 text-gray-400" />
-              <div className="min-w-0">
-                <div className="font-medium text-slate-600">
-                  Homework — Jald aa raha hai
-                </div>
+          {/* 📚 Homework (v3.0) — asal list: server overview me
+              bacche ki class/section ka homework filter karke
+              deta hai; dusri class/school ka homework yahan aa hi
+              nahi sakta. */}
+          <Card className="w-full min-w-0">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <BookOpen className="h-5 w-5 text-blue-600" /> Homework
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {child.homework.length === 0 ? (
                 <p className="text-sm text-gray-500">
-                  Ye suvidha agle update me aayegi. Abhi homework ki
-                  jaankari class teacher se milegi.
+                  Abhi koi homework nahi hai. 😊
                 </p>
+              ) : (
+                <div className="space-y-2">
+                  {child.homework.map((hw) => (
+                    <div
+                      key={hw.id}
+                      className="rounded-lg bg-slate-50 px-3 py-2"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">
+                          {hw.subject}
+                        </Badge>
+                        <span className="min-w-0 font-medium text-slate-700">
+                          {hw.title}
+                        </span>
+                        {hw.overdue && (
+                          <Badge className="bg-red-100 text-red-800 hover:bg-red-100">
+                            Overdue
+                          </Badge>
+                        )}
+                      </div>
+                      {hw.description && (
+                        <p className="mt-1 text-sm text-gray-500">
+                          {hw.description}
+                        </p>
+                      )}
+                      <p className="mt-1 text-xs text-gray-400">
+                        Kab tak: {dateText(hw.dueDate)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* 🌴 Leave (Chutti) — parent yahi se lagata hai aur
+              apni leaves ka status dekhta hai. */}
+          <Card className="w-full min-w-0">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <CalendarOff className="h-5 w-5 text-blue-600" /> Leave
+                (Chutti)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label>Kab se</Label>
+                    <Input
+                      type="date"
+                      value={leaveForm.fromDate}
+                      onChange={(e) =>
+                        setLeaveForm((prev) => ({
+                          ...prev,
+                          fromDate: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Kab tak</Label>
+                    <Input
+                      type="date"
+                      value={leaveForm.toDate}
+                      onChange={(e) =>
+                        setLeaveForm((prev) => ({
+                          ...prev,
+                          toDate: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label>Karan</Label>
+                  <Textarea
+                    value={leaveForm.reason}
+                    onChange={(e) =>
+                      setLeaveForm((prev) => ({
+                        ...prev,
+                        reason: e.target.value,
+                      }))
+                    }
+                    rows={2}
+                    placeholder="Bukhaar hai / ghar me shaadi hai…"
+                  />
+                </div>
+                <Button
+                  onClick={submitLeave}
+                  disabled={leaveSaving}
+                  className="min-h-[44px] w-full sm:w-auto"
+                >
+                  {leaveSaving ? "Lag raha hai…" : "Leave (Chutti) lagao"}
+                </Button>
               </div>
+
+              {childLeaves.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-slate-700">
+                    Aapki leaves
+                  </p>
+                  {childLeaves.map((leave) => (
+                    <div
+                      key={leave.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2"
+                    >
+                      <div className="min-w-0 text-sm">
+                        <span className="font-medium text-slate-700">
+                          {dateText(leave.fromDate)} → {dateText(leave.toDate)}
+                        </span>
+                        <span className="block truncate text-gray-500">
+                          {leave.reason}
+                        </span>
+                      </div>
+                      {leaveStatusBadge(leave.status)}
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </>

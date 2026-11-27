@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter, School, ArrowUpCircle, Download, CreditCard, Award } from "lucide-react";
+import { Search, Bus, FilterX, RefreshCw, GraduationCap, Filter, School, ArrowUpCircle, Download, Upload, CreditCard, Award } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { downloadCsv, todayStamp } from "@/lib/exportCsv";
@@ -346,6 +346,156 @@ export default function Students() {
     });
   };
 
+  // 📥 CSV se Import (v3.0) — Excel/Google Sheets se bani CSV file
+  // se ek saath kai students. Parser yahi client par hai (koi nayi
+  // library nahi): quotes ke andar wala comma alag nahi hota, ""
+  // wala bachav bhi sambhala hai. Pehle preview (kitni sahi rows,
+  // kahan galti), phir POST /api/students/bulk — server har row
+  // alag jaanchta hai, kharab row skip hoti hai aur har student ke
+  // liye parent login bhi khud banta hai (v2.1 wala niyam).
+  // Zaruri columns: name, class, fatherName, contact.
+  // Baaki: section (khaali = "A"), rollNo, admissionNo (khaali =
+  // server khud banayega), motherName, dob, address, category.
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importRows, setImportRows] = useState<any[]>([]);
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const [importFileName, setImportFileName] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{
+    created: number;
+    skipped: number;
+    errors: Array<{ row: number; message: string }>;
+  } | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
+  const parseCsvText = (text: string): string[][] => {
+    const rows: string[][] = [];
+    let row: string[] = [];
+    let field = "";
+    let inQuotes = false;
+    const src = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (src[i + 1] === '"') {
+            field += '"';
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += ch;
+        }
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ",") {
+        row.push(field);
+        field = "";
+      } else if (ch === "\n") {
+        row.push(field);
+        field = "";
+        rows.push(row);
+        row = [];
+      } else {
+        field += ch;
+      }
+    }
+    row.push(field);
+    rows.push(row);
+    return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
+  };
+
+  const handleImportFile = async (file: File) => {
+    setImportResult(null);
+    setImportFileName(file.name);
+    const text = await file.text();
+    const table = parseCsvText(text);
+    if (table.length < 2) {
+      setImportRows([]);
+      setImportErrors(["File me header ke baad koi row nahi mili."]);
+      return;
+    }
+    const headerMap: Record<string, string> = {
+      name: "name",
+      class: "class",
+      section: "section",
+      rollno: "rollNo",
+      roll_no: "rollNo",
+      admissionno: "admissionNo",
+      admission_no: "admissionNo",
+      fathername: "fatherName",
+      father_name: "fatherName",
+      mothername: "motherName",
+      mother_name: "motherName",
+      contact: "contact",
+      mobile: "contact",
+      phone: "contact",
+      dob: "dob",
+      address: "address",
+      category: "category",
+    };
+    const headers = table[0].map(
+      (h) => headerMap[h.trim().toLowerCase().replace(/\s+/g, "")] ?? "",
+    );
+    const parsed: any[] = [];
+    const errors: string[] = [];
+    for (let i = 1; i < table.length; i++) {
+      const cells = table[i];
+      const obj: Record<string, string> = {};
+      headers.forEach((key, idx) => {
+        if (key) obj[key] = (cells[idx] ?? "").trim();
+      });
+      const lineNo = i + 1;
+      if (!obj.name || !obj.class || !obj.fatherName || !obj.contact) {
+        errors.push(
+          `Line ${lineNo}: name, class, fatherName, contact lazmi hain — ye row nahi jayegi.`,
+        );
+        continue;
+      }
+      parsed.push({
+        name: obj.name,
+        class: obj.class,
+        section: obj.section || undefined,
+        rollNo: obj.rollNo || undefined,
+        admissionNo: obj.admissionNo || undefined,
+        fatherName: obj.fatherName,
+        motherName: obj.motherName || undefined,
+        contact: obj.contact,
+        dob: obj.dob || undefined,
+        address: obj.address || undefined,
+        category: obj.category || undefined,
+      });
+    }
+    setImportRows(parsed);
+    setImportErrors(errors);
+  };
+
+  const submitImport = async () => {
+    if (importRows.length === 0) return;
+    setImporting(true);
+    try {
+      const result = await apiPost<{
+        created: number;
+        skipped: number;
+        errors: Array<{ row: number; message: string }>;
+      }>("/api/students/bulk", { students: importRows });
+      setImportResult(result);
+      toast({
+        title: "Import ho gaya",
+        description: `${result.created} student(s) bane, ${result.skipped} skip hue.`,
+      });
+      fetchStudents();
+    } catch (e: any) {
+      toast({
+        title: "Import nahi ho paya",
+        description: e?.message || "Dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+    setImporting(false);
+  };
+
   // Reset Button
   const handleReset = () => {
       setSearch("");
@@ -377,6 +527,23 @@ export default function Students() {
             >
               <Download className="h-4 w-4 mr-2" />
               Export CSV
+            </Button>
+          )}
+          {!isSuperAdmin && (
+            <Button
+              onClick={() => {
+                setImportResult(null);
+                setImportRows([]);
+                setImportErrors([]);
+                setImportFileName("");
+                setIsImportOpen(true);
+              }}
+              variant="outline"
+              size="sm"
+              title="CSV file se ek saath kai students jodein"
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              CSV se Import
             </Button>
           )}
           <Button onClick={fetchStudents} variant="outline" size="sm">
@@ -710,6 +877,100 @@ export default function Students() {
         student={certStudent}
         school={schoolForCards}
       />
+
+      {/* 📥 CSV Import (v3.0) — format + file + preview + natija */}
+      <Dialog open={isImportOpen} onOpenChange={setIsImportOpen}>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>CSV se Students Import</DialogTitle>
+            <DialogDescription>
+              Excel / Google Sheets se "CSV" me save ki hui file
+              chunein. Pehli line header honi chahiye.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="font-medium">Columns (header ke naam):</p>
+              <p className="mt-1 break-words text-gray-600">
+                name, class, section, rollNo, admissionNo, fatherName,
+                contact, dob
+              </p>
+              <p className="mt-1 text-gray-600">
+                <b>Lazmi:</b> name, class, fatherName, contact. Section
+                khaali ho to "A" lag jayega; admissionNo khaali ho to
+                server khud bana dega. Har student ke parent ka login
+                bhi khud ban jayega (mobile = username, password =
+                Admission No.).
+              </p>
+              <p className="mt-1 text-gray-500">
+                Misal: Aarav Kumar, 5, A, 12, , Rakesh Kumar,
+                9876543210, 2015-04-10
+              </p>
+            </div>
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleImportFile(file);
+                e.target.value = "";
+              }}
+            />
+            <Button
+              variant="outline"
+              onClick={() => importFileRef.current?.click()}
+              className="w-full"
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              {importFileName || "CSV file chunein"}
+            </Button>
+            {(importRows.length > 0 || importErrors.length > 0) &&
+              !importResult && (
+                <div className="space-y-1">
+                  <p>
+                    <b>{importRows.length}</b> sahi row(s) taiyaar hain
+                    {importErrors.length > 0 &&
+                      `, ${importErrors.length} row(s) me galti hai:`}
+                  </p>
+                  {importErrors.slice(0, 8).map((msg, idx) => (
+                    <p key={idx} className="text-red-600">
+                      • {msg}
+                    </p>
+                  ))}
+                </div>
+              )}
+            {importResult && (
+              <div className="space-y-1 rounded-lg bg-green-50 p-3">
+                <p>
+                  ✅ <b>{importResult.created}</b> student(s) ban gaye,{" "}
+                  <b>{importResult.skipped}</b> skip hue.
+                </p>
+                {importResult.errors.slice(0, 8).map((err, idx) => (
+                  <p key={idx} className="text-red-600">
+                    • Line {err.row}: {err.message}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsImportOpen(false)}>
+              Band karein
+            </Button>
+            <Button
+              onClick={submitImport}
+              disabled={importing || importRows.length === 0 || !!importResult}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {importing
+                ? "Import ho raha hai…"
+                : `${importRows.length} Students Import karo`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

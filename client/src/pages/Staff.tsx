@@ -50,7 +50,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 
@@ -93,6 +93,60 @@ export default function Staff() {
   // aur jhoota "No staff members found" bhi nahi.
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
+  // Document approve/reject (v3.0) sirf Principal — server par bhi
+  // PATCH .../documents/:docId/status requireRole("principal") hai.
+  const isPrincipal = user?.role === "principal";
+
+  // Document status badge (v3.0).
+  const docStatusBadge = (status: string | null | undefined) => {
+    switch (status) {
+      case "approved":
+        return (
+          <span className="text-xs text-green-700 bg-green-100 px-2 py-1 rounded font-bold">
+            Approved ✅
+          </span>
+        );
+      case "rejected":
+        return (
+          <span className="text-xs text-red-700 bg-red-100 px-2 py-1 rounded font-bold">
+            Rejected ❌
+          </span>
+        );
+      default:
+        return (
+          <span className="text-xs text-amber-700 bg-amber-100 px-2 py-1 rounded font-bold">
+            Pending ⏳
+          </span>
+        );
+    }
+  };
+
+  const setStaffDocStatus = async (
+    docId: number,
+    status: "approved" | "rejected",
+  ) => {
+    if (!selectedStaff?.id) return;
+    try {
+      await apiPatch(
+        `/api/staff/${selectedStaff.id}/documents/${docId}/status`,
+        { status },
+      );
+      toast({
+        title:
+          status === "approved"
+            ? "✅ Document approved"
+            : "Document rejected",
+      });
+      // View dialog ke documents taaza karo.
+      openView(selectedStaff);
+    } catch (e: any) {
+      toast({
+        title: "Status nahi badal paya",
+        description: e?.message || "Dobara koshish karein.",
+        variant: "destructive",
+      });
+    }
+  };
 
   const [staffList, setStaffList] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -283,10 +337,13 @@ export default function Staff() {
     try {
       const docs = await apiGet<any[]>(`/api/staff/${staff.id}/documents`);
       docsJson = JSON.stringify((docs || []).map((d: any) => ({
+        id: d.id,
         type: d.docType,
         fileName: d.fileName,
         filePath: `sgstaffdoc:${d.id}`,
         uploadedAt: d.createdAt,
+        // v3.0: approve/reject status (purane docs par pending).
+        status: d.status ?? "pending",
       })));
     } catch (e) { /* documents na aaye to dialog khali documents ke saath khulega */ }
     setSelectedStaff({ ...staff, documents: docsJson });
@@ -775,7 +832,7 @@ export default function Staff() {
                         <span className="text-sm font-medium">{doc.label}</span>
                         {hasDoc ? (
                           <div className="flex items-center gap-2">
-                            <span className="text-xs text-green-600 bg-green-100 px-2 py-1 rounded">Uploaded</span>
+                            {docStatusBadge(hasDoc.status)}
                             {/* REST (Batch C): file server se blob bankar khulti hai — openStaffDocument dekho. */}
                             <Button 
                               variant="ghost" 
@@ -805,16 +862,37 @@ export default function Staff() {
                     <h5 className="text-sm font-bold mb-2">All Uploaded Files</h5>
                     <div className="space-y-2">
                       {JSON.parse(selectedStaff.documents).map((doc: any, idx: number) => (
-                        <div key={idx} className="flex items-center justify-between bg-white p-2 rounded border text-sm">
-                          <span className="truncate flex-1">{doc.fileName}</span>
+                        <div key={idx} className="flex flex-wrap items-center justify-between gap-2 bg-white p-2 rounded border text-sm">
+                          <span className="truncate flex-1 min-w-0">{doc.fileName}</span>
+                          {docStatusBadge(doc.status)}
                           {/* REST (Batch C): openStaffDocument se khulta hai. */}
-                          <Button 
-                            variant="ghost" 
+                          <Button
+                            variant="ghost"
                             size="sm"
                             onClick={() => openStaffDocument(doc.filePath)}
                           >
                             <Eye className="h-4 w-4" />
                           </Button>
+                          {isPrincipal && doc.id != null && doc.status !== "approved" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-green-700 hover:bg-green-100"
+                              onClick={() => setStaffDocStatus(doc.id, "approved")}
+                            >
+                              Approve
+                            </Button>
+                          )}
+                          {isPrincipal && doc.id != null && doc.status !== "rejected" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-red-700 hover:bg-red-100"
+                              onClick={() => setStaffDocStatus(doc.id, "rejected")}
+                            >
+                              Reject
+                            </Button>
+                          )}
                         </div>
                       ))}
                     </div>

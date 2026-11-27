@@ -259,5 +259,7 @@ export const apiPost = <T = unknown>(path: string, body?: unknown) =>
   apiFetch<T>(path, { method: "POST", body });
 export const apiPut = <T = unknown>(path: string, body?: unknown) =>
   apiFetch<T>(path, { method: "PUT", body });
+export const apiPatch = <T = unknown>(path: string, body?: unknown) =>
+  apiFetch<T>(path, { method: "PATCH", body });
 export const apiDel = <T = unknown>(path: string) =>
   apiFetch<T>(path, { method: "DELETE" });

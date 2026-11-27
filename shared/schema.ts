@@ -341,6 +341,14 @@ export const expenses = pgTable("expenses", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Document approve/reject ki valid values (v2.3, Arena port #8) —
+// ATTENDANCE_STATUSES wala hi pattern: DB me text, code me is enum se
+// enforce. Upload hote hi document 'pending' rehta hai; Principal
+// use 'approved'/'rejected' karta hai (PATCH .../documents/:docId/status).
+export const DOCUMENT_STATUSES = ["pending", "approved", "rejected"] as const;
+export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
+export const documentStatusSchema = z.enum(DOCUMENT_STATUSES);
+
 // §6.14 — Student documents: Phase 2 me sirf metadata. Asli file storage
 // (disk/object store) Phase 3 ka faisla hai; file_path me jo URL/path
 // client dega wahi save hoga.
@@ -356,6 +364,9 @@ export const studentDocuments = pgTable("student_documents", {
   // null rahega — unke liye file download uplabdh nahi hai.
   fileData: text("file_data"),
   mimeType: text("mime_type"),
+  // Approve/reject (v2.3): naya document hamesha 'pending'; purani rows
+  // ko bhi live DB me column ka DEFAULT 'pending' hi milega (v2.3 SQL).
+  status: text("status").default("pending"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -373,6 +384,8 @@ export const staffDocuments = pgTable("staff_documents", {
   filePath: text("file_path"),
   fileData: text("file_data"),
   mimeType: text("mime_type"),
+  // Approve/reject (v2.3) — student documents wala hi niyam.
+  status: text("status").default("pending"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -429,6 +442,61 @@ export const libraryIssues = pgTable("library_issues", {
   issueDate: text("issue_date").notNull(),
   dueDate: text("due_date").notNull(),
   returnedAt: timestamp("returned_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// §6.17 — Homework (v2.3, Arena port #2): teacher/principal ek class
+// ko homework deta hai; wahi homework us class ke baccho ke parents ko
+// Parent App me dikhta hai (parent overview ka homework hissa).
+//  - class_name timetable_entries wali hi parampara (saada text).
+//  - section NULL = poori class ke liye; section bhara ho to sirf usi
+//    section ke baccho ke liye (overview yahi niyam lagata hai).
+//  - due_date baaki dates ki tarah text "YYYY-MM-DD" — overdue ki
+//    jaanch seedhi string tulna se ho jati hai.
+export const homework = pgTable("homework", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  className: text("class_name").notNull(),
+  section: text("section"),
+  subject: text("subject").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  dueDate: text("due_date").notNull(),
+  createdBy: integer("created_by").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Leave (chhutti) ki do jaat — ek hi table/system dono ke liye hai
+// (Arena wala hi model): 'student' ki arzi par student_id bhara hoga,
+// 'staff' ki arzi par staff_id. applicant_user_id = jis login se arzi
+// aayi (parent / khud staff / office) — ownership ki jaanch isi aur
+// parent_students link se hoti hai (routes dekho).
+export const LEAVE_KINDS = ["student", "staff"] as const;
+export type LeaveKind = (typeof LEAVE_KINDS)[number];
+export const leaveKindSchema = z.enum(LEAVE_KINDS);
+
+// Leave ki haalat: arzi 'pending' se shuru; Principal ka faisla
+// 'approved' ya 'rejected' (decided_by me usi ka user id).
+export const LEAVE_STATUSES = ["pending", "approved", "rejected"] as const;
+export type LeaveStatus = (typeof LEAVE_STATUSES)[number];
+export const leaveStatusSchema = z.enum(LEAVE_STATUSES);
+
+// §6.18 — Leave requests (v2.3, Arena port #3): student + staff dono
+// ki chhutti ki arziyan. from/to tareekhein text "YYYY-MM-DD" hain.
+export const leaveRequests = pgTable("leave_requests", {
+  id: serial("id").primaryKey(),
+  schoolId: integer("school_id").references(() => schools.id),
+  kind: text("kind").notNull().default("student"),
+  studentId: integer("student_id").references(() => students.id),
+  staffId: integer("staff_id").references(() => staff.id),
+  applicantUserId: integer("applicant_user_id").references(() => users.id),
+  fromDate: text("from_date").notNull(),
+  toDate: text("to_date").notNull(),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("pending"),
+  decidedBy: integer("decided_by").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -580,6 +648,21 @@ export const insertLibraryIssueSchema = createInsertSchema(libraryIssues).omit({
   createdAt: true,
 });
 
+// Homework + Leave insert schemas (v2.3) — style upar walon jaisa hi;
+// kind/status par enum bandhan bhi yahin hai.
+export const insertHomeworkSchema = createInsertSchema(homework).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertLeaveRequestSchema = createInsertSchema(leaveRequests).omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  kind: leaveKindSchema.default("student"),
+  status: leaveStatusSchema.default("pending"),
+});
+
 // Types
 export type School = typeof schools.$inferSelect;
 export type InsertSchool = z.infer<typeof insertSchoolSchema>;
@@ -646,3 +729,38 @@ export type InsertLibraryBook = z.infer<typeof insertLibraryBookSchema>;
 
 export type LibraryIssue = typeof libraryIssues.$inferSelect;
 export type InsertLibraryIssue = z.infer<typeof insertLibraryIssueSchema>;
+
+export type Homework = typeof homework.$inferSelect;
+export type InsertHomework = z.infer<typeof insertHomeworkSchema>;
+
+export type LeaveRequest = typeof leaveRequests.$inferSelect;
+export type InsertLeaveRequest = z.infer<typeof insertLeaveRequestSchema>;
+
+// ---------------------------------------------------------------------
+// 6.18 App Versions (v3.0) — Master App se teeno apps ke update ki
+// ghoshna. SIRF version ki jaankari (naam/code/APK link/notes) — is
+// table me KISI school ka data kabhi nahi jata; update sab apps ko
+// jata hai, data har school ka alag hi rehta hai.
+// stage: 'testing' = sirf Master ke paas (user pehle khud check
+// karta hai), 'released' = sab ko gaya. School/Parent apps ko row
+// tabhi dikhta hai jab stage = 'released' ho; Master app apni row
+// hamesha dekhta hai.
+// ---------------------------------------------------------------------
+
+export const appVersions = pgTable("app_versions", {
+  app: text("app").primaryKey(), // 'school' | 'parent' | 'master'
+  versionName: text("version_name").notNull(),
+  versionCode: integer("version_code").notNull(),
+  apkUrl: text("apk_url").notNull(),
+  notes: text("notes"),
+  mandatory: integer("mandatory").default(0),
+  stage: text("stage").default("testing"), // 'testing' | 'released'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const APP_VERSION_APPS = ["school", "parent", "master"] as const;
+export const APP_VERSION_STAGES = ["testing", "released"] as const;
+export const appVersionStageSchema = z.enum(APP_VERSION_STAGES);
+
+export type AppVersion = typeof appVersions.$inferSelect;

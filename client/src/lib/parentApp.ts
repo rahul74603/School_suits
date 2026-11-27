@@ -35,7 +35,7 @@ export const PARENT_APP: boolean =
 //    dabane par saaf kehta hai "link abhi set nahi hai" (koi nakli
 //    link kabhi nahi jata).
 // -----------------------------------------------------------------------------
-export const PARENT_APP_DOWNLOAD_URL = "https://github.com/rahul74603/School_suits/releases/download/v2.2/school-guardian-parent-v2.2.apk";
+export const PARENT_APP_DOWNLOAD_URL = "https://github.com/rahul74603/School_suits/releases/download/v3.0/school-guardian-parent-v3.0.apk";
 
 // -----------------------------------------------------------------------------
 // 3) Helpers — mobile saaf karna + WhatsApp invite
