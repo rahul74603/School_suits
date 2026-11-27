@@ -446,6 +446,89 @@ export interface ParentOverview {
   notices: Array<Pick<Notice, "id" | "title" | "body" | "audience" | "createdAt">>;
 }
 
+// -----------------------------------------------------------------------------
+// Admission → Parent account auto-link (v2.1)
+// -----------------------------------------------------------------------------
+// Parent App alag app hai (user ka design): admission ke samay parent ke
+// number par app ka link jata hai, isliye admission bante hi parent ka
+// login bhi taiyaar rehna chahiye. Niyam (POST /api/students se bulaya
+// jata hai, student banne ke turant baad):
+//   - Student ke `contact` ko saaf 10-digit mobile banao (neeche wala
+//     helper; client ke lib/parentApp.ts ke normalizeMobile ki hi
+//     soch — server client code import nahi karta, isliye chhoti si
+//     nakal yahan hai). Number theek na ho to kuch nahi hota (null).
+//   - Us number (username) ka account pehle se ho:
+//       * wahi school ka parent ho -> sirf is bacche ko link kar do,
+//         account (khaaskar password) bilkul NAHI badalta.
+//         (created: false)
+//       * kisi aur school/role ka ho -> haath mat lagao (null) —
+//         username poore system me ek hi hota hai, dusre ka account
+//         kabhi nahi chedna.
+//   - Account na ho -> naya parent account banao: username = mobile,
+//     phone = mobile, naam = student ka fatherName (admission form ka
+//     parent-side naam), mustChangePassword = 0 (pehla login seedha
+//     chale — parent se zabardasti password badalna nahi mangte), aur
+//     shuru ka password = bacche ka Admission No. (uska hash route
+//     `makePasswordHash` se banakar deta hai — hash banana auth.ts ka
+//     kaam hai, storage sirf rakhta hai). Fir bacche ko link kar do.
+// Password kabhi plain text me nahi rakha jata — sirf hash aata hai.
+export interface EnsureParentResult {
+  parentUserId: number;
+  created: boolean;
+}
+
+// Contact -> saaf 10-digit mobile ("" agar theek number na bane).
+// Client ke normalizeMobile (lib/parentApp.ts) ka server-side jodidaar.
+export function normalizeMobileServer(
+  contact: string | null | undefined,
+): string {
+  const digits = String(contact ?? "").replace(/\D/g, "");
+  if (digits.length === 10) return digits;
+  if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) return digits.slice(1);
+  return "";
+}
+
+export async function ensureParentForAdmissionImpl(
+  store: IStorage,
+  schoolId: number,
+  student: Student,
+  makePasswordHash: () => Promise<string>,
+): Promise<EnsureParentResult | null> {
+  const mobile = normalizeMobileServer(student.contact);
+  if (!mobile) return null;
+
+  const existing = await store.getUserByUsername(mobile);
+  if (existing) {
+    if (existing.role === "parent" && existing.schoolId === schoolId) {
+      await store.linkParentStudent({
+        parentUserId: existing.id,
+        studentId: student.id,
+        relation: null,
+      });
+      return { parentUserId: existing.id, created: false };
+    }
+    return null;
+  }
+
+  const created = await store.createUser({
+    schoolId,
+    username: mobile,
+    password: await makePasswordHash(),
+    role: "parent",
+    name: student.fatherName,
+    phone: mobile,
+    mustChangePassword: 0,
+    isActive: 1,
+  });
+  await store.linkParentStudent({
+    parentUserId: created.id,
+    studentId: student.id,
+    relation: null,
+  });
+  return { parentUserId: created.id, created: true };
+}
+
 export async function buildParentOverviewImpl(
   store: IStorage,
   schoolId: number,
@@ -1089,6 +1172,13 @@ export interface IStorage {
   getSchoolExport(schoolId: number): Promise<SchoolExportData>;
   // Parent overview (v2.0) — buildParentOverviewImpl hi asal kaam hai.
   getParentOverview(schoolId: number, parentUserId: number): Promise<ParentOverview>;
+  // Admission par parent account auto-link (v2.1) —
+  // ensureParentForAdmissionImpl hi asal kaam hai.
+  ensureParentForAdmission(
+    schoolId: number,
+    student: Student,
+    makePasswordHash: () => Promise<string>,
+  ): Promise<EnsureParentResult | null>;
 } // <-- interface yahan band hona chahiye tha
 
 // 2. Database Implementation
@@ -1926,6 +2016,14 @@ export class DatabaseStorage implements IStorage {
 
   async getParentOverview(schoolId: number, parentUserId: number): Promise<ParentOverview> {
     return buildParentOverviewImpl(this, schoolId, parentUserId);
+  }
+
+  async ensureParentForAdmission(
+    schoolId: number,
+    student: Student,
+    makePasswordHash: () => Promise<string>,
+  ): Promise<EnsureParentResult | null> {
+    return ensureParentForAdmissionImpl(this, schoolId, student, makePasswordHash);
   }
 }
 
@@ -2890,6 +2988,14 @@ export class MockStorage implements IStorage {
 
   async getParentOverview(schoolId: number, parentUserId: number): Promise<ParentOverview> {
     return buildParentOverviewImpl(this, schoolId, parentUserId);
+  }
+
+  async ensureParentForAdmission(
+    schoolId: number,
+    student: Student,
+    makePasswordHash: () => Promise<string>,
+  ): Promise<EnsureParentResult | null> {
+    return ensureParentForAdmissionImpl(this, schoolId, student, makePasswordHash);
   }
 }
 

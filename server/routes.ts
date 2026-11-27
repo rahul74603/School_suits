@@ -1164,6 +1164,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...result.data,
         schoolId,
       });
+      // 👨‍👩‍👧 Parent App auto-link (v2.1): admission bante hi parent ka
+      // login taiyaar kar do — contact number ka parent account ho to
+      // is bacche ko link, na ho to naya parent account (username =
+      // mobile, shuru ka password = bacche ka Admission No.,
+      // mustChangePassword = 0 — pehla login seedha chale). Poora
+      // niyam storage.ensureParentForAdmission me hai. Ye kadam fail
+      // ho jaye to bhi admission safal hi rahega — parent account
+      // baad me Users screen se haath se bhi ban sakta hai.
+      try {
+        await storage.ensureParentForAdmission(schoolId, student, () =>
+          hashPassword(student.admissionNo),
+        );
+      } catch (err) {
+        console.error("Parent auto-link failed (admission OK):", err);
+      }
       res.json(student);
     },
   );

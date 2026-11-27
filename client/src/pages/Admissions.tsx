@@ -14,6 +14,9 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+// 📲 Parent App invite (v2.1) — admission ke baad parent ko WhatsApp
+// par app ka link bhejne wala button (shared component).
+import ParentAppInviteButton from "@/components/ParentAppInviteButton";
 import { Link } from "wouter";
 import {
   UserPlus,
@@ -34,9 +37,17 @@ export default function Admissions() {
   // (sirf console), lekin form bharkar Submit karne par SA ko lal
   // toast milta tha. Isliye SA par form hi nahi dikhate — Settings
   // wala no-school card dikhega.
-  const { user } = useAuth();
+  const { user, school } = useAuth();
   const isSuperAdmin = user?.role === "super_admin";
   const [loading, setLoading] = useState(false);
+  // 📲 Aakhri safal admission (v2.1) — form reset ho jane ke baad bhi
+  // parent ko WhatsApp par Parent App ka link bhejne ke liye card
+  // dikhaya jata hai; isiliye bacche ki jaankari alag se rakhi hai.
+  const [lastAdmission, setLastAdmission] = useState<{
+    name: string;
+    contact: string;
+    admissionNo: string;
+  } | null>(null);
   const [transportRoutes, setTransportRoutes] = useState<any[]>([]);
   // Fee structures (GET /api/fee-structures) — chuni hui class ki
   // admission fee ka default nikalne ke liye.
@@ -239,6 +250,19 @@ export default function Admissions() {
             ? parseInt(formData.transportId)
             : null,
       });
+
+      // 📲 Parent invite ke liye bacche ki jaankari sambhal lo (form
+      // neeche reset ho jayega). Server isi samay parent ka account
+      // bhi auto bana/link kar deta hai (POST /api/students, v2.1) —
+      // parent ka login: mobile number + password = Admission No.
+      if (createdStudent) {
+        setLastAdmission({
+          name: createdStudent.name ?? formData.studentName,
+          contact: createdStudent.contact ?? formData.contactNumber,
+          admissionNo:
+            createdStudent.admissionNo ?? formData.admissionNumber,
+        });
+      }
 
       // Admission Fee ki entry (sirf jab jama rakam > 0): Fees page
       // wali hi payment shape — pehle next receipt number, fir ek
@@ -831,6 +855,44 @@ export default function Admissions() {
           <Save className="mr-2 h-5 w-5" /> Submit
         </Button>
       </div>
+
+      {/* 📲 Admission ho gaya — parent ko Parent App ka link bhejo
+          (v2.1). Parent ka account server par auto ban/link ho chuka
+          hai; ye button bas WhatsApp sandesh kholta hai. */}
+      {lastAdmission && (
+        <Card className="border-green-300 bg-green-50">
+          <CardContent className="pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="font-bold text-green-900">
+                  ✅ Admission ho gaya — {lastAdmission.name} (
+                  {lastAdmission.admissionNo})
+                </div>
+                <p className="text-sm text-green-800">
+                  Parent ka login taiyaar hai (mobile number + password =
+                  Admission No.). Ab unhe Parent App ka link bhej dein:
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <ParentAppInviteButton
+                  contact={lastAdmission.contact}
+                  childName={lastAdmission.name}
+                  admissionNo={lastAdmission.admissionNo}
+                  schoolName={school?.name}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="min-h-[40px]"
+                  onClick={() => setLastAdmission(null)}
+                >
+                  Band karo
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       </>
       )}
