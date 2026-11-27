@@ -2092,7 +2092,15 @@ export async function registerRoutes(
     if (!session || typeof (dataStore as any).getLeaveRequests !== "function") return res.json([]);
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     let list: any[];
-    if (user.role === "student" || user.role === "staff" || user.role === "accountant") {
+    if (user.role === "student") {
+      const ownStudent = await dataStore.getStudentForUser(user.id, user.schoolId, session.id);
+      if (!ownStudent || !ownStudent.isActive || ownStudent.sessionId !== session.id) return res.json([]);
+      list = await (dataStore as any).getLeaveRequests(user.schoolId, session.id, {
+        userId: user.id,
+        studentId: ownStudent.id,
+        status,
+      });
+    } else if (user.role === "staff" || user.role === "accountant") {
       list = await (dataStore as any).getLeaveRequests(user.schoolId, session.id, { userId: user.id, status });
     } else {
       list = await (dataStore as any).getLeaveRequests(user.schoolId, session.id, { status });
@@ -2126,19 +2134,16 @@ export async function registerRoutes(
 
     if (user.role === "student") {
       const own = await dataStore.getStudentForUser(user.id, user.schoolId, session.id);
-      if (own) {
-        studentId = own.id;
-        applicantName = `${own.name} (Father: ${own.fatherName} · Adm: ${own.admissionNo})`;
-        className = own.class;
-        section = own.section;
-      } else if (studentId) {
-        const student = await dataStore.getStudent(studentId, user.schoolId);
-        if (student) {
-          applicantName = `${student.name} (Father: ${student.fatherName} · Adm: ${student.admissionNo})`;
-          className = student.class;
-          section = student.section;
-        }
+      if (!own || !own.isActive || own.sessionId !== session.id) {
+        return res.status(403).json({ message: "This student account is not linked to an active student record" });
       }
+      if (input.studentId !== undefined && input.studentId !== own.id) {
+        return res.status(403).json({ message: "A student account can only apply leave for its linked student" });
+      }
+      studentId = own.id;
+      applicantName = `${own.name} (Father: ${own.fatherName} · Adm: ${own.admissionNo})`;
+      className = own.class;
+      section = own.section;
     } else if (rawStaffId) {
       const staffMembers = await dataStore.getStaff(user.schoolId);
       const foundStaff = staffMembers.find((st) => st.id === rawStaffId);
@@ -2334,9 +2339,14 @@ export async function registerRoutes(
       typeof (dataStore as any).getNotices === "function"
         ? await (dataStore as any).getNotices(user.schoolId, session.id)
         : [];
-    const notices = rawNotices.filter(
-      (n) => !n.audience || ["all", "students", "parents"].includes(String(n.audience).toLowerCase()),
-    );
+    const notices = rawNotices.filter((notice) => {
+      const audience = String(notice.targetAudience ?? notice.audience ?? "all").toLowerCase();
+      if (["all", "students", "parents"].includes(audience)) return true;
+      if (audience !== "class" || !student) return false;
+      const targetClass = notice.targetClass == null ? "" : String(notice.targetClass).trim();
+      const targetSection = notice.targetSection == null ? "" : String(notice.targetSection).trim();
+      return targetClass === String(student.class).trim() && (!targetSection || targetSection === String(student.section).trim());
+    });
 
     if (!student) {
       return res.json({
@@ -2347,10 +2357,11 @@ export async function registerRoutes(
         homework: [],
         timetable: [],
         attendance: { totalDays: 0, presentDays: 0, absentDays: 0, lateDays: 0, excusedDays: 0, percentage: 0, todayStatus: null, records: [] },
-        fees: { totalExpected: 0, totalPaid: 0, totalDiscount: 0, pendingBalance: 0, payments: [] },
+        fees: { monthlyFee: 0, admissionFee: 0, examFee: 0, otherFee: 0, totalPaid: 0, openDues: 0, openDueItems: [], payments: [] },
         leaves: [],
         transport: null,
         certificates: [],
+        reportCards: [],
       });
     }
 
@@ -2362,7 +2373,7 @@ export async function registerRoutes(
       attendanceRecords,
       feeStructuresList,
       feePaymentsList,
-      feeDiscountsList,
+      studentDuesList,
       leavesList,
       transportRoutesList,
       transportAllocationsList,
@@ -2384,10 +2395,8 @@ export async function registerRoutes(
         : Promise.resolve([]),
       dataStore.getAttendance(user.schoolId, session.id, { studentId: student.id }).catch(() => []),
       dataStore.getFeeStructures(user.schoolId, session.id).catch(() => []),
-      dataStore.getFeePayments(user.schoolId, session.id, student.id).catch(() => []),
-      typeof (dataStore as any).getStudentDiscounts === "function"
-        ? (dataStore as any).getStudentDiscounts(user.schoolId, session.id, student.id).catch(() => [])
-        : Promise.resolve([]),
+      dataStore.getFeePayments(user.schoolId, student.id, session.id).catch(() => []),
+      dataStore.getStudentDues(user.schoolId, session.id, student.id).catch(() => []),
       typeof (dataStore as any).getLeaveRequests === "function"
         ? (dataStore as any).getLeaveRequests(user.schoolId, session.id, { studentId: student.id })
         : Promise.resolve([]),
@@ -2428,14 +2437,56 @@ export async function registerRoutes(
     const todayIso = new Date().toISOString().slice(0, 10);
     const todayRec = attendanceRecords.find((a: any) => a.attendanceDate === todayIso);
 
-    // Fee calculation for this student's class
-    const classFees = feeStructuresList.filter(
-      (f: any) => String(f.class).trim() === String(student.class).trim(),
+    // Use the persisted fee fields and this student's active-session records only.
+    // The current fee model does not link receipts to individual obligations, so do not
+    // invent a total/annual balance by subtracting every payment from a monthly schedule.
+    const classFee = feeStructuresList.find(
+      (fee: any) => String(fee.class).trim() === String(student.class).trim(),
     );
-    const totalExpected = classFees.reduce((sum: number, f: any) => sum + Number(f.amount || 0), 0);
-    const totalPaid = feePaymentsList.reduce((sum: number, p: any) => sum + Number(p.amountPaid || 0), 0);
-    const totalDiscount = feeDiscountsList.reduce((sum: number, d: any) => sum + Number(d.amount || 0), 0);
-    const pendingBalance = Math.max(0, totalExpected - totalPaid - totalDiscount);
+    const totalPaid = feePaymentsList.reduce((sum: number, payment: any) => sum + Number(payment.amount || 0), 0);
+    const openDueItems = (studentDuesList ?? []).filter((due: any) => due.status === "open");
+    const openDues = openDueItems.reduce((sum: number, due: any) => sum + Number(due.amount || 0), 0);
+
+    // Parent-visible report cards follow the same publication rule as the report-card API.
+    const subjectsForReports = new Map(subjectsList.map((subject: any) => [subject.id, subject.name]));
+    const publishedExams = (await dataStore.getExams(user.schoolId, session.id).catch(() => []))
+      .filter((exam: any) => exam.status === "published");
+    const reportCards = (await Promise.all(publishedExams.map(async (exam: any) => {
+      const [scopes, schedules, results] = await Promise.all([
+        dataStore.getExamScopes(exam.id, user.schoolId, session.id).catch(() => []),
+        dataStore.getExamSchedules(exam.id, user.schoolId, session.id).catch(() => []),
+        dataStore.getExamResults(user.schoolId, session.id, { examId: exam.id, studentId: student.id }).catch(() => []),
+      ]);
+      const appliesToStudent = scopes.some((scope: any) => scope.className === student.class && scope.section === student.section);
+      const studentSchedules = schedules.filter((schedule: any) => schedule.className === student.class && schedule.section === student.section);
+      if (!appliesToStudent || studentSchedules.length === 0) return null;
+      const resultBySchedule = new Map((results as any[]).map((result: any) => [result.scheduleId, result]));
+      const rows = studentSchedules.map((schedule: any) => {
+        const result: any = resultBySchedule.get(schedule.id);
+        const absent = result?.isAbsent ?? false;
+        const obtained = absent ? null : (result?.obtainedMarks ?? null);
+        return {
+          scheduleId: schedule.id,
+          subjectId: schedule.subjectId,
+          subjectName: subjectsForReports.get(schedule.subjectId) ?? `Subject ${schedule.subjectId}`,
+          examDate: schedule.examDate,
+          maxMarks: schedule.maxMarks,
+          passingMarks: schedule.passingMarks,
+          obtainedMarks: obtained,
+          absent,
+          subjectResult: absent ? "Absent" : obtained === null ? "Not entered" : obtained >= schedule.passingMarks ? "Pass" : "Fail",
+          subjectPercentage: obtained === null ? null : Math.round((obtained / schedule.maxMarks) * 10000) / 100,
+          remarks: result?.remarks ?? null,
+          resultStatus: result?.status ?? "missing",
+        };
+      });
+      if (rows.some((row) => row.resultStatus !== "published")) return null;
+      return {
+        exam: { id: exam.id, name: exam.name, examType: exam.examType },
+        rows,
+        totals: calculateReportTotals(rows.map((row) => ({ maxMarks: row.maxMarks, obtainedMarks: row.obtainedMarks, absent: row.absent, subjectResult: row.subjectResult === "Pass" ? "Pass" : row.subjectResult === "Fail" || row.subjectResult === "Absent" ? "Fail" : "Not entered" }))),
+      };
+    }))).filter(Boolean);
 
     // Transport allocation
     const alloc = (transportAllocationsList ?? []).find((a: any) => a.studentId === student.id);
@@ -2463,10 +2514,13 @@ export async function registerRoutes(
         records: attendanceRecords.slice(0, 30),
       },
       fees: {
-        totalExpected,
+        monthlyFee: Number(classFee?.monthlyFee ?? 0),
+        admissionFee: Number(classFee?.admissionFee ?? 0),
+        examFee: Number(classFee?.examFee ?? 0),
+        otherFee: Number(classFee?.otherFee ?? 0),
         totalPaid,
-        totalDiscount,
-        pendingBalance,
+        openDues,
+        openDueItems,
         payments: feePaymentsList,
       },
       leaves: leavesList,
@@ -2481,6 +2535,7 @@ export async function registerRoutes(
           }
         : null,
       certificates: (certificatesList ?? []).filter((c: any) => c.status === "issued"),
+      reportCards,
     });
   });
 

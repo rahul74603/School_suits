@@ -126,15 +126,19 @@ export default function ParentMobileApp() {
     records: [],
   };
   const fees = overview?.fees ?? {
-    totalExpected: 0,
+    monthlyFee: 0,
+    admissionFee: 0,
+    examFee: 0,
+    otherFee: 0,
     totalPaid: 0,
-    totalDiscount: 0,
-    pendingBalance: 0,
+    openDues: 0,
+    openDueItems: [],
     payments: [],
   };
   const leaves: any[] = overview?.leaves ?? [];
   const transport = overview?.transport;
   const certificates: any[] = overview?.certificates ?? [];
+  const reportCards: any[] = overview?.reportCards ?? [];
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-start md:py-6">
@@ -376,19 +380,19 @@ export default function ParentMobileApp() {
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-[11px] font-semibold text-slate-500">
-                          Pending Fee (बकाया फीस)
+                          Recorded Open Dues (दर्ज बकाया)
                         </span>
                         <Wallet className="w-4 h-4 text-amber-600" />
                       </div>
                       <div
                         className={`text-2xl font-extrabold mt-1 ${
-                          fees.pendingBalance > 0 ? "text-amber-600" : "text-emerald-600"
+                          fees.openDues > 0 ? "text-amber-600" : "text-emerald-600"
                         }`}
                       >
-                        ₹{fees.pendingBalance.toLocaleString("en-IN")}
+                        ₹{fees.openDues.toLocaleString("en-IN")}
                       </div>
                       <div className="text-[11px] text-slate-500">
-                        Paid: ₹{fees.totalPaid.toLocaleString("en-IN")}
+                        Paid this session: ₹{fees.totalPaid.toLocaleString("en-IN")}
                       </div>
                     </button>
 
@@ -912,6 +916,50 @@ export default function ParentMobileApp() {
               {/* ================= TAB 5: FEES, RESULTS & PROFILE ================= */}
               {activeTab === "fees" && (
                 <div className="space-y-4">
+                  <section id="parent-report-cards" className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm space-y-3">
+                    <h2 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-blue-600" />
+                      Report Cards & Exam Results (रिपोर्ट कार्ड)
+                    </h2>
+                    {reportCards.length === 0 ? (
+                      <p className="text-xs text-slate-500">No published report cards are available yet.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {reportCards.map((card: any) => (
+                          <details key={card.exam.id} className="rounded-xl border border-slate-200 bg-slate-50">
+                            <summary className="cursor-pointer list-none p-3 flex items-center justify-between gap-3">
+                              <span>
+                                <span className="block text-xs font-bold text-slate-900">{card.exam.name}</span>
+                                <span className="text-[10px] text-slate-500">{card.exam.examType} · {card.totals.overallResult}</span>
+                              </span>
+                              <span className="text-right">
+                                <span className="block text-sm font-extrabold text-blue-700">{card.totals.percentage}%</span>
+                                <span className="text-[10px] text-slate-500">{card.totals.grade}</span>
+                              </span>
+                            </summary>
+                            <div className="border-t border-slate-200 p-3 space-y-2">
+                              <div className="flex justify-between text-[10px] font-semibold text-slate-500">
+                                <span>Subject</span><span>Marks / Result</span>
+                              </div>
+                              {card.rows.map((row: any) => (
+                                <div key={row.scheduleId} className="flex items-start justify-between gap-3 border-b border-slate-100 pb-2 text-xs last:border-0">
+                                  <span className="text-slate-700">{row.subjectName}<span className="block text-[10px] text-slate-400">{row.examDate}</span></span>
+                                  <span className="text-right font-semibold text-slate-800">
+                                    {row.absent ? "Absent" : `${row.obtainedMarks} / ${row.maxMarks}`}
+                                    <span className="block text-[10px] font-normal text-slate-500">{row.subjectResult}</span>
+                                  </span>
+                                </div>
+                              ))}
+                              <div className="flex justify-between border-t border-slate-200 pt-2 text-xs font-bold text-slate-800">
+                                <span>Total</span><span>{card.totals.totalObtained} / {card.totals.totalMaximum}</span>
+                              </div>
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
                   {/* Fee Summary Card */}
                   <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-sm space-y-3">
                     <h2 className="font-bold text-sm text-slate-900 flex items-center gap-2">
@@ -920,25 +968,43 @@ export default function ParentMobileApp() {
                     </h2>
 
                     <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                        <div className="text-sm font-bold text-slate-800">
-                          ₹{fees.totalExpected.toLocaleString("en-IN")}
+                      <div className="p-2.5 rounded-xl bg-blue-50 border border-blue-200">
+                        <div className="text-sm font-bold text-blue-800">
+                          ₹{fees.monthlyFee.toLocaleString("en-IN")}
                         </div>
-                        <div className="text-[10px] text-slate-500">Total Fee</div>
+                        <div className="text-[10px] text-blue-800">Monthly Fee</div>
                       </div>
                       <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
                         <div className="text-sm font-bold text-emerald-700">
                           ₹{fees.totalPaid.toLocaleString("en-IN")}
                         </div>
-                        <div className="text-[10px] text-emerald-800">Paid (जमा)</div>
+                        <div className="text-[10px] text-emerald-800">Paid this session</div>
                       </div>
                       <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200">
                         <div className="text-sm font-bold text-amber-700">
-                          ₹{fees.pendingBalance.toLocaleString("en-IN")}
+                          ₹{fees.openDues.toLocaleString("en-IN")}
                         </div>
-                        <div className="text-[10px] text-amber-800">Pending (शेष)</div>
+                        <div className="text-[10px] text-amber-800">Recorded open dues</div>
                       </div>
                     </div>
+                    <div className="text-[10px] text-slate-500">
+                      Open dues show obligations explicitly entered by the school; recurring fee balance is not inferred from receipts.
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+                      <div>Admission: ₹{fees.admissionFee.toLocaleString("en-IN")}</div>
+                      <div>Exam: ₹{fees.examFee.toLocaleString("en-IN")}</div>
+                      <div>Other: ₹{fees.otherFee.toLocaleString("en-IN")}</div>
+                    </div>
+                    {fees.openDueItems.length > 0 && (
+                      <div className="space-y-1.5">
+                        {fees.openDueItems.map((due: any) => (
+                          <div key={due.id} className="flex justify-between gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs">
+                            <span className="text-slate-700">{due.description}{due.dueDate ? ` · Due ${due.dueDate}` : ""}</span>
+                            <span className="shrink-0 font-bold text-amber-800">₹{Number(due.amount).toLocaleString("en-IN")}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Recent Fee Receipts */}
                     <div className="space-y-1.5 pt-2">
@@ -958,11 +1024,11 @@ export default function ParentMobileApp() {
                                 Receipt #{p.receiptNo}
                               </div>
                               <div className="text-[10px] text-slate-500">
-                                {p.paymentDate} • {p.paymentMode}
+                                {p.month || "General"} {p.year} • {new Date(p.paymentDate).toLocaleDateString("en-IN")} {p.remarks ? `• ${p.remarks}` : ""}
                               </div>
                             </div>
                             <div className="font-bold text-emerald-700">
-                              ₹{Number(p.amountPaid).toLocaleString("en-IN")}
+                              ₹{Number(p.amount).toLocaleString("en-IN")}
                             </div>
                           </div>
                         ))
@@ -972,16 +1038,17 @@ export default function ParentMobileApp() {
 
                   {/* Quick Links to Report Card & Certificates */}
                   <div className="grid grid-cols-2 gap-2.5">
-                    <Link
-                      href="/report-cards"
-                      className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-2.5 hover:border-blue-400"
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("fees")}
+                      className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-2.5 text-left hover:border-blue-400"
                     >
                       <FileText className="w-5 h-5 text-blue-600 shrink-0" />
                       <div>
                         <div className="text-xs font-bold text-slate-900">Report Card</div>
-                        <div className="text-[10px] text-slate-500">परीक्षा परिणाम देखें</div>
+                        <div className="text-[10px] text-slate-500">परीक्षा परिणाम ऐप में देखें</div>
                       </div>
-                    </Link>
+                    </button>
 
                     <Link
                       href="/certificates"
