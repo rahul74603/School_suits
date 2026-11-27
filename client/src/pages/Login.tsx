@@ -14,6 +14,9 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
+// 👨‍👩‍👧 Parent App build (v2.1) — labels parent ke hisaab se (mobile
+// number hi username hai). Aam build par koi farak nahi.
+import { PARENT_APP } from "@/lib/parentApp";
 import { GraduationCap, KeyRound, Loader2, Lock, User } from "lucide-react";
 
 // =============================================================================
@@ -130,11 +133,15 @@ export default function Login() {
               <GraduationCap className="h-8 w-8" />
             </span>
           </div>
-          <CardTitle className="text-2xl font-bold">{schoolName}</CardTitle>
+          <CardTitle className="text-2xl font-bold">
+            {PARENT_APP ? "Guardian Parent" : schoolName}
+          </CardTitle>
           <p className="text-sm text-slate-500">
             {mustChange
               ? "Pehli baar login — naya password banao"
-              : "Apne account se login karo"}
+              : PARENT_APP
+                ? "Parent login — apna mobile number aur password daalein"
+                : "Apne account se login karo"}
           </p>
         </CardHeader>
 
@@ -142,13 +149,19 @@ export default function Login() {
           {!mustChange ? (
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="username">Username</Label>
+                <Label htmlFor="username">
+                  {PARENT_APP ? "Mobile Number" : "Username"}
+                </Label>
                 <div className="relative">
                   <User className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <Input
                     id="username"
                     className="pl-9"
-                    placeholder="Username likho"
+                    placeholder={
+                      PARENT_APP
+                        ? "Apna mobile number likho"
+                        : "Username likho"
+                    }
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     autoComplete="username"
@@ -156,7 +169,9 @@ export default function Login() {
                   />
                 </div>
                 <p className="text-xs text-slate-400">
-                  Parents ke liye username = apna mobile number
+                  {PARENT_APP
+                    ? "Password = aapke bacche ka Admission No. (school ne jo diya hai)"
+                    : "Parents ke liye username = apna mobile number"}
                 </p>
               </div>
 
@@ -238,7 +253,7 @@ export default function Login() {
           <p className="text-center text-xs text-slate-400 mt-6">
             School Guardian Suite — har school ka apna login
           </p>
-          <p className="text-center text-[11px] text-slate-400 mt-1">Version 2.0</p>
+          <p className="text-center text-[11px] text-slate-400 mt-1">Version 2.1</p>
         </CardContent>
       </Card>
 

@@ -12,6 +12,9 @@ import { toast } from "@/hooks/use-toast";
 
 // 🔐 Phase 3: asal login (REST + JWT) — pehle app me koi login tha hi nahi.
 import { AuthProvider, useAuth } from "./lib/auth";
+// 👨‍👩‍👧 Parent App build flag (v2.1) — VITE_PARENT_APP=1 wale build me
+// Gate sirf parent ka hissa deta hai (neeche ParentShell dekho).
+import { PARENT_APP } from "./lib/parentApp";
 import Login from "@/pages/Login";
 
 import NotFound from "@/pages/not-found";
@@ -168,7 +171,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 2.0</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 2.1</div>
     </div>
   );
 }
@@ -365,6 +368,102 @@ function LicenseLockScreen() {
   );
 }
 
+// 👨‍👩‍👧 Parent App ki khaali chaukhat (v2.1) — Parent App build me koi
+// sidebar/office-menu nahi hota: upar sirf school ka naam + parent ka
+// naam + Logout, neeche Parent Home. ParentHome ka "Report Card" wala
+// link /report-cards kholta hai, isliye wo ek route yahan bhi hai —
+// uske alawa har rasta Parent Home par hi aata hai (staff/school ki
+// koi screen is build me khulti hi nahi).
+function ParentShell() {
+  const { school, user, logout } = useAuth();
+
+  return (
+    <div className="flex min-h-screen flex-col bg-slate-50 font-sans">
+      <div className="sticky top-0 z-40 flex h-16 items-center justify-between gap-3 border-b bg-white px-4 shadow-sm">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-2xl">🎓</span>
+          <div className="min-w-0 leading-tight">
+            <div className="truncate font-bold text-slate-800">
+              {school?.name || "Guardian Parent"}
+            </div>
+            <div className="text-[11px] text-slate-400">Guardian Parent</div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <div className="hidden text-right leading-tight sm:block">
+            <div className="text-sm font-medium text-gray-700">
+              {user?.name || user?.username}
+            </div>
+            <div className="text-xs capitalize text-gray-400">Parent</div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => {
+              void logout();
+            }}
+          >
+            <LogOut className="h-4 w-4" /> Logout
+          </Button>
+        </div>
+      </div>
+
+      <main className="mx-auto w-full min-w-0 max-w-3xl flex-1 overflow-x-clip p-2">
+        <Switch>
+          <Route path="/report-cards" component={ReportCards} />
+          <Route path="/" component={ParentHome} />
+          <Route component={ParentHome} />
+        </Switch>
+      </main>
+
+      <div className="pb-3 text-center text-[11px] text-slate-400">
+        Version 2.1
+      </div>
+    </div>
+  );
+}
+
+// 🚫 Parent App me galti se koi staff/office account login kar jaye to
+// ye vinamr screen — is build me unke liye kuch hai hi nahi; school
+// (office) wala app alag hai, wahi istemal karne ko kaho.
+function ParentOnlyScreen() {
+  const { user, logout } = useAuth();
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-xl space-y-4">
+        <div className="text-4xl">👨‍👩‍👧</div>
+        <h1 className="text-xl font-bold text-slate-800">
+          Ye app sirf parents ke liye hai
+        </h1>
+        <p className="text-sm text-gray-600">
+          Ye <b>Guardian Parent</b> app hai — isme parents sirf apne bacche
+          ki jaankari dekhte hain. Aapka account
+          {user?.role ? (
+            <>
+              {" "}
+              (<b>{user.role.replace("_", " ")}</b>)
+            </>
+          ) : (
+            ""
+          )}{" "}
+          school ke office app ke liye hai — kripya wahi wala{" "}
+          <b>School Guardian Suite</b> app kholein.
+        </p>
+        <Button
+          className="w-full min-h-[44px] gap-2"
+          variant="outline"
+          onClick={() => {
+            void logout();
+          }}
+        >
+          <LogOut className="h-4 w-4" /> Logout
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function Gate() {
   const { user, loading, licenseExpired } = useAuth();
 
@@ -384,6 +483,18 @@ function Gate() {
   // 🔒 License band ho to Router ki jagah lock screen (v1.7).
   if (licenseExpired) {
     return <LicenseLockScreen />;
+  }
+
+  // 👨‍👩‍👧 Parent App build (v2.1): is build me SIRF parent ka hissa
+  // hai — parent login ke baad ParentShell (Parent Home), aur koi
+  // dusra role ghus aaye to ParentOnlyScreen. Aam build (flag off)
+  // par is branch ka koi asar nahi — wahan hamesha Router hi chalta
+  // hai, pehle ki tarah.
+  if (PARENT_APP) {
+    if (user.role !== "parent") {
+      return <ParentOnlyScreen />;
+    }
+    return <ParentShell />;
   }
 
   return <Router />;

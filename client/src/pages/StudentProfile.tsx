@@ -6,6 +6,9 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPost } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+// 📲 Parent App invite (v2.1) — parent ko WhatsApp par app ka link
+// bhejne wala button (shared component, Admissions par bhi yahi hai).
+import ParentAppInviteButton from "@/components/ParentAppInviteButton";
 import { Link } from "wouter";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -590,6 +593,16 @@ export default function StudentProfile() {
                 >
                   <Award className="h-4 w-4 mr-2" /> Bonafide
                 </Button>
+                {/* 📲 Parent App ka link parent ke WhatsApp par (v2.1) —
+                    purane admission ke liye bhi yahin se bhej sakte
+                    hain (admission par auto bana parent account yahi
+                    login istemal karega). */}
+                <ParentAppInviteButton
+                  contact={student.contact}
+                  childName={student.name}
+                  admissionNo={student.admission_no}
+                  schoolName={school?.name}
+                />
               </div>
             </CardContent>
           </Card>
