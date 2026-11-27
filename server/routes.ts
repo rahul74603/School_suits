@@ -2198,26 +2198,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAuth,
     requireRole("principal"),
     async (req, res) => {
-      const loaded = await loadStudentInScope(req, res);
-      if (!loaded) return;
-      const docId = parseInt(req.params.docId, 10);
-      if (Number.isNaN(docId)) {
-        return res.status(400).json({ message: "Invalid ID" });
+      try {
+        const loaded = await loadStudentInScope(req, res);
+        if (!loaded) return;
+        const docId = parseInt(req.params.docId, 10);
+        if (Number.isNaN(docId)) {
+          return res.status(400).json({ message: "Invalid ID" });
+        }
+        const doc = await storage.getStudentDocument(docId);
+        if (!doc || doc.studentId !== loaded.student.id) {
+          return res.status(404).json({ message: "Document not found" });
+        }
+        const result = documentStatusBodySchema.safeParse(req.body);
+        if (!result.success) return res.status(400).json(result.error);
+        const updated = await storage.updateStudentDocumentStatus(
+          docId,
+          result.data.status,
+        );
+        if (!updated) {
+          return res.status(404).json({ message: "Document not found" });
+        }
+        res.json(documentMeta(updated));
+      } catch (err) {
+        console.error("PATCH /api/students/:id/documents/:docId/status failed:", err);
+        return res.status(500).json({ message: "Document ka status save nahi ho paya. Dobara koshish karein." });
       }
-      const doc = await storage.getStudentDocument(docId);
-      if (!doc || doc.studentId !== loaded.student.id) {
-        return res.status(404).json({ message: "Document not found" });
-      }
-      const result = documentStatusBodySchema.safeParse(req.body);
-      if (!result.success) return res.status(400).json(result.error);
-      const updated = await storage.updateStudentDocumentStatus(
-        docId,
-        result.data.status,
-      );
-      if (!updated) {
-        return res.status(404).json({ message: "Document not found" });
-      }
-      res.json(documentMeta(updated));
     },
   );
 
@@ -2659,26 +2664,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAuth,
     requireRole("principal"),
     async (req, res) => {
-      const loaded = await loadStaffInScope(req, res);
-      if (!loaded) return;
-      const docId = parseInt(req.params.docId, 10);
-      if (Number.isNaN(docId)) {
-        return res.status(400).json({ message: "Invalid ID" });
+      try {
+        const loaded = await loadStaffInScope(req, res);
+        if (!loaded) return;
+        const docId = parseInt(req.params.docId, 10);
+        if (Number.isNaN(docId)) {
+          return res.status(400).json({ message: "Invalid ID" });
+        }
+        const doc = await storage.getStaffDocument(docId);
+        if (!doc || doc.staffId !== loaded.member.id) {
+          return res.status(404).json({ message: "Document not found" });
+        }
+        const result = documentStatusBodySchema.safeParse(req.body);
+        if (!result.success) return res.status(400).json(result.error);
+        const updated = await storage.updateStaffDocumentStatus(
+          docId,
+          result.data.status,
+        );
+        if (!updated) {
+          return res.status(404).json({ message: "Document not found" });
+        }
+        res.json(documentMeta(updated));
+      } catch (err) {
+        console.error("PATCH /api/staff/:id/documents/:docId/status failed:", err);
+        return res.status(500).json({ message: "Document ka status save nahi ho paya. Dobara koshish karein." });
       }
-      const doc = await storage.getStaffDocument(docId);
-      if (!doc || doc.staffId !== loaded.member.id) {
-        return res.status(404).json({ message: "Document not found" });
-      }
-      const result = documentStatusBodySchema.safeParse(req.body);
-      if (!result.success) return res.status(400).json(result.error);
-      const updated = await storage.updateStaffDocumentStatus(
-        docId,
-        result.data.status,
-      );
-      if (!updated) {
-        return res.status(404).json({ message: "Document not found" });
-      }
-      res.json(documentMeta(updated));
     },
   );
 
@@ -4531,26 +4541,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     requireAuth,
     requireRole("principal"),
     async (req, res) => {
-      const schoolId = requireSchoolId(req, res);
-      if (schoolId == null) return;
-      const id = parsePathId(req);
-      if (id == null) return res.status(400).json({ message: "Invalid ID" });
-      const result = leaveDecisionBodySchema.safeParse(req.body);
-      if (!result.success) return res.status(400).json(result.error);
-      const leave = await storage.getLeaveRequest(id);
-      if (!leave || leave.schoolId !== schoolId) {
-        return res.status(404).json({ message: "Leave not found" });
-      }
-      if (leave.status !== "pending") {
-        return res.status(400).json({
-          message: "Is leave par pehle hi faisla ho chuka hai",
+      try {
+        const schoolId = requireSchoolId(req, res);
+        if (schoolId == null) return;
+        const id = parsePathId(req);
+        if (id == null) return res.status(400).json({ message: "Invalid ID" });
+        const result = leaveDecisionBodySchema.safeParse(req.body);
+        if (!result.success) return res.status(400).json(result.error);
+        const leave = await storage.getLeaveRequest(id);
+        if (!leave || leave.schoolId !== schoolId) {
+          return res.status(404).json({ message: "Leave not found" });
+        }
+        if (leave.status !== "pending") {
+          return res.status(400).json({
+            message: "Is leave par pehle hi faisla ho chuka hai",
+          });
+        }
+        const updated = await storage.updateLeaveRequest(id, {
+          status: result.data.status,
+          decidedBy: req.user!.id,
         });
+        return res.json(updated);
+      } catch (err) {
+        console.error("PATCH /api/leaves/:id/decision failed:", err);
+        return res.status(500).json({ message: "Faisla save nahi ho paya. Dobara koshish karein." });
       }
-      const updated = await storage.updateLeaveRequest(id, {
-        status: result.data.status,
-        decidedBy: req.user!.id,
-      });
-      return res.json(updated);
     },
   );
 

@@ -16,7 +16,12 @@ app.use((req, res, next) => {
     res.setHeader("Vary", "Origin");
   }
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  // PATCH lazmi hai: v3.0 ke teen routes PATCH use karte hain (leave ka
+  // faisla + student/staff document approve-reject). Ye naam list me na
+  // ho to WebView preflight (OPTIONS) par hi request rok deta hai —
+  // asal PATCH request server tak pahuchti hi nahi aur client ko
+  // "Server se sampark nahi ho paya" dikhta hai (v3.1 bug fix).
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
