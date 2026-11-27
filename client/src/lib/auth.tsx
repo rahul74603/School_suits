@@ -44,7 +44,14 @@ interface AuthContextValue {
   // `sg:license-expired` event). App ka Gate isi par lock screen
   // dikhata hai. super_admin par hamesha false.
   licenseExpired: boolean;
-  login: (username: string, password: string) => Promise<ApiUser>;
+  login: (
+    username: string,
+    password: string,
+    // School Code (v2.2) — sirf Parent App bhejta hai; server usi
+    // school se milan pakka karta hai. Baaki apps na bhejein to
+    // bartav pehle jaisa.
+    schoolCode?: string,
+  ) => Promise<ApiUser>;
   logout: () => Promise<void>;
   changePassword: (
     currentPassword: string,
@@ -139,10 +146,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (licenseBlocked || isLicenseExpiredValue(school?.licenseExpiry));
 
   const login = useCallback(
-    async (username: string, password: string) => {
+    async (username: string, password: string, schoolCode?: string) => {
       const res = await apiPost<AuthResponse>("/api/auth/login", {
         username,
         password,
+        ...(schoolCode?.trim()
+          ? { schoolCode: schoolCode.trim().toUpperCase() }
+          : {}),
       });
       saveSession(res);
       setUser(res.user);

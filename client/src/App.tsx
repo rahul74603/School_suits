@@ -15,7 +15,15 @@ import { AuthProvider, useAuth } from "./lib/auth";
 // 👨‍👩‍👧 Parent App build flag (v2.1) — VITE_PARENT_APP=1 wale build me
 // Gate sirf parent ka hissa deta hai (neeche ParentShell dekho).
 import { PARENT_APP } from "./lib/parentApp";
+// 👑 Master App build flag (v2.2) — VITE_MASTER_APP=1 wale build me
+// Gate sirf Super Admin ka hissa deta hai (neeche MasterShell dekho).
+import { MASTER_APP } from "./lib/masterApp";
 import Login from "@/pages/Login";
+// 👨‍👩‍👧 Parent App ki APNI login screen (v2.2) — School ID (Code) +
+// Mobile + Password wali seedhi screen; school wali Login se alag.
+import ParentLogin from "@/pages/ParentLogin";
+// 🧪 Master App: Demo School (test data) banane wala card.
+import DemoSchoolCard from "@/components/DemoSchoolCard";
 
 import NotFound from "@/pages/not-found";
 import Dashboard from "@/pages/Dashboard";
@@ -171,7 +179,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 2.1</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 2.2</div>
     </div>
   );
 }
@@ -418,7 +426,7 @@ function ParentShell() {
       </main>
 
       <div className="pb-3 text-center text-[11px] text-slate-400">
-        Version 2.1
+        Version 2.2
       </div>
     </div>
   );
@@ -464,6 +472,108 @@ function ParentOnlyScreen() {
   );
 }
 
+// 👑 Master App ki chaukhat (v2.2) — Master App build me Super Admin
+// ke liye SIRF do cheezein: Demo School (test data) wala card aur
+// Schools screen (saare schools, approve/block, har school ke
+// accounts, School Code). Koi school-data screen (Students/Fees/...)
+// is build me hai hi nahi — Master ka kaam control hai, roz ka
+// daftar wala kaam School App ka hai.
+function MasterShell() {
+  const { user, logout } = useAuth();
+
+  return (
+    <div className="flex min-h-screen flex-col bg-slate-50 font-sans">
+      <div className="sticky top-0 z-40 flex h-16 items-center justify-between gap-3 border-b bg-white px-4 shadow-sm">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-2xl">👑</span>
+          <div className="min-w-0 leading-tight">
+            <div className="truncate font-bold text-slate-800">
+              Guardian Master
+            </div>
+            <div className="text-[11px] text-slate-400">
+              Saare schools ka control
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <div className="hidden text-right leading-tight sm:block">
+            <div className="text-sm font-medium text-gray-700">
+              {user?.name || user?.username}
+            </div>
+            <div className="text-xs capitalize text-gray-400">
+              Super Admin
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => {
+              void logout();
+            }}
+          >
+            <LogOut className="h-4 w-4" /> Logout
+          </Button>
+        </div>
+      </div>
+
+      <main className="w-full min-w-0 flex-1 overflow-x-clip">
+        <div className="p-4 sm:p-6 pb-0 max-w-[1600px] mx-auto w-full min-w-0">
+          <DemoSchoolCard />
+        </div>
+        <Switch>
+          <Route path="/" component={Schools} />
+          <Route component={Schools} />
+        </Switch>
+      </main>
+
+      <div className="pb-3 text-center text-[11px] text-slate-400">
+        Version 2.2
+      </div>
+    </div>
+  );
+}
+
+// 🚫 Master App me Super Admin ke alawa koi login kar jaye to ye
+// vinamr screen — is build me unke liye kuch hai hi nahi.
+function MasterOnlyScreen() {
+  const { user, logout } = useAuth();
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-xl space-y-4">
+        <div className="text-4xl">👑</div>
+        <h1 className="text-xl font-bold text-slate-800">
+          Ye app sirf Master (Super Admin) ke liye hai
+        </h1>
+        <p className="text-sm text-gray-600">
+          Ye <b>Guardian Master</b> app hai — isse saare schools control
+          hote hain. Aapka account
+          {user?.role ? (
+            <>
+              {" "}
+              (<b>{user.role.replace("_", " ")}</b>)
+            </>
+          ) : (
+            ""
+          )}{" "}
+          iske liye nahi hai — kripya apna wala app kholein (school ke
+          kaam ke liye <b>School Guardian Suite</b>, bacche ki jaankari
+          ke liye <b>Guardian Parent</b>).
+        </p>
+        <Button
+          className="w-full min-h-[44px] gap-2"
+          variant="outline"
+          onClick={() => {
+            void logout();
+          }}
+        >
+          <LogOut className="h-4 w-4" /> Logout
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function Gate() {
   const { user, loading, licenseExpired } = useAuth();
 
@@ -477,7 +587,10 @@ function Gate() {
   }
 
   if (!user || user.mustChangePassword) {
-    return <Login />;
+    // 👨‍👩‍👧 Parent App build me login bhi parent ki APNI screen hai
+    // (v2.2 — School ID + Mobile + Password); baaki builds me aam
+    // Login screen, pehle ki tarah.
+    return PARENT_APP ? <ParentLogin /> : <Login />;
   }
 
   // 🔒 License band ho to Router ki jagah lock screen (v1.7).
@@ -495,6 +608,18 @@ function Gate() {
       return <ParentOnlyScreen />;
     }
     return <ParentShell />;
+  }
+
+  // 👑 Master App build (v2.2): is build me SIRF Super Admin ka
+  // control hissa hai — super_admin login ke baad MasterShell
+  // (Schools + Demo School), koi dusra role ghus aaye to
+  // MasterOnlyScreen. Aam build (flag off) par is branch ka koi
+  // asar nahi — wahan hamesha Router hi chalta hai.
+  if (MASTER_APP) {
+    if (user.role !== "super_admin") {
+      return <MasterOnlyScreen />;
+    }
+    return <MasterShell />;
   }
 
   return <Router />;

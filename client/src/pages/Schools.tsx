@@ -76,6 +76,10 @@ import { apiGet, apiPost, apiPut, ApiError, type ApiUser } from "@/lib/api";
 interface SchoolRow {
   id: number;
   name: string;
+  // School Code (v2.2): Parent App ke login ki pehchan — parent yahi
+  // code dalta hai. Purane schools par v2.2 SQL ke baad hi ayega,
+  // isliye optional rakha hai.
+  code?: string | null;
   logo: string | null;
   address: string;
   phone: string;
@@ -147,6 +151,9 @@ export default function Schools() {
   const [successInfo, setSuccessInfo] = useState<{
     schoolName: string;
     principalUsername: string;
+    // School Code (v2.2) — naya school bante hi Super Admin ko dikha
+    // do, taaki wo school/parents ko bata sake.
+    schoolCode?: string | null;
   } | null>(null);
 
   const [deactivateTarget, setDeactivateTarget] = useState<SchoolRow | null>(
@@ -274,6 +281,7 @@ export default function Schools() {
       setSuccessInfo({
         schoolName: res.school.name,
         principalUsername: res.principal.username,
+        schoolCode: res.school.code ?? null,
       });
       toast({
         title: "School ban gaya",
@@ -514,6 +522,16 @@ export default function Schools() {
                 . Jo temporary password tumne dala tha wahi use hoga — Principal
                 ko pehle login par apna password badalna lazmi hoga.
               </p>
+              {successInfo.schoolCode && (
+                <p className="text-sm text-gray-600 mt-1">
+                  School ID (Code):{" "}
+                  <span className="font-mono font-semibold">
+                    {successInfo.schoolCode}
+                  </span>{" "}
+                  — parents Parent App me login karte samay yahi code
+                  dalenge; school ko bata do.
+                </p>
+              )}
             </div>
             <Button
               variant="ghost"
@@ -584,6 +602,16 @@ export default function Schools() {
                         </div>
                       )}
                       <div>Session: {school.session || "—"}</div>
+                      <div>
+                        School ID (Code):{" "}
+                        {school.code ? (
+                          <span className="font-mono font-semibold text-slate-700">
+                            {school.code}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </div>
                       <div>Banaya gaya: {formatDate(school.createdAt)}</div>
                     </div>
 
@@ -827,7 +855,19 @@ export default function Schools() {
                           </div>
                         )}
                       </TableCell>
-                      <TableCell>{school.session || "—"}</TableCell>
+                      <TableCell>
+                        <div>{school.session || "—"}</div>
+                        <div className="text-xs text-gray-500">
+                          Code:{" "}
+                          {school.code ? (
+                            <span className="font-mono font-semibold text-slate-700">
+                              {school.code}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <Badge variant={active ? "default" : "secondary"}>
                           {active ? "Active" : "Inactive"}

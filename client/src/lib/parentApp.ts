@@ -28,14 +28,14 @@ export const PARENT_APP: boolean =
 
 // -----------------------------------------------------------------------------
 // 2) 📥 PARENT APP DOWNLOAD LINK — EK HI JAGAH
-//    ⚠️ ABHI KHALI HAI ("") — Parent App ka .apk jab kisi public jagah
-//    (GitHub Release / hosting) par live ho jaye, to uska seedha link
-//    SIRF YAHAN bharna hai. App ke saare "Parent ko App Link bhejo"
-//    button yahi se link lete hain.
-//    Link khali ho to button jhooth nahi bolta — dabane par saaf kehta
-//    hai "link abhi set nahi hai" (koi nakli link kabhi nahi jata).
+//    Parent App ke .apk ka seedha link SIRF YAHAN rehta hai — har
+//    version par iska version-hissa badalna hai (abhi v2.2 ke Release
+//    ka link). App ke saare "Parent ko App Link bhejo" button yahi se
+//    link lete hain. Link khali ho to button jhooth nahi bolta —
+//    dabane par saaf kehta hai "link abhi set nahi hai" (koi nakli
+//    link kabhi nahi jata).
 // -----------------------------------------------------------------------------
-export const PARENT_APP_DOWNLOAD_URL = "https://github.com/rahul74603/School_suits/releases/download/v2.1/school-guardian-parent-v2.1.apk";
+export const PARENT_APP_DOWNLOAD_URL = "https://github.com/rahul74603/School_suits/releases/download/v2.2/school-guardian-parent-v2.2.apk";
 
 // -----------------------------------------------------------------------------
 // 3) Helpers — mobile saaf karna + WhatsApp invite
@@ -66,7 +66,15 @@ export function whatsAppNumber(contact: string | null | undefined): string {
 // imaandari se "link set nahi hai" / "number nahi mila" batayega.
 export function buildParentAppInviteUrl(
   contact: string | null | undefined,
-  opts: { schoolName: string; childName: string; admissionNo: string },
+  opts: {
+    schoolName: string;
+    childName: string;
+    admissionNo: string;
+    // School Code (v2.2) — Parent App ke login par pehla khana yahi
+    // hai; bina code ke parent login kar hi nahi payega, isliye code
+    // mile to sandesh me lazmi bhejo.
+    schoolCode?: string | null;
+  },
 ): string | null {
   if (!PARENT_APP_DOWNLOAD_URL) return null;
   const number = whatsAppNumber(contact);
@@ -80,7 +88,10 @@ export function buildParentAppInviteUrl(
     PARENT_APP_DOWNLOAD_URL,
     ``,
     `Login kaise karein:`,
-    `• Username: aapka yehi mobile number`,
+    ...(opts.schoolCode
+      ? [`• School ID (Code): ${opts.schoolCode}`]
+      : []),
+    `• Mobile Number: aapka yehi number`,
     `• Password: bacche ka Admission No. (${opts.admissionNo})`,
     ``,
     `Dhanyavaad,`,

@@ -2,7 +2,11 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { randomBytes, createHmac, timingSafeEqual } from "crypto";
 import { z } from "zod";
-import { storage } from "./storage";
+import {
+  storage,
+  generateUniqueSchoolCode,
+  normalizeSchoolCode,
+} from "./storage";
 import {
   insertSchoolSchema,
   insertStudentSchema,
@@ -73,6 +77,11 @@ function serializeStaffFor(member: Staff, role: string | undefined) {
 const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
+  // School Code (v2.2): Parent App hamesha bhejta hai — server usi
+  // school se user ka milan pakka karta hai (galat code = wahi generic
+  // 401, kuch leak nahi). School/Master app NAHI bhejte — unke liye
+  // bartav bilkul pehle jaisa.
+  schoolCode: z.string().min(1).optional(),
 });
 
 const refreshSchema = z.object({
@@ -549,7 +558,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/auth/login", async (req, res) => {
     const result = loginSchema.safeParse(req.body);
     if (!result.success) return res.status(400).json(result.error);
-    const { username, password } = result.data;
+    const { username, password, schoolCode } = result.data;
 
     const key = loginKey(req, username);
     if (loginBlocked(key)) {
@@ -559,13 +568,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     const user = await storage.getUserByUsername(username);
+    // 🏫 School Code mila ho (Parent App) to school ka milan bhi lazmi
+    // hai (v2.2): code wala school dhoondho, aur user USI school ka ho.
+    // Code na mile, school na mile, ya user dusre school ka ho — teeno
+    // haalaton me schoolOk jhootha rahega aur neeche wahi generic 401
+    // milega (kaun si cheez galat hai, ye kabhi nahi bataya jata).
+    // Code na aaya ho (School/Master app) to ye jaanch hoti hi nahi —
+    // bartav bilkul pehle jaisa.
+    let schoolOk = true;
+    if (schoolCode) {
+      const codedSchool = await storage.getSchoolByCode(
+        normalizeSchoolCode(schoolCode),
+      );
+      schoolOk = !!codedSchool && !!user && user.schoolId === codedSchool.id;
+    }
     // Ek hi generic jawab (§2.4): username galat, password galat ya
     // account band — teeno me yahi message, kuch leak nahi hota.
     const passwordOk =
       user && user.isActive === 1
         ? await verifyPassword(password, user.password)
         : false;
-    if (!user || !passwordOk) {
+    if (!user || !passwordOk || !schoolOk) {
       recordLoginFailure(key);
       return res
         .status(401)
@@ -746,7 +769,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(409).json({ message: "Username already exists" });
       }
 
-      const school = await storage.createSchool(schoolData);
+      // 🏫 School Code (v2.2): har naye school ko apna code milega —
+      // Parent App ke login ki pehchan. Body me code aaya ho to pehle
+      // uski takraav-jaanch (409), warna server khud bana deta hai
+      // (naam ke akshar + ank, storage.generateUniqueSchoolCode).
+      let code = schoolData.code
+        ? normalizeSchoolCode(schoolData.code)
+        : null;
+      if (code) {
+        const clash = await storage.getSchoolByCode(code);
+        if (clash) {
+          return res
+            .status(409)
+            .json({ message: "School code already exists" });
+        }
+      } else {
+        code = await generateUniqueSchoolCode(storage, schoolData.name);
+      }
+
+      const school = await storage.createSchool({ ...schoolData, code });
       const principalUser = await storage.createUser({
         schoolId: school.id,
         username: principal.username,
@@ -807,6 +848,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         delete updates.plan;
         delete updates.licenseExpiry;
       }
+      // School Code bhi sirf Super Admin ka adhikaar hai (v2.2) —
+      // parents usi code se login karte hain; Principal use khud
+      // badal de to saare parent login toot jayenge.
+      if (req.user!.role !== "super_admin") delete updates.code;
+      if (updates.code != null && updates.code !== "") {
+        updates.code = normalizeSchoolCode(String(updates.code));
+        const clash = await storage.getSchoolByCode(String(updates.code));
+        if (clash && clash.id !== id) {
+          return res
+            .status(409)
+            .json({ message: "School code already exists" });
+        }
+      }
+      if (updates.code === "") updates.code = null;
       // Plan sirf Basic/Pro me se ek; expiry ya to khaali (null = koi
       // expiry nahi) ya "YYYY-MM-DD" — galat value DB tak nahi jayegi.
       if (updates.plan !== undefined && updates.plan !== null) {
@@ -867,6 +922,217 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!school) return res.status(404).json({ message: "School not found" });
     res.json(school);
   });
+
+  // =======================================================================
+  // 🧪 Master App — Demo School (v2.2)
+  // Super Admin ek tap me poora test school bana sakta hai: school +
+  // Principal + fees ki rachna + 5 bacche + kuch fees/dues + aaj ki
+  // hajri + ek notice (+ har bacche ke parent ka login, admission wale
+  // auto-link niyam se). Pehchan ka nishan = School Code "DEMO01" —
+  // wahi code dobara mile to naya NAHI banta (idempotent), purana hi
+  // wapas milta hai aur Principal ka password dobara NAHI dikhta
+  // (bhool jaye to Schools → Accounts se reset kar dein).
+  // =======================================================================
+  const DEMO_SCHOOL_CODE = "DEMO01";
+  app.post(
+    "/api/admin/demo-school",
+    requireAuth,
+    requireRole("super_admin"),
+    async (req, res) => {
+      const existingDemo = await storage.getSchoolByCode(DEMO_SCHOOL_CODE);
+      if (existingDemo) {
+        const demoUsers = await storage.getUsersBySchool(existingDemo.id);
+        const demoPrincipal = demoUsers.find((u) => u.role === "principal");
+        return res.json({
+          created: false,
+          school: existingDemo,
+          principal: demoPrincipal
+            ? { username: demoPrincipal.username }
+            : null,
+          message:
+            "Demo School pehle se bana hua hai — naya nahi banaya. Principal ka password bhool gaye ho to Schools list me is school ke Accounts se reset kar dein.",
+        });
+      }
+
+      const principalUsername = "demo.principal";
+      const usernameTaken = await storage.getUserByUsername(principalUsername);
+      if (usernameTaken) {
+        return res.status(409).json({
+          message:
+            "Username 'demo.principal' pehle se kisi aur ke paas hai — Demo School nahi ban paya.",
+        });
+      }
+
+      const now = new Date();
+      const year = now.getFullYear();
+      const monthName = now.toLocaleString("en-US", { month: "long" });
+      const session =
+        now.getMonth() >= 3
+          ? `${year}-${String(year + 1).slice(2)}`
+          : `${year - 1}-${String(year).slice(2)}`;
+      const today = now.toISOString().slice(0, 10);
+
+      const school = await storage.createSchool({
+        name: "Demo Public School",
+        code: DEMO_SCHOOL_CODE,
+        address: "Demo Nagar, Test City",
+        phone: "9999999999",
+        email: "demo@schoolguardian.local",
+        session,
+        admissionPrefix: "DEMO",
+        admissionYear: String(year),
+        admissionStart: 1,
+        plan: "Basic",
+        isActive: 1,
+      });
+
+      // Pehla Principal — aam provisioning wala hi niyam: temporary
+      // password sirf is ek response me, mustChangePassword = 1.
+      const temporaryPassword = randomBytes(6).toString("hex");
+      const principalUser = await storage.createUser({
+        schoolId: school.id,
+        username: principalUsername,
+                password: await hashPassword(temporaryPassword),
+        role: "principal",
+        name: "Demo Principal",
+        phone: "9999999999",
+        mustChangePassword: 1,
+        isActive: 1,
+      });
+
+      // Ek class ki fee rachna (Class 1).
+      await storage.createFeeStructure({
+        schoolId: school.id,
+        class: "1",
+        monthlyFee: 1000,
+        admissionFee: 2000,
+        examFee: 500,
+        otherFee: 0,
+      });
+
+      // 5 namoona bacche — 3 Class 1 me, 2 Class 2 me. Har bacche ke
+      // admission ke saath parent ka login bhi taiyaar (v2.1 wala
+      // auto-link: username = mobile, password = Admission No.).
+      const demoStudents: Array<{
+        name: string;
+        fatherName: string;
+        class: string;
+        contact: string;
+        dob: string;
+      }> = [
+        { name: "Aarav Sharma", fatherName: "Rakesh Sharma", class: "1", contact: "9810000001", dob: "2019-04-12" },
+        { name: "Diya Patel", fatherName: "Amit Patel", class: "1", contact: "9810000002", dob: "2019-08-03" },
+        { name: "Kabir Singh", fatherName: "Harpreet Singh", class: "1", contact: "9810000003", dob: "2019-01-25" },
+        { name: "Ananya Gupta", fatherName: "Rohit Gupta", class: "2", contact: "9810000004", dob: "2018-06-17" },
+        { name: "Vihaan Khan", fatherName: "Imran Khan", class: "2", contact: "9810000005", dob: "2018-11-30" },
+      ];
+      const createdStudents = [];
+      for (const [index, s] of demoStudents.entries()) {
+        const admissionNo = await storage.getNextAdmissionNo(school.id);
+        const student = await storage.createStudent({
+          schoolId: school.id,
+          admissionNo,
+          name: s.name,
+          fatherName: s.fatherName,
+          class: s.class,
+          section: "A",
+          rollNo: String(index + 1),
+          contact: s.contact,
+          address: "Demo Nagar, Test City",
+          dob: s.dob,
+          isActive: 1,
+        });
+        createdStudents.push(student);
+        try {
+          await storage.ensureParentForAdmission(school.id, student, () =>
+            hashPassword(student.admissionNo),
+          );
+        } catch (err) {
+          console.error("Demo school: parent auto-link failed:", err);
+        }
+      }
+
+      // Fees: pehle bacche ki admission fee poori jama, dusre ki is
+      // mahine ki tuition jama — teesre ke naam ek pending due.
+      await storage.createFeePayment({
+        studentId: createdStudents[0].id,
+        schoolId: school.id,
+        amount: 2000,
+        month: monthName,
+        year,
+        receiptNo: await storage.getNextReceiptNo(school.id),
+        paymentMethod: "Cash",
+        remarks: "Admission Fee (Demo)",
+        breakdown: JSON.stringify({ extras: [], isAdmission: true }),
+      });
+      await storage.createFeePayment({
+        studentId: createdStudents[1].id,
+        schoolId: school.id,
+        amount: 1000,
+        month: monthName,
+        year,
+        receiptNo: await storage.getNextReceiptNo(school.id),
+        paymentMethod: "Cash",
+        remarks: `Tuition: ${monthName} (Demo)`,
+        breakdown: JSON.stringify({
+          extras: [
+            {
+              name: `Tuition: ${monthName}`,
+              amount: 1000,
+              type: "Tuition",
+              month: monthName,
+            },
+          ],
+        }),
+      });
+      await storage.createStudentDue({
+        studentId: createdStudents[2].id,
+        feeName: "Admission Fee (baaki)",
+        amount: 2000,
+        dueDate: now,
+        isPaid: 0,
+      });
+
+      // Aaj ki hajri: 4 present, 1 absent.
+      await storage.markAttendanceBulk(
+        school.id,
+        principalUser.id,
+        today,
+        createdStudents.map((student, index) => ({
+          studentId: student.id,
+          status: index === 4 ? "absent" : "present",
+        })),
+      );
+
+      // Ek swagat notice (parents ko bhi dikhega — audience "all").
+      await storage.createNotice({
+        schoolId: school.id,
+        title: "Demo School me aapka swagat hai",
+        body: "Ye ek demo notice hai — Demo Public School ke test data ke saath bheja gaya hai.",
+        audience: "all",
+        createdBy: principalUser.id,
+      });
+
+      res.status(201).json({
+        created: true,
+        school,
+        principal: {
+          username: principalUsername,
+          temporaryPassword,
+        },
+        seeded: {
+          feeStructure: "Class 1 (monthly ₹1000, admission ₹2000)",
+          students: createdStudents.length,
+          payments: 2,
+          pendingDue: `${createdStudents[2].name} — Admission Fee ₹2000 baaki`,
+          attendanceDate: today,
+          notices: 1,
+          parentLogins:
+            "Har bacche ke parent ka login taiyaar hai — Parent App me School Code DEMO01 + mobile number + password = bacche ka Admission No.",
+        },
+      });
+    },
+  );
 
   // =======================================================================
   // Users (§5.3)

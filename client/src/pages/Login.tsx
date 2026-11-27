@@ -253,7 +253,7 @@ export default function Login() {
           <p className="text-center text-xs text-slate-400 mt-6">
             School Guardian Suite — har school ka apna login
           </p>
-          <p className="text-center text-[11px] text-slate-400 mt-1">Version 2.1</p>
+          <p className="text-center text-[11px] text-slate-400 mt-1">Version 2.2</p>
         </CardContent>
       </Card>
 
