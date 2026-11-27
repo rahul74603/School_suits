@@ -12,6 +12,32 @@ if (sgsKsB64.exists() && !sgsKsFile.exists()) {
     }
 }
 
+// --- SGS official logo / launcher icons (v3.2) ------------------------------
+// User ka bheja hua official badge hi teeno apps ka icon hai. PNG binary
+// repo me nahi ja sakta (connector sirf text leta hai), isliye har icon
+// icons/<res-path>.b64 (base64 text) me rakha hai — upar keystore wale
+// pattern ki tarah yahin configuration-time par decode karke
+// src/main/res/ ke sahi path par likh dete hain. Workflow ka
+// template-restore step checkout ke baad chalta hai aur gradle uske
+// BAAD — isliye hamare icon hamesha template ke default icons ko
+// overwrite karte hain. Koi .b64 kharab ho to build nahi rukta: warn
+// karke us file ko chhod dete hain (default icon reh jayega).
+def sgsIconsDir = file('icons')
+if (sgsIconsDir.isDirectory()) {
+    sgsIconsDir.eachFileRecurse { f ->
+        if (f.name.endsWith('.b64')) {
+            def sgsIconRel = sgsIconsDir.toPath().relativize(f.toPath()).toString().replace(File.separator, '/')
+            def sgsIconTarget = file('src/main/res/' + sgsIconRel.replaceAll(/\.b64$/, ''))
+            try {
+                sgsIconTarget.parentFile.mkdirs()
+                sgsIconTarget.bytes = java.util.Base64.getDecoder().decode(f.text.replaceAll('\\s', ''))
+            } catch (Exception e) {
+                logger.warn("SGS icon decode failed (${sgsIconRel}): " + e.message)
+            }
+        }
+    }
+}
+
 android {
     namespace "com.schoolguardian.suite"
     compileSdk rootProject.ext.compileSdkVersion
@@ -19,8 +45,8 @@ android {
         applicationId "com.schoolguardian.suite"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 15
-        versionName "3.1"
+        versionCode 16
+        versionName "3.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

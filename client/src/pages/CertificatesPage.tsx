@@ -39,11 +39,14 @@ function normalizeSchool(raw: any): IdCardSchool | null {
 
 function toCertificateStudent(s: any): CertificateStudent {
   return {
-    name: s.name,
+    name: s.name ?? "",
     fatherName: s.fatherName ?? s.father_name ?? "",
     motherName: s.motherName ?? null,
-    class: s.class,
-    section: s.section,
+    // v3.2 defensive: API row me class/section null aa sakte hain —
+    // CertificateStudent ka type string hai, isliye yahin "" kar do
+    // taaki certificate render hamesha saaf bane.
+    class: s.class ?? "",
+    section: s.section ?? "",
     admissionNo: s.admissionNo ?? s.admission_no ?? "",
     dob: s.dob ?? null,
     contact: s.contact ?? null,

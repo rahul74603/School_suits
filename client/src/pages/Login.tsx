@@ -18,7 +18,12 @@ import { ApiError } from "@/lib/api";
 // number hi username hai). Aam build par koi farak nahi.
 import { PARENT_APP } from "@/lib/parentApp";
 import { APP_VERSION_NAME } from "@/lib/appVersion";
-import { GraduationCap, KeyRound, Loader2, Lock, User } from "lucide-react";
+// 🛡️ Official product logo (v3.2) — login screen par title ke upar.
+// Login se pehle school pehchana nahi jata, isliye yahan product ka
+// logo hai; school ka apna naam title me aur uski branding login ke
+// baad ke app me dikhti hai (takrao nahi).
+import { APP_LOGO_DATA_URI } from "@/lib/appLogo";
+import { KeyRound, Loader2, Lock, User } from "lucide-react";
 
 // =============================================================================
 // Login screen (Phase 3 foundation)
@@ -130,9 +135,11 @@ export default function Login() {
       <Card className="w-full max-w-md shadow-2xl">
         <CardHeader className="text-center space-y-2">
           <div className="flex justify-center">
-            <span className="bg-blue-600 text-white p-3 rounded-2xl">
-              <GraduationCap className="h-8 w-8" />
-            </span>
+            <img
+              src={APP_LOGO_DATA_URI}
+              alt="School Guardians Suite"
+              className="h-16 w-16 rounded-full"
+            />
           </div>
           <CardTitle className="text-2xl font-bold">
             {PARENT_APP ? "Guardian Parent" : schoolName}

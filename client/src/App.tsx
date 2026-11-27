@@ -18,12 +18,17 @@ import { PARENT_APP } from "./lib/parentApp";
 // 👑 Master App build flag (v2.2) — VITE_MASTER_APP=1 wale build me
 // Gate sirf Super Admin ka hissa deta hai (neeche MasterShell dekho).
 import { MASTER_APP } from "./lib/masterApp";
+// 🛡️ Official product logo (v3.2) — Master App ke header me; Master
+// kisi ek school ka app nahi hai, isliye yahan product pehchan hi
+// sahi hai (school branding se takrao ka sawal hi nahi).
+import { APP_LOGO_DATA_URI } from "./lib/appLogo";
 // 🔢 Is build ka version (v3.0) — ek hi jagah (lib/appVersion);
 // neeche teeno shells ke version-text yahi se aate hain.
 import { APP_VERSION_NAME } from "./lib/appVersion";
 // 🔄 Update check (v3.0) — har shell me mount; naya version
 // released ho to sandesh deta hai.
 import UpdateCheck from "@/components/UpdateCheck";
+import ErrorBoundary from "@/components/ErrorBoundary";
 // 🔙 Modal stack (v3.1) — back button pehle khule overlay (jaise
 // PrintViewer) ko band karta hai, history baad me.
 import { closeTopModal, modalStackSize } from "./lib/modalStack";
@@ -320,6 +325,10 @@ function Router() {
               liye backup-due banner (24 ghante se backup na hua ho). */}
           <UpdateCheck />
           <BackupBanner />
+          {/* 🛡️ v3.2: ek page ka crash poori app na giraye — andar
+              wali boundary pakad legi, sidebar/topbar chalte rahenge.
+              Route badlte hi key badli, boundary taaza ho jati hai. */}
+          <ErrorBoundary key={location}>
           <Switch>
             {user?.role === "super_admin" && (
               <Route path="/schools" component={Schools} />
@@ -362,6 +371,7 @@ function Router() {
 
             <Route component={NotFound} />
           </Switch>
+          </ErrorBoundary>
         </main>
       </div>
     </div>
@@ -423,6 +433,7 @@ function LicenseLockScreen() {
 // koi screen is build me khulti hi nahi).
 function ParentShell() {
   const { school, user, logout } = useAuth();
+  const [location] = useLocation();
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 font-sans">
@@ -458,11 +469,13 @@ function ParentShell() {
 
       <main className="mx-auto w-full min-w-0 max-w-3xl flex-1 overflow-x-clip p-2">
         <UpdateCheck />
+        <ErrorBoundary key={location}>
         <Switch>
           <Route path="/report-cards" component={ReportCards} />
           <Route path="/" component={ParentHome} />
           <Route component={ParentHome} />
         </Switch>
+        </ErrorBoundary>
       </main>
 
       <div className="pb-3 text-center text-[11px] text-slate-400">
@@ -525,6 +538,11 @@ function MasterShell() {
     <div className="flex min-h-screen flex-col bg-slate-50 font-sans">
       <div className="sticky top-0 z-40 flex h-16 items-center justify-between gap-3 border-b bg-white px-4 shadow-sm">
         <div className="flex min-w-0 items-center gap-2">
+          <img
+            src={APP_LOGO_DATA_URI}
+            alt="School Guardians Suite"
+            className="h-10 w-10 shrink-0 rounded-full"
+          />
           <span className="text-2xl">👑</span>
           <div className="min-w-0 leading-tight">
             <div className="truncate font-bold text-slate-800">
@@ -565,10 +583,12 @@ function MasterShell() {
           <AppUpdateCard />
           <BackupCard />
         </div>
+        <ErrorBoundary>
         <Switch>
           <Route path="/" component={Schools} />
           <Route component={Schools} />
         </Switch>
+        </ErrorBoundary>
       </main>
 
       <div className="pb-3 text-center text-[11px] text-slate-400">
@@ -816,7 +836,12 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <Gate />
+        {/* 🛡️ v3.2: sabse bahari ErrorBoundary — koi bhi hissa
+            (login, shell, page) crash ho to safed screen ki jagah
+            dostana Hindi screen + Home/Dobara-try button aayega. */}
+        <ErrorBoundary>
+          <Gate />
+        </ErrorBoundary>
         <Toaster />
       </AuthProvider>
     </QueryClientProvider>

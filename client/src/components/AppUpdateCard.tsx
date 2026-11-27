@@ -57,31 +57,38 @@ interface RowState {
 }
 
 const RELEASE_BASE =
-  "https://github.com/rahul74603/School_suits/releases/download/v3.0";
+  "https://github.com/rahul74603/School_suits/releases/download/v3.2";
 
 const APPS: Array<{ key: AppKey; label: string; defaultApk: string }> = [
   {
     key: "school",
     label: "School App",
-    defaultApk: `${RELEASE_BASE}/school-guardian-suite-v3.0.apk`,
+    defaultApk: `${RELEASE_BASE}/school-guardian-suite-v3.2.apk`,
   },
   {
     key: "parent",
     label: "Parents App",
-    defaultApk: `${RELEASE_BASE}/school-guardian-parent-v3.0.apk`,
+    defaultApk: `${RELEASE_BASE}/school-guardian-parent-v3.2.apk`,
   },
   {
     key: "master",
     label: "Master App (tumhari)",
-    defaultApk: `${RELEASE_BASE}/school-guardian-master-v3.0.apk`,
+    defaultApk: `${RELEASE_BASE}/school-guardian-master-v3.2.apk`,
   },
 ];
 
-function emptyRow(defaultApk: string): RowState {
+function emptyRow(_defaultApk: string): RowState {
+  // ⚠️ v3.2: yahan pehle version "3.0" / code "14" / v3.0 ka link
+  // PEHLE SE bhara aata tha — Super Admin bina badle button daba de
+  // to purana version hi "naya update" bankar chala jata tha aur
+  // kisi app me update dikhta hi nahi tha (user ke saath asal me
+  // hua, 2026-11-27). Ab teeno khaali aayenge — publish ki jaanch
+  // (neeche) khaali par rok deti hai, isliye asal number/link
+  // bharna hi padega.
   return {
-    versionName: "3.0",
-    versionCode: "14",
-    apkUrl: defaultApk,
+    versionName: "",
+    versionCode: "",
+    apkUrl: "",
     notes: "",
     mandatory: false,
     stage: "none",
@@ -163,10 +170,10 @@ export default function AppUpdateCard() {
       });
       return false;
     }
-    if (!row.apkUrl.trim()) {
+    if (!row.apkUrl.trim().startsWith("http")) {
       toast({
-        title: "APK link khaali hai",
-        description: "Bina link ke update khulega hi nahi.",
+        title: "APK link theek bharein",
+        description: "Link khaali hai ya http se shuru nahi hota — bina sahi link ke update khulega hi nahi.",
         variant: "destructive",
       });
       return false;

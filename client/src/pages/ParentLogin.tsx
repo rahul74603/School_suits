@@ -7,7 +7,10 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
 import { APP_VERSION_NAME } from "@/lib/appVersion";
-import { GraduationCap, Hash, Loader2, Lock, Phone } from "lucide-react";
+// 🛡️ Official product logo (v3.2) — Parent login par bhi wahi badge
+// jo app icon par hai, taaki parent ko ek hi pehchan har jagah mile.
+import { APP_LOGO_DATA_URI } from "@/lib/appLogo";
+import { Hash, Loader2, Lock, Phone } from "lucide-react";
 
 // =============================================================================
 // 👨‍👩‍👧 Parent Login (v2.2) — SIRF Parent App ki apni login screen.
@@ -124,9 +127,11 @@ export default function ParentLogin() {
         <Card className="w-full shadow-2xl">
           <CardHeader className="text-center space-y-2">
             <div className="flex justify-center">
-              <span className="bg-emerald-600 text-white p-3 rounded-2xl">
-                <GraduationCap className="h-9 w-9" />
-              </span>
+              <img
+                src={APP_LOGO_DATA_URI}
+                alt="School Guardians Suite"
+                className="h-16 w-16 rounded-full"
+              />
             </div>
             <CardTitle className="text-2xl font-bold">
               Guardian Parent

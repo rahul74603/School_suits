@@ -169,6 +169,16 @@ export function CertificateDialog({
   // Sports Merit (v3.0) ka editable field — uplabdhi ki line.
   const [sportsAchievement, setSportsAchievement] = useState<string>("");
   const certRef = useRef<HTMLDivElement>(null);
+  // 🖨 Print (v3.1): certificate app ke andar PrintViewer me khulta
+  // hai (Band karo + back button pakka) — uska HTML yahan rehta hai.
+  // ⚠️ CHETAAVNI (v3.2 fix): ye hook baaki hooks ke SAATH, neeche
+  // wale `if (!student || !school)` early-return se PEHLE hi rahega.
+  // v3.1 me ye galti se early-return ke BAAD chala gaya tha — pehla
+  // render (student null) 13 hooks, student aate hi 14 hooks → React
+  // "Rendered more hooks than during the previous render" phenk kar
+  // POORA app gira deta tha (white screen, back button bhi mara
+  // hua). Koi bhi hook kabhi early-return ke neeche mat lagana.
+  const [printHtml, setPrintHtml] = useState<string | null>(null);
 
   // Dialog khulte hi type + defaults taaze — purane student ke bhare
   // hue fields naye certificate me na ghus jayein.
@@ -210,11 +220,14 @@ export function CertificateDialog({
   const issueDateText = formatDobText(todayIso());
   const leavingDateText = formatDobText(leavingDate);
 
-  // 🖨 Print (v3.1): pehle ye window.open + document.write se nayi
-  // browser window me khulta tha — phone par wo window Chrome me
-  // khul jati thi aur band hi nahi hoti thi. Ab certificate app ke
-  // andar PrintViewer me khulta hai (Band karo + back button pakka).
-  const [printHtml, setPrintHtml] = useState<string | null>(null);
+  // Fee certificate ka kul jod — caller number hi deta hai, lekin
+  // kabhi string aa jaye to bhi render na fatega: sahi number bane
+  // to wahi, warna null (certificate par "—" chhapta hai).
+  const feeTotal =
+    student.feePaidTotal != null && Number.isFinite(Number(student.feePaidTotal))
+      ? Number(student.feePaidTotal)
+      : null;
+
   const handlePrint = () => {
     if (!certRef.current) return;
     setPrintHtml(certRef.current.innerHTML);
@@ -669,14 +682,14 @@ export function CertificateDialog({
                     <tr>
                       <td className="k">Total Fee Paid</td>
                       <td>
-                        {student.feePaidTotal != null
-                          ? `₹${student.feePaidTotal.toLocaleString("en-IN")}`
+                        {feeTotal != null
+                          ? `₹${feeTotal.toLocaleString("en-IN")}`
                           : "—"}
                       </td>
                     </tr>
                   </tbody>
                 </table>
-                {student.feePaidTotal == null ? (
+                {feeTotal == null ? (
                   <p className="cert-body" style={{ marginTop: 12 }}>
                     Note: Fee payment details could not be loaded —
                     please verify the total from the Fees records before
