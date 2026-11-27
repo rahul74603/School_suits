@@ -105,6 +105,38 @@ jobs:
           name: school-guardian-parent-apk
           path: ${{ steps.parentapk.outputs.file }}
 
+      # 👑 Master App (v2.2) — Super Admin ka ALAG app: web build
+      # VITE_MASTER_APP=1 ke saath (sirf Schools control + Demo School
+      # button), fir master flavor ka APK. Parent wali hi tarteeb:
+      # web assets ek hi jagah jate hain, isliye ye build baaki dono
+      # ke BAAD, dobara sync karke hota hai.
+      - name: Web build (vite) — Master App
+        env:
+          VITE_API_URL: https://school-guardian-api.onrender.com
+          VITE_MASTER_APP: "1"
+        run: npx vite build
+
+      - name: Capacitor sync (master web build -> android project)
+        run: npx cap sync android
+
+      - name: Master APK banao (debug, master flavor)
+        working-directory: android
+        run: ./gradlew assembleMasterDebug
+
+      - name: Master APK ka saaf naam rakho
+        id: masterapk
+        run: |
+          VERSION="${GITHUB_REF_NAME:-manual}"
+          cp android/app/build/outputs/apk/master/debug/app-master-debug.apk \
+             "school-guardian-master-${VERSION}.apk"
+          echo "file=school-guardian-master-${VERSION}.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Master APK artifact upload karo
+        uses: actions/upload-artifact@v4
+        with:
+          name: school-guardian-master-apk
+          path: ${{ steps.masterapk.outputs.file }}
+
       - name: Tag par GitHub Release banao (direct download link)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -112,4 +144,5 @@ jobs:
           files: |
             ${{ steps.apk.outputs.file }}
             ${{ steps.parentapk.outputs.file }}
+            ${{ steps.masterapk.outputs.file }}
           generate_release_notes: true
