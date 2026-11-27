@@ -21,6 +21,7 @@ import {
     type LibraryBook, type InsertLibraryBook,
     type LibraryIssue, type InsertLibraryIssue
  } from "@shared/schema";
+import { randomInt } from "crypto";
 import { eq, ilike, and, or } from "drizzle-orm";
 import { db } from "./db";
 import * as schema from "@shared/schema";
@@ -475,6 +476,47 @@ export interface ParentOverview {
 export interface EnsureParentResult {
   parentUserId: number;
   created: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 🏫 School Code helpers (v2.2) — Parent App login ki pehchan.
+// Har school ka ek chhota code hota hai (schools.code). Parent login par
+// code aata hai, server usse school dhoondhta hai aur parent ko sirf usi
+// school tak rakhta hai. Code hamesha UPPERCASE rakha jata hai; dhoondhne
+// par input bhi waisa hi saaf karke tulna hoti hai (chhota/bada akshar
+// ya aas-paas ki khaali jagah se login fail nahi hona chahiye).
+// ---------------------------------------------------------------------------
+export function normalizeSchoolCode(
+  code: string | null | undefined,
+): string {
+  return String(code ?? "").trim().toUpperCase();
+}
+
+// Naya school code banao: school ke naam ke pehle 3 akshar + 3 ank
+// (kul 6 characters, jaise "Green Valley School" -> "GRE482"). Naam me
+// akshar na milein to "SCH". Takraav (collision) par naye ank ke saath
+// dobara koshish; kai baar fail ho to ank 4 kar do (7 characters) —
+// code kabhi dohraaya nahi jayega, DB par unique index bhi hai.
+export async function generateUniqueSchoolCode(
+  store: { getSchoolByCode(code: string): Promise<School | undefined> },
+  name: string,
+): Promise<string> {
+  const letters = String(name ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "");
+  const slug = (letters.slice(0, 3) || "SCH").padEnd(3, "X");
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const digits = attempt < 8 ? 3 : 4;
+    const suffix = String(
+      randomInt(0, Math.pow(10, digits)),
+    ).padStart(digits, "0");
+    const candidate = `${slug}${suffix}`;
+    const existing = await store.getSchoolByCode(candidate);
+    if (!existing) return candidate;
+  }
+  // Yahan pahuchna lagbhag namumkin hai (12 takraav) — phir bhi code ke
+  // bina school nahi banne denge; samay-ank wala fallback hamesha alag.
+  return `${slug}${Date.now() % 100000}`;
 }
 
 // Contact -> saaf 10-digit mobile ("" agar theek number na bane).
@@ -960,6 +1002,9 @@ export interface IStorage {
 
   getSchools(): Promise<School[]>;
   getSchool(id: number): Promise<School | undefined>;
+  // School Code se school (v2.2) — Parent App login ki pehchan. Code na
+  // mile (ya purani DB me code column hi na ho) to undefined; crash nahi.
+  getSchoolByCode(code: string): Promise<School | undefined>;
   createSchool(school: InsertSchool): Promise<School>;
   updateSchool(id: number, school: Partial<InsertSchool>): Promise<School>;
 
@@ -1258,9 +1303,49 @@ export class DatabaseStorage implements IStorage {
     return school;
   }
 
+  async getSchoolByCode(code: string): Promise<School | undefined> {
+    const normalized = normalizeSchoolCode(code);
+    if (!normalized) return undefined;
+    try {
+      const [school] = await db
+        .select()
+        .from(schools)
+        .where(eq(schools.code, normalized));
+      return school;
+    } catch (err) {
+      // Purani DB jahan v2.2 wala `code` column abhi nahi aaya (Neon SQL
+      // baaki hai): login-by-code imaandari se fail hoga, server crash
+      // nahi karega. Asli wajah sirf server log me rahegi.
+      console.error(
+        "getSchoolByCode failed (schools.code column missing? v2.2 SQL baaki hai):",
+        err,
+      );
+      return undefined;
+    }
+  }
+
   async createSchool(insertSchool: InsertSchool): Promise<School> {
-    const [school] = await db.insert(schools).values(insertSchool).returning();
-    return school;
+    try {
+      const [school] = await db.insert(schools).values(insertSchool).returning();
+      return school;
+    } catch (err) {
+      // Purani DB (v2.2 `code` column abhi nahi aaya) par code ke saath
+      // insert fail hoga — school banna nahi rukna chahiye, isliye code
+      // hata kar ek baar dobara. SQL chalte hi code apne aap judne
+      // lagega. (Dusri kisi wajah ka error ho to wo bhi yahin phir se
+      // uthega — chhupaya nahi gaya.)
+      if (insertSchool.code == null) throw err;
+      console.error(
+        "createSchool with code failed — retrying without code (v2.2 SQL baaki hai?):",
+        err,
+      );
+      const { code: _dropped, ...withoutCode } = insertSchool;
+      const [school] = await db
+        .insert(schools)
+        .values(withoutCode)
+        .returning();
+      return school;
+    }
   }
 
   async updateSchool(id: number, schoolUpdate: Partial<InsertSchool>): Promise<School> {
@@ -2035,6 +2120,7 @@ export class MockStorage implements IStorage {
     {
       id: 1,
       name: "Offline Demo School",
+      code: "OFF001",
       logo: null,
       address: "Local Development",
       phone: "",
@@ -2191,10 +2277,19 @@ export class MockStorage implements IStorage {
     return this.schoolsData.find((item) => item.id === id);
   }
 
+  async getSchoolByCode(code: string): Promise<School | undefined> {
+    const normalized = normalizeSchoolCode(code);
+    if (!normalized) return undefined;
+    return this.schoolsData.find(
+      (item) => normalizeSchoolCode(item.code) === normalized,
+    );
+  }
+
   async createSchool(school: InsertSchool): Promise<School> {
     const created: School = {
       id: this.nextSchoolId++,
       name: school.name,
+      code: school.code ?? null,
       logo: school.logo ?? null,
       address: school.address,
       phone: school.phone,

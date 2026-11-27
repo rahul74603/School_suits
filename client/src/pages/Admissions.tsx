@@ -879,6 +879,9 @@ export default function Admissions() {
                   childName={lastAdmission.name}
                   admissionNo={lastAdmission.admissionNo}
                   schoolName={school?.name}
+                  schoolCode={
+                    typeof school?.code === "string" ? school.code : undefined
+                  }
                 />
                 <Button
                   size="sm"

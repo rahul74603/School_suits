@@ -602,6 +602,9 @@ export default function StudentProfile() {
                   childName={student.name}
                   admissionNo={student.admission_no}
                   schoolName={school?.name}
+                  schoolCode={
+                    typeof school?.code === "string" ? school.code : undefined
+                  }
                 />
               </div>
             </CardContent>

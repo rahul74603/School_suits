@@ -29,6 +29,9 @@ interface Props {
   childName: string;
   admissionNo: string;
   schoolName?: string | null;
+  // School Code (v2.2) — Parent App ke login ka pehla khana; mile to
+  // WhatsApp sandesh me lazmi jayega, warna parent login nahi kar payega.
+  schoolCode?: string | null;
   className?: string;
 }
 
@@ -37,6 +40,7 @@ export default function ParentAppInviteButton({
   childName,
   admissionNo,
   schoolName,
+  schoolCode,
   className,
 }: Props) {
   const { toast } = useToast();
@@ -64,6 +68,7 @@ export default function ParentAppInviteButton({
       schoolName: schoolName || "School Guardian Suite",
       childName,
       admissionNo,
+      schoolCode: schoolCode ?? undefined,
     });
     if (!url) {
       toast({

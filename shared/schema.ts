@@ -11,6 +11,15 @@ export const schools = pgTable("schools", {
   email: text("email"),
   primaryColor: text("primary_color").default("#1976D2"),
   secondaryColor: text("secondary_color").default("#FF9800"),
+  // School Code (v2.2): har school ki chhoti, insaanon ke liye aasan
+  // pehchan (6–8 akshar/ank, jaise "DEM482" ya demo ka "DEMO01"). Parent
+  // App ke login par parent yehi code dalta hai — server usi se school
+  // pehchanta hai aur parent ko SIRF usi school ke data tak rakhta hai
+  // (data-mix rokne ki pehli chaabi). Super Admin school banate samay
+  // server khud bana deta hai (storage.generateUniqueSchoolCode); Master
+  // App ki Schools list me dikhta hai. Column live DB me v2.2 ke Neon
+  // SQL se aayega (NOTES dekho) — unique index bhi wahin hai.
+  code: text("code").unique(),
   // School settings (Phase 2 §6): academic session + admission-number style,
   // Postgres roop of Electron school_info ke adm_prefix/adm_year/adm_start.
   session: text("session"),

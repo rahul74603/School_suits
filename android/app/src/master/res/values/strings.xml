@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- 👑 Guardian Master flavor ke naam (v2.2) — yehi string naam main
+     wale strings.xml me bhi hain; flavor ki res, main ki res par
+     bhari padti hai, isliye master app ka label/icon-naam
+     "Guardian Master" banta hai aur uska package-scheme bhi apna
+     rehta hai. School/parent flavors par inka koi asar nahi. -->
+<resources>
+    <string name="app_name">Guardian Master</string>
+    <string name="title_activity_main">Guardian Master</string>
+    <string name="package_name">com.schoolguardian.master</string>
+    <string name="custom_url_scheme">com.schoolguardian.master</string>
+</resources>

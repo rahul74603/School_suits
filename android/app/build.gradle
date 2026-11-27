@@ -19,8 +19,8 @@ android {
         applicationId "com.schoolguardian.suite"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 12
-        versionName "2.1"
+        versionCode 13
+        versionName "2.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -28,18 +28,23 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    // --- Do apps, ek hi project (v2.1) -------------------------------------
+    // --- Teen apps, ek hi project (v2.1 parent, v2.2 master) --------------
     // school = aam School Guardian Suite (office/staff wala pura app).
     // parent = Guardian Parent — ALAG app: apna applicationId hai, isliye
     //   parent ke phone par school app ke saath-saath install ho sakta hai
     //   (aur school app ke update se iska data/login nahi udta). Iska web
     //   hissa VITE_PARENT_APP=1 wale vite build se banta hai (sirf parent
-    //   login + Parent Home) — .github/workflows/android.yml me dono
+    //   login + Parent Home) — .github/workflows/android.yml me teeno
     //   build alag-alag hote hain.
     //   Label "Guardian Parent" flavor ke apne strings.xml se aata hai
     //   (src/parent/res/values/strings.xml — app_name override).
+    // master = Guardian Master — Super Admin ka ALAG app (v2.2): apna
+    //   applicationId, isliye teeno apps ek hi phone par saath install
+    //   ho sakte hain. Iska web hissa VITE_MASTER_APP=1 wale vite build
+    //   se banta hai (sirf Schools control + Demo School button).
+    //   Label "Guardian Master" src/master/res/values/strings.xml se.
     // Signing: flavor me KOI alag signing setting nahi hai — neeche
-    //   buildTypes.debug wali sgsInternal chaabi hi dono flavors ko
+    //   buildTypes.debug wali sgsInternal chaabi hi teeno flavors ko
     //   sign karti hai (signing block bilkul nahi badla gaya).
     flavorDimensions "app"
     productFlavors {
@@ -49,6 +54,10 @@ android {
         parent {
             dimension "app"
             applicationId "com.schoolguardian.parent"
+        }
+        master {
+            dimension "app"
+            applicationId "com.schoolguardian.master"
         }
     }
     signingConfigs {
