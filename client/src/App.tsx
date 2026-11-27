@@ -24,6 +24,9 @@ import { APP_VERSION_NAME } from "./lib/appVersion";
 // 🔄 Update check (v3.0) — har shell me mount; naya version
 // released ho to sandesh deta hai.
 import UpdateCheck from "@/components/UpdateCheck";
+// 🔙 Modal stack (v3.1) — back button pehle khule overlay (jaise
+// PrintViewer) ko band karta hai, history baad me.
+import { closeTopModal, modalStackSize } from "./lib/modalStack";
 // 📲 Master App: App Update publish card (v3.0).
 import AppUpdateCard from "@/components/AppUpdateCard";
 // 💾 Master App: Backup card (v3.0) + School App ka backup banner.
@@ -710,15 +713,26 @@ function Gate() {
   return <Router />;
 }
 
-// 📱 Android back button ka bartav (v1.3):
-//  - Andar ke kisi page par ho (history me peeche ja sakte ho) → ek kadam
-//    peeche (window.history.back()) — pehle back dabate hi poori app
-//    minimize/band ho jati thi, wo marz yahin theek hota hai.
-//  - Sabse pehle (root/home) page par: pehla back → toast "App band karne
-//    ke liye ek baar aur back dabao"; 2 second ke andar dusra back →
-//    App.exitApp(). Galti se ek back par app band nahi hogi.
-//  - Sirf native (Android) par lagta hai; web/Electron par listener hi
-//    nahi lagta, isliye wahan ka bartav bilkul pehle jaisa.
+// 📱 Android back button ka bartav (v1.3, v3.1 me pakka):
+//  Back dabane par is kram me faisla hota hai:
+//  (i)   App ke andar koi overlay khula hai jo modal-stack me
+//        register hai (PrintViewer — print page) → SABSE PEHLE wahi
+//        band. (User ki shikayat thi: "table khol lia to ab close
+//        nahi ho rahi" — print page Chrome ki window me khulta tha,
+//        back use band hi nahi karta tha. Ab print app ke andar
+//        khulta hai aur back use pakka band karta hai.)
+//  (ii)  Stack khaali hai par koi Radix dialog khula dikh raha hai
+//        ([data-state="open"]) → Escape key bhej kar band karo
+//        (Radix Escape par khud band hota hai) — fallback rasta.
+//  (iii) Andar ke kisi page par ho (history me peeche ja sakte ho)
+//        → ek kadam peeche (window.history.back()).
+//  (iv)  History bhi nahi aur home par bhi nahi (gehra link) →
+//        home route par le jao (SPA ke andar hi, reload nahi).
+//  (v)   Home par: pehla back → toast "App band karne ke liye ek
+//        baar aur back dabao"; 2 second ke andar dusra back →
+//        App.exitApp(). Galti se ek back par app band nahi hogi.
+//  - Sirf native (Android) par lagta hai; web/Electron par listener
+//    hi nahi lagta, isliye wahan ka bartav bilkul pehle jaisa.
 function useAndroidBackButton() {
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
@@ -728,10 +742,45 @@ function useAndroidBackButton() {
     let cancelled = false;
 
     CapacitorApp.addListener("backButton", ({ canGoBack }) => {
+      // (i) Khula overlay (PrintViewer aadi) — sabse upar wala band.
+      if (modalStackSize() > 0 && closeTopModal()) {
+        return;
+      }
+
+      // (ii) Radix dialog fallback — Escape bhej kar band karo.
+      try {
+        const openDialog = document.querySelector(
+          '[data-state="open"][role="dialog"], [data-state="open"][role="alertdialog"]',
+        );
+        if (openDialog) {
+          document.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Escape",
+              code: "Escape",
+              bubbles: true,
+            }),
+          );
+          return;
+        }
+      } catch {
+        // DOM na mile to aage badho — back rukna nahi chahiye.
+      }
+
+      // (iii) History me ek kadam peeche.
       if (canGoBack) {
         window.history.back();
         return;
       }
+
+      // (iv) Home par nahi ho aur history bhi nahi — home par jao
+      // (wouter popstate sunta hai; poora reload nahi hota).
+      if (window.location.pathname !== "/") {
+        window.history.pushState(null, "", "/");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+        return;
+      }
+
+      // (v) Home par double-back → exit (purana toast bartav).
       const now = Date.now();
       if (now - lastRootBackAt < 2000) {
         void CapacitorApp.exitApp();

@@ -278,7 +278,7 @@ export default function LeavesPage() {
             <p className="text-sm">
               {row.fromDate} → {row.toDate}
             </p>
-            <p className="text-sm text-muted-foreground">{row.reason}</p>
+            <p className="text-sm text-muted-foreground break-words">{row.reason}</p>
           </div>
           {isPrincipal && row.status === "pending" && (
             <div className="flex gap-2">

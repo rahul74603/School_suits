@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import PrintViewer from "@/components/PrintViewer";
 import { apiGet } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
@@ -257,35 +258,25 @@ export default function Broadsheet() {
       (e: ExamApiRow) => (e.resultsStatus ?? "approved") !== "approved",
     ) ?? false;
 
-  // Print: ReportCards wala hi tareeka — nayi window me sirf sheet,
-  // apni styles ke saath (screen ki baaki UI print nahi hoti).
+  // Print (v3.1): pehle window.open + document.write se nayi browser
+  // window khulti thi — phone par band hi nahi hoti thi. Ab sheet
+  // app ke andar PrintViewer me khulti hai (Band karo + back
+  // button pakka). Print CSS wahi purani, bas viewer ke andar.
+  const BROADSHEET_PRINT_CSS = `
+    @page { size: A4 landscape; margin: 10mm; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 12px; }
+    h1 { font-size: 18px; text-align: center; margin: 0 0 2px; }
+    p.sub { text-align: center; font-size: 12px; color: #555; margin: 0 0 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid #333; padding: 5px 6px; text-align: center; }
+    th { background: #1e40af; color: #fff; }
+    td.name { text-align: left; font-weight: 600; }
+    @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
+  `;
+  const [printHtml, setPrintHtml] = useState<string | null>(null);
   const handlePrint = () => {
     if (!printRef.current) return;
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) return;
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Broadsheet - ${selectedGroup?.exams[0]?.examName ?? ""} - Class ${className}</title>
-          <style>
-            @page { size: A4 landscape; margin: 10mm; }
-            body { font-family: Arial, sans-serif; margin: 0; padding: 12px; }
-            h1 { font-size: 18px; text-align: center; margin: 0 0 2px; }
-            p.sub { text-align: center; font-size: 12px; color: #555; margin: 0 0 12px; }
-            table { width: 100%; border-collapse: collapse; font-size: 12px; }
-            th, td { border: 1px solid #333; padding: 5px 6px; text-align: center; }
-            th { background: #1e40af; color: #fff; }
-            td.name { text-align: left; font-weight: 600; }
-            @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
-          </style>
-        </head>
-        <body>
-          ${printRef.current.innerHTML}
-          <script>window.onload = () => { window.print(); window.close(); };</script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+    setPrintHtml(printRef.current.innerHTML);
   };
 
   if (isSuperAdmin) {
@@ -514,6 +505,15 @@ export default function Broadsheet() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {printHtml !== null && (
+        <PrintViewer
+          title={`Broadsheet - ${selectedGroup?.exams[0]?.examName ?? ""} - Class ${className}`}
+          html={printHtml}
+          cssText={BROADSHEET_PRINT_CSS}
+          onClose={() => setPrintHtml(null)}
+        />
       )}
     </div>
   );

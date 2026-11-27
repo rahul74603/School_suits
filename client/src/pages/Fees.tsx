@@ -10,6 +10,7 @@ import { Search, IndianRupee, Trash2, Plus, Bus, Printer, MessageCircle, Clock, 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useReactToPrint } from "react-to-print";
 import { apiGet, apiPost, apiDel, ApiError } from "@/lib/api";
+import { openExternal } from "@/lib/openExternal";
 import { downloadCsv, todayStamp } from "@/lib/exportCsv";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
@@ -586,9 +587,11 @@ export default function Fees() {
           toast({ title: "No Number", description: "Student contact number missing", variant: "destructive" });
           return;
       }
-      const phone = "91" + selectedStudent.contact; 
+      const phone = "91" + selectedStudent.contact;
       const text = `Dear Parent,%0A%0APayment Received for ${selectedStudent.name}.%0A%0AReceipt No: ${currentReceipt.receiptNo}%0ADate: ${currentReceipt.date}%0AAmount: ₹${currentReceipt.total}%0A%0ADetails:%0A${currentReceipt.items.map((i:any) => `- ${i.name}: ₹${i.amount}`).join('%0A')}%0A%0AThank you,%0A${schoolInfo.name || "School Admin"}`;
-      window.open(`https://web.whatsapp.com/send?phone=${phone}&text=${text}`, '_blank');
+      // v3.1: openExternal — WhatsApp app ke andar (Custom Tab)
+      // khule, seedha Chrome me nahi.
+      void openExternal(`https://web.whatsapp.com/send?phone=${phone}&text=${text}`);
   };
 
   // Admission Fee ka asal hisaab status API se aata hai: admissionTotal
@@ -784,11 +787,9 @@ export default function Fees() {
                                         <div className="text-[11px] text-green-800">Kul baaki ₹{totalDue} — parent ko pehle se likha sandesh bhejein.</div>
                                     </div>
                                     {parentMobile ? (
-                                        <a href={waReminderUrl} target="_blank" rel="noreferrer" className="shrink-0">
-                                            <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white">
-                                                <MessageCircle className="h-4 w-4 mr-1" /> Reminder Bhejein
-                                            </Button>
-                                        </a>
+                                        <Button size="sm" className="shrink-0 bg-green-600 hover:bg-green-700 text-white" onClick={() => void openExternal(waReminderUrl)}>
+                                            <MessageCircle className="h-4 w-4 mr-1" /> Reminder Bhejein
+                                        </Button>
                                     ) : (
                                         <span className="text-[11px] font-medium text-amber-700 bg-amber-100 border border-amber-200 rounded px-2 py-1">
                                             Parent ka mobile number is student ke record me nahi hai — pehle number jodein.
@@ -924,15 +925,15 @@ export default function Fees() {
 
       {/* --- MODALS --- */}
       <Dialog open={isAddDueOpen} onOpenChange={setIsAddDueOpen}>
-        <DialogContent><DialogHeader><DialogTitle>Add Pending Fee</DialogTitle></DialogHeader><div className="space-y-4 py-2"><div className="space-y-2"><Label>Fee Name</Label><Input placeholder="e.g. Exam Fee" value={newDue.name} onChange={e => setNewDue({...newDue, name: e.target.value})}/></div><div className="space-y-2"><Label>Amount (₹)</Label><Input type="number" placeholder="500" value={newDue.amount} onChange={e => setNewDue({...newDue, amount: e.target.value})}/></div></div><DialogFooter><Button onClick={handleAddDue}>Save Due</Button></DialogFooter></DialogContent>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg"><DialogHeader><DialogTitle>Add Pending Fee</DialogTitle></DialogHeader><div className="space-y-4 py-2"><div className="space-y-2"><Label>Fee Name</Label><Input placeholder="e.g. Exam Fee" value={newDue.name} onChange={e => setNewDue({...newDue, name: e.target.value})}/></div><div className="space-y-2"><Label>Amount (₹)</Label><Input type="number" placeholder="500" value={newDue.amount} onChange={e => setNewDue({...newDue, amount: e.target.value})}/></div></div><DialogFooter><Button onClick={handleAddDue}>Save Due</Button></DialogFooter></DialogContent>
       </Dialog>
 
       <Dialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-        <DialogContent><DialogHeader><DialogTitle>Confirm Payment</DialogTitle></DialogHeader><div className="py-4 text-center"><p className="text-4xl font-bold text-green-600">₹{totalPayable}</p></div><DialogFooter><Button onClick={finalizePayment} className="bg-green-600">Confirm & Generate Receipt</Button></DialogFooter></DialogContent>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg"><DialogHeader><DialogTitle>Confirm Payment</DialogTitle></DialogHeader><div className="py-4 text-center"><p className="text-4xl font-bold text-green-600">₹{totalPayable}</p></div><DialogFooter><Button onClick={finalizePayment} className="bg-green-600">Confirm & Generate Receipt</Button></DialogFooter></DialogContent>
       </Dialog>
 
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-2xl">
             <DialogHeader><DialogTitle className="flex flex-wrap gap-2 justify-between items-center"><span>Payment Receipt</span><div className="flex gap-2"><Button size="sm" variant="outline" onClick={handlePrint}><Printer className="h-4 w-4 mr-2"/> Print / PDF</Button><Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={sendWhatsApp}><MessageCircle className="h-4 w-4 mr-2"/> WhatsApp</Button></div></DialogTitle></DialogHeader>
             <div className="border p-6 bg-white shadow-sm" ref={receiptRef}>
                 <div className="text-center border-b pb-4 mb-4">
@@ -956,7 +957,7 @@ export default function Fees() {
           ek kisht) → preview → Confirm. Server pehle se bani kishten
           skip karta hai; nataija (bani/skip) yahin sach dikhta hai. */}
       <Dialog open={isInstOpen} onOpenChange={setIsInstOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Layers className="h-5 w-5 text-purple-600" /> Fee Kishten Banao

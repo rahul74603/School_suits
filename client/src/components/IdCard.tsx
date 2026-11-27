@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Printer } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import PrintViewer from "./PrintViewer";
 
 // 🪪 ID Card (v1.7) — dead component ko zinda kiya gaya.
 // Asal design ~/workspace ke purane exec copy ke
@@ -21,9 +22,10 @@ import { apiGet } from "@/lib/api";
 //  2. Dead photo hamesha 🎓 emoji tha — yahan asal photo aati hai
 //     (neeche resolveStudentPhotoUrl dekho); photo na ho to bacche ke
 //     naam ke initials wala placeholder.
-//  3. Dead print CSS me ajeeb rotate hack tha — yahan print
-//     ReportCards wala pakka pattern hai (naya window, standalone
-//     HTML+CSS, auto print), card seedha portrait chhapta hai.
+//  3. Dead print CSS me ajeeb rotate hack tha — yahan card seedha
+//     portrait chhapta hai. (v3.1: print ab nayi browser window ki
+//     jagah app ke andar PrintViewer me khulta hai — neeche
+//     buildIdCardPrintData dekho.)
 //
 // Photo asal me kahan hai (saboot ke saath): students table me `photo`
 // column hai, lekin client use KABHI nahi bharta — asal photo hamesha
@@ -247,7 +249,13 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export function printIdCard({
+// Print data banane wala (v3.1): pehle ye function seedha
+// window.open + document.write se nayi browser window kholta tha —
+// phone par wo window Chrome me khul jati thi aur band nahi hoti
+// thi. Ab ye sirf { title, html, cssText } banata hai aur caller
+// (IdCardDialog) use app ke andar PrintViewer me kholta hai —
+// Band karo + back button pakka.
+export function buildIdCardPrintData({
   student,
   school,
   photoUrl,
@@ -255,9 +263,7 @@ export function printIdCard({
   student: IdCardStudent;
   school: IdCardSchool;
   photoUrl?: string | null;
-}) {
-  const win = window.open("", "_blank");
-  if (!win) return;
+}): { title: string; html: string; cssText: string } {
   const color = headerColor(school);
   const photoHtml = photoUrl
     ? `<img src="${photoUrl}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:9999px;" />`
@@ -268,17 +274,7 @@ export function printIdCard({
   const row = (label: string, value: string) =>
     `<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid #f1f5f9;padding-bottom:6px;"><span style="color:#64748b;">${escapeHtml(label)}</span><span style="font-weight:600;color:#1e293b;text-align:right;">${escapeHtml(value)}</span></div>`;
 
-  win.document.write(`
-    <html>
-      <head>
-        <title>ID Card - ${escapeHtml(student.name)}</title>
-        <style>
-          @page { size: A4; margin: 12mm; }
-          body { font-family: Arial, sans-serif; margin: 0; padding: 16px; }
-          @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
-        </style>
-      </head>
-      <body>
+  const html = `
         <div style="width:340px;margin:0 auto;background:#fff;border:1px solid #cbd5e1;border-radius:12px;overflow:hidden;font-family:Arial,sans-serif;">
           <div style="background:linear-gradient(135deg, ${color}, #1e3a8a);color:#fff;text-align:center;padding:16px 16px 52px;">
             ${logoHtml}
@@ -302,17 +298,23 @@ export function printIdCard({
             ${escapeHtml(school.session ? `Valid for Session ${school.session}` : school.name)}
           </div>
         </div>
-        <script>window.onload = () => { window.print(); window.close(); };</script>
-      </body>
-    </html>
-  `);
-  win.document.close();
+  `;
+  return {
+    title: `ID Card - ${student.name}`,
+    html,
+    cssText: `
+      @page { size: A4; margin: 12mm; }
+      body { font-family: Arial, sans-serif; margin: 0; padding: 16px; }
+      @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
+    `,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Dialog wrapper — Students list aur Student Profile dono yahi istemal
 // karte hain: khulte hi photo apne aap load hoti hai, Print button
-// upar wala printIdCard chalata hai.
+// upar wala buildIdCardPrintData chalata hai aur card PrintViewer
+// me khulta hai (v3.1).
 // ---------------------------------------------------------------------------
 
 export function IdCardDialog({
@@ -328,6 +330,13 @@ export function IdCardDialog({
 }) {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [photoLoading, setPhotoLoading] = useState(false);
+  // 🖨 PrintViewer (v3.1) — Print dabane par card ka print data yahan
+  // rakha jata hai aur viewer khul jata hai (Dialog ke upar).
+  const [printData, setPrintData] = useState<{
+    title: string;
+    html: string;
+    cssText: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!open || !student) return;
@@ -347,8 +356,9 @@ export function IdCardDialog({
   }, [open, student]);
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-white max-w-md max-h-[92vh] overflow-y-auto">
+      <DialogContent className="bg-white max-w-[calc(100vw-2rem)] sm:max-w-md max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap gap-3 justify-between items-center pr-6">
             <span>Student ID Card</span>
@@ -356,7 +366,9 @@ export function IdCardDialog({
               <Button
                 size="sm"
                 className="bg-blue-600 hover:bg-blue-700"
-                onClick={() => printIdCard({ student, school, photoUrl })}
+                onClick={() =>
+                  setPrintData(buildIdCardPrintData({ student, school, photoUrl }))
+                }
               >
                 <Printer className="h-4 w-4 mr-2" /> Print
               </Button>
@@ -384,5 +396,14 @@ export function IdCardDialog({
         )}
       </DialogContent>
     </Dialog>
+    {printData && (
+      <PrintViewer
+        title={printData.title}
+        html={printData.html}
+        cssText={printData.cssText}
+        onClose={() => setPrintData(null)}
+      />
+    )}
+    </>
   );
 }

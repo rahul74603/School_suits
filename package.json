@@ -1,6 +1,6 @@
 {
   "name": "school-guardian-suite",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "license": "MIT",
   "main": "main/main.js",
   "scripts": {
@@ -21,6 +21,7 @@
   "dependencies": {
     "@capacitor/android": "^7.6.10",
     "@capacitor/app": "^7.1.2",
+    "@capacitor/browser": "^7.0.0",
     "@capacitor/core": "^7.6.10",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",

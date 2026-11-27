@@ -262,7 +262,7 @@ export default function Login() {
       {/* Password bhool gaye — imaandar jaankari (koi email/OTP nahi)  */}
       {/* ------------------------------------------------------------ */}
       <Dialog open={forgotOpen} onOpenChange={setForgotOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <KeyRound className="h-5 w-5 text-blue-600" /> Password bhool

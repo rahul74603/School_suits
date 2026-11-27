@@ -191,7 +191,7 @@ export default function CertificatesPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-2">
-            <div className="relative min-w-52 flex-1">
+            <div className="relative min-w-[160px] flex-1">
               <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 value={search}
@@ -220,7 +220,7 @@ export default function CertificatesPage() {
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"
               >
                 <div className="min-w-0">
-                  <p className="font-medium">{row.name}</p>
+                  <p className="font-medium break-words">{row.name}</p>
                   <p className="text-xs text-muted-foreground">
                     Class {row.class}
                     {row.section ? `-${row.section}` : ""} • Adm. No.{" "}

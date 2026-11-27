@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import PrintViewer from "@/components/PrintViewer";
 import { apiGet } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
@@ -177,61 +178,49 @@ export default function ReportCards() {
     setLoading(false);
   };
 
+  // Print (v3.1): pehle window.open + document.write se nayi browser
+  // window khulti thi — phone par wo Chrome me khul jati thi aur
+  // band nahi hoti thi. Ab report card app ke andar PrintViewer me
+  // khulta hai (Band karo + back button pakka). Print CSS wahi
+  // purani hai, bas ab viewer ke andar lagti hai.
+  const REPORT_CARD_PRINT_CSS = `
+    @page { size: A4; margin: 10mm; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+    .report-card { border: 3px double #333; padding: 20px; max-width: 800px; margin: 0 auto; }
+    .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 20px; }
+    .school-name { font-size: 24px; font-weight: bold; color: #1e40af; }
+    .school-info { font-size: 12px; color: #666; margin-top: 5px; }
+    .title { font-size: 18px; font-weight: bold; text-align: center; margin: 15px 0; background: #f3f4f6; padding: 8px; }
+    .student-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 13px; }
+    .info-row { display: flex; }
+    .info-label { font-weight: bold; width: 120px; color: #374151; }
+    .marks-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
+    .marks-table th { background: #1e40af; color: white; padding: 8px; text-align: left; border: 1px solid #333; }
+    .marks-table td { padding: 8px; border: 1px solid #333; }
+    .marks-table .text-center { text-align: center; }
+    .result-box { display: flex; justify-content: space-around; margin: 20px 0; padding: 15px; background: #f9fafb; border: 2px solid #e5e7eb; }
+    .result-item { text-align: center; }
+    .result-label { font-size: 12px; color: #6b7280; }
+    .result-value { font-size: 20px; font-weight: bold; color: #1e40af; }
+    .pass { color: #059669; }
+    .fail { color: #dc2626; }
+    .grade-a-plus { color: #059669; }
+    .grade-a { color: #2563eb; }
+    .grade-b { color: #7c3aed; }
+    .grade-c { color: #ea580c; }
+    .grade-d { color: #dc2626; }
+    .grade-f { color: #991b1b; font-weight: bold; }
+    .remarks { margin-top: 20px; padding: 10px; border: 1px solid #e5e7eb; min-height: 60px; }
+    .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
+    .signature-box { text-align: center; width: 150px; }
+    .signature-line { border-top: 1px solid #333; margin-top: 40px; padding-top: 5px; font-size: 12px; }
+    .footer { text-align: center; margin-top: 20px; font-size: 11px; color: #6b7280; }
+    @media print { .no-print { display: none; } body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
+  `;
+  const [printHtml, setPrintHtml] = useState<string | null>(null);
   const handlePrint = () => {
     if (!printRef.current) return;
-    
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) return;
-
-    const printContent = printRef.current.innerHTML;
-    
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Report Card - ${student?.name}</title>
-          <style>
-            @page { size: A4; margin: 10mm; }
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-            .report-card { border: 3px double #333; padding: 20px; max-width: 800px; margin: 0 auto; }
-            .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 15px; margin-bottom: 20px; }
-            .school-name { font-size: 24px; font-weight: bold; color: #1e40af; }
-            .school-info { font-size: 12px; color: #666; margin-top: 5px; }
-            .title { font-size: 18px; font-weight: bold; text-align: center; margin: 15px 0; background: #f3f4f6; padding: 8px; }
-            .student-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; font-size: 13px; }
-            .info-row { display: flex; }
-            .info-label { font-weight: bold; width: 120px; color: #374151; }
-            .marks-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; }
-            .marks-table th { background: #1e40af; color: white; padding: 8px; text-align: left; border: 1px solid #333; }
-            .marks-table td { padding: 8px; border: 1px solid #333; }
-            .marks-table .text-center { text-align: center; }
-            .result-box { display: flex; justify-content: space-around; margin: 20px 0; padding: 15px; background: #f9fafb; border: 2px solid #e5e7eb; }
-            .result-item { text-align: center; }
-            .result-label { font-size: 12px; color: #6b7280; }
-            .result-value { font-size: 20px; font-weight: bold; color: #1e40af; }
-            .pass { color: #059669; }
-            .fail { color: #dc2626; }
-            .grade-a-plus { color: #059669; }
-            .grade-a { color: #2563eb; }
-            .grade-b { color: #7c3aed; }
-            .grade-c { color: #ea580c; }
-            .grade-d { color: #dc2626; }
-            .grade-f { color: #991b1b; font-weight: bold; }
-            .remarks { margin-top: 20px; padding: 10px; border: 1px solid #e5e7eb; min-height: 60px; }
-            .signatures { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
-            .signature-box { text-align: center; width: 150px; }
-            .signature-line { border-top: 1px solid #333; margin-top: 40px; padding-top: 5px; font-size: 12px; }
-            .footer { text-align: center; margin-top: 20px; font-size: 11px; color: #6b7280; }
-            @media print { .no-print { display: none; } body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
-          </style>
-        </head>
-        <body>
-          ${printContent}
-          <script>window.onload = () => { window.print(); window.close(); };</script>
-        </body>
-      </html>
-    `);
-    
-    printWindow.document.close();
+    setPrintHtml(printRef.current.innerHTML);
   };
 
   const openPreview = (result: ExamResult) => {
@@ -271,7 +260,7 @@ export default function ReportCards() {
       {/* Header */}
       <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-slate-800">
             <FileText className="h-8 w-8 text-blue-600" /> Report Cards
           </h1>
           <p className="text-gray-500 mt-1">Generate and print student report cards</p>
@@ -448,7 +437,7 @@ export default function ReportCards() {
 
       {/* Report Card Preview Dialog */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex flex-wrap gap-3 justify-between items-center">
               <span>Report Card Preview</span>
@@ -606,6 +595,15 @@ export default function ReportCards() {
       </Dialog>
 
       </>
+      )}
+
+      {printHtml !== null && (
+        <PrintViewer
+          title={`Report Card - ${student?.name ?? ""}`}
+          html={printHtml}
+          cssText={REPORT_CARD_PRINT_CSS}
+          onClose={() => setPrintHtml(null)}
+        />
       )}
     </div>
   );

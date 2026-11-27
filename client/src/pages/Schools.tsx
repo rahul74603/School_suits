@@ -1094,7 +1094,7 @@ export default function Schools() {
       {/* Naya School + pehla Principal                                     */}
       {/* ---------------------------------------------------------------- */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Building2 className="h-5 w-5 text-blue-600" /> Naya School
@@ -1283,7 +1283,7 @@ export default function Schools() {
           if (!open) setDeactivateTarget(null);
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
           <DialogHeader>
             <DialogTitle>School band karein?</DialogTitle>
             <DialogDescription>
@@ -1319,7 +1319,7 @@ export default function Schools() {
           }
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <KeyRound className="h-5 w-5 text-blue-600" /> Password reset
@@ -1378,7 +1378,7 @@ export default function Schools() {
           if (!open) setResetResult(null);
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-green-600" /> Naya

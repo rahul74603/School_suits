@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Printer } from "lucide-react";
 import { formatDobText, type IdCardSchool } from "./IdCard";
+import PrintViewer from "./PrintViewer";
 
 // 📜 Certificates (v1.7) — TC (Transfer Certificate) + Bonafide.
 // (v2.0, Arena port #4: Character, Migration aur Birth Verification
@@ -110,6 +111,19 @@ const CERT_CSS = `
   .cert-signs { display: flex; justify-content: space-between; margin-top: 46px; }
   .cert-sign { text-align: center; width: 180px; font-size: 12.5px; }
   .cert-sign-line { border-top: 1px solid #333; margin-top: 42px; padding-top: 5px; }
+  /* v3.1: phone par certificate preview saaf padhe — padding aur
+     label-column chhote. Sirf SCREEN ke liye hai; print window me
+     ye niyam lagu hi nahi hote, chhapai bilkul waisi ki waisi. */
+  @media screen and (max-width: 640px) {
+    .cert { padding: 16px 14px; }
+    .cert-school { font-size: 19px; }
+    .cert-title { font-size: 14px; }
+    .cert-body { font-size: 13.5px; line-height: 1.75; }
+    .cert-fields { font-size: 12.5px; }
+    .cert-fields td { padding: 5px 4px; }
+    .cert-fields td.k { width: 108px; }
+    .cert-sign { width: 45%; }
+  }
   @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
 `;
 
@@ -180,7 +194,7 @@ export function CertificateDialog({
   if (!student || !school) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="bg-white max-w-md">
+        <DialogContent className="bg-white max-w-[calc(100vw-2rem)] sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Certificate</DialogTitle>
           </DialogHeader>
@@ -196,32 +210,20 @@ export function CertificateDialog({
   const issueDateText = formatDobText(todayIso());
   const leavingDateText = formatDobText(leavingDate);
 
+  // 🖨 Print (v3.1): pehle ye window.open + document.write se nayi
+  // browser window me khulta tha — phone par wo window Chrome me
+  // khul jati thi aur band hi nahi hoti thi. Ab certificate app ke
+  // andar PrintViewer me khulta hai (Band karo + back button pakka).
+  const [printHtml, setPrintHtml] = useState<string | null>(null);
   const handlePrint = () => {
     if (!certRef.current) return;
-    const win = window.open("", "_blank");
-    if (!win) return;
-    win.document.write(`
-      <html>
-        <head>
-          <title>${CERT_TITLES[type]} - ${student.name}</title>
-          <style>
-            @page { size: A4; margin: 14mm; }
-            body { margin: 0; padding: 10px; }
-            ${CERT_CSS}
-          </style>
-        </head>
-        <body>
-          ${certRef.current.innerHTML}
-          <script>window.onload = () => { window.print(); window.close(); };</script>
-        </body>
-      </html>
-    `);
-    win.document.close();
+    setPrintHtml(certRef.current.innerHTML);
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-white max-w-4xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="bg-white max-w-[calc(100vw-2rem)] sm:max-w-4xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap gap-3 justify-between items-center pr-6">
             <span>
@@ -819,5 +821,14 @@ export function CertificateDialog({
         </div>
       </DialogContent>
     </Dialog>
+    {printHtml !== null && (
+      <PrintViewer
+        title={`${CERT_TITLES[type]} - ${student.name}`}
+        html={printHtml}
+        cssText={`@page { size: A4; margin: 14mm; } body { margin: 0; padding: 10px; } ${CERT_CSS}`}
+        onClose={() => setPrintHtml(null)}
+      />
+    )}
+    </>
   );
 }

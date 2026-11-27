@@ -155,7 +155,7 @@ export default function FinancialDashboard() {
       {/* Header */}
       <div className="flex flex-col gap-4 md:flex-row md:justify-between md:items-center">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-slate-800">
             <TrendingUp className="h-8 w-8 text-blue-600" /> Financial Dashboard
           </h1>
           <p className="text-gray-500 mt-1">Track income, expenses and profitability</p>

@@ -119,6 +119,9 @@ export function clearSession(): void {
   } catch {
     // ignore
   }
+  // v3.1: session khatm = GET cache bhi saaf (neeche wala section) —
+  // agla user pichle user ka data kabhi na dekhe.
+  clearApiCache();
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +210,218 @@ function notifySessionExpired(): void {
 }
 
 // ---------------------------------------------------------------------------
-// apiFetch — har authenticated request yahin se jayegi.
+// GET cache (v3.1) — stale-while-revalidate, localStorage par
+// -----------------------------------------------------------------------------
+// Masla (user ki shikayat): "har bar app close krne k bad data fir se load
+// hota hai, refresh chalta hai bohut der tak". Wajah: har GET har baar
+// network se aata tha — Render free server ki cold-start + slow network
+// par har screen 5-30 second tak ghumti rehti thi. Koi cache hi nahi tha.
+//
+// Hal (transparent — pages me KOI badlav nahi, sab apiFetch ke andar):
+//  * GET ka safal jawab localStorage me rakho (key = user+school scope
+//    + path; dusre user/school ka data kabhi nahi milta).
+//  * TTL 5 minute: uske andar wahi GET dobara aaye to network par
+//    JAO HI MAT — cache se turant jawab (app band karke kholo tab bhi,
+//    kyunki localStorage bana rehta hai).
+//  * TTL ke baad: PEHLE cache wala jawab turant do (screen na ruke),
+//    saath me background me taaza data lao, cache update karo. Taaza
+//    data purane se alag ho to `sg-data-refreshed` window event
+//    bhejo (detail: { path }) — koi page chahe to khud sun kar
+//    refresh kar sakta hai.
+//    ⚠️ App-level AUTO-REMONT nahi rakha: background refresh par
+//    chalti screen ko remount karne se aadha bhara hua form (jaise
+//    Admission form) udd sakta hai. Taazgi ka pakka rasta TTL +
+//    mutation-invalidation hai — agali baar screen khulte hi taaza
+//    data milta hai, aur khud kiya hua badlav turant dikhta hai.
+//  * Koi bhi POST/PUT/PATCH/DELETE safal ho to usi resource-family
+//    ki (aur usse judi families ki) cache entries uda do — apna
+//    badlav kabhi purana na dikhe.
+//  * Login/logout par poora cache saaf (clearSession + login neeche).
+//  * Sirf safal GET JSON cache hota hai. Nahi hota: /api/auth/*,
+//    /api/app-version (update check hamesha taaza), /api/export/*
+//    (backup — bohut bada), */file (documents ki base64 — bohut
+//    badi), aur 1MB se badi koi bhi entry.
+// ---------------------------------------------------------------------------
+
+const CACHE_PREFIX = "sg_cache_v1:";
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_MAX_ENTRY_CHARS = 1024 * 1024; // 1MB
+
+interface CacheEntry {
+  t: number;
+  d: unknown;
+}
+
+function cacheScope(): string {
+  const u = getStoredUser();
+  return u ? `u${u.id}:s${u.schoolId ?? 0}` : "anon";
+}
+
+function cacheKeyFor(path: string): string {
+  return `${CACHE_PREFIX}${cacheScope()}|${path}`;
+}
+
+function cacheablePath(path: string): boolean {
+  if (path.startsWith("/api/auth")) return false;
+  if (path.startsWith("/api/app-version")) return false;
+  if (path.startsWith("/api/export")) return false;
+  if (path.includes("/file")) return false;
+  return true;
+}
+
+function readCacheEntry(path: string): CacheEntry | null {
+  try {
+    const raw = localStorage.getItem(cacheKeyFor(path));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CacheEntry;
+    if (!parsed || typeof parsed.t !== "number" || !("d" in parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCacheEntry(path: string, data: unknown): void {
+  if (data === undefined) return;
+  try {
+    const raw = JSON.stringify({ t: Date.now(), d: data } as CacheEntry);
+    if (raw.length > CACHE_MAX_ENTRY_CHARS) return; // bohut badi entry skip
+    const key = cacheKeyFor(path);
+    try {
+      localStorage.setItem(key, raw);
+    } catch {
+      // Quota bhar gaya ho to sabse purani aadhi entries uda kar
+      // ek baar dobara koshish — cache best-effort hai, crash nahi.
+      evictOldestCacheEntries();
+      localStorage.setItem(key, raw);
+    }
+  } catch {
+    // JSON na bane ya storage band ho — cache chup chaap skip.
+  }
+}
+
+function allCacheKeys(): string[] {
+  const keys: string[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(CACHE_PREFIX)) keys.push(k);
+    }
+  } catch {
+    // ignore
+  }
+  return keys;
+}
+
+function evictOldestCacheEntries(): void {
+  try {
+    const entries = allCacheKeys()
+      .map((k) => {
+        let t = 0;
+        try {
+          t = (JSON.parse(localStorage.getItem(k) ?? "") as CacheEntry).t || 0;
+        } catch {
+          // kharab entry — sabse purani maan kar uda do
+        }
+        return { k, t };
+      })
+      .sort((a, b) => a.t - b.t);
+    const drop = Math.max(1, Math.ceil(entries.length / 2));
+    for (let i = 0; i < drop && i < entries.length; i++) {
+      localStorage.removeItem(entries[i].k);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/** Poora GET cache saaf — login/logout/session-expire par. */
+export function clearApiCache(): void {
+  try {
+    for (const k of allCacheKeys()) localStorage.removeItem(k);
+  } catch {
+    // ignore
+  }
+}
+
+// Ek mutation kin families ko purana kar deta hai: apni family +
+// ye judi hui families (jaise payment bane to student ki fees-sthiti
+// aur parent ka overview bhi badal jata hai).
+const RELATED_FAMILIES: Record<string, string[]> = {
+  students: ["parent"],
+  payments: ["students", "fees", "fee-structures", "parent", "financial"],
+  "fee-structures": ["fees", "students", "parent"],
+  fees: ["students", "parent"],
+  attendance: ["students", "parent"],
+  exams: ["parent"],
+  marks: ["parent"],
+  homework: ["parent"],
+  leaves: ["parent"],
+  notices: ["parent"],
+  timetable: ["parent"],
+  staff: ["salary", "financial"],
+  salary: ["financial"],
+  expenses: ["financial"],
+};
+
+function familyOf(path: string): string | null {
+  const clean = path.split("?")[0];
+  const parts = clean.split("/").filter(Boolean); // ["api", "students", ...]
+  return parts.length >= 2 && parts[0] === "api" ? parts[1] : null;
+}
+
+function invalidateCacheForMutation(path: string): void {
+  const fam = familyOf(path);
+  if (!fam) return;
+  const targets = new Set<string>([fam, ...(RELATED_FAMILIES[fam] ?? [])]);
+  try {
+    for (const k of allCacheKeys()) {
+      // key: sg_cache_v1:<scope>|<path> — path ka family nikalo.
+      const p = k.slice(k.indexOf("|") + 1);
+      const pf = familyOf(p);
+      if (pf && targets.has(pf)) localStorage.removeItem(k);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+// Ek hi path ki background revalidation ek samay par ek hi chalegi.
+const revalidatingPaths = new Set<string>();
+
+function revalidateInBackground<T>(path: string, opts: ApiFetchOptions): void {
+  if (revalidatingPaths.has(path)) return;
+  revalidatingPaths.add(path);
+  performRequest<T>(path, opts)
+    .then((fresh) => {
+      const prev = readCacheEntry(path);
+      writeCacheEntry(path, fresh);
+      // Data asal me badla ho tabhi khabar do — bekaar ke event par
+      // sunne wale pages fizool refresh na karein.
+      if (prev && JSON.stringify(prev.d) !== JSON.stringify(fresh)) {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("sg-data-refreshed", { detail: { path } }),
+          );
+        } catch {
+          // ignore
+        }
+      }
+    })
+    .catch(() => {
+      // Background refresh fail — purana cache hi chalega, koi
+      // error nahi dikhana (user ne kuch manga hi nahi tha).
+    })
+    .finally(() => {
+      revalidatingPaths.delete(path);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// performRequest — asal network request (refresh + retry ke saath).
+// Upar wala apiFetch iske chaaron taraf cache ki parat lagata hai.
 // ---------------------------------------------------------------------------
 
 export interface ApiFetchOptions {
@@ -217,7 +431,7 @@ export interface ApiFetchOptions {
   _retried?: boolean;
 }
 
-export async function apiFetch<T = unknown>(
+async function performRequest<T = unknown>(
   path: string,
   opts: ApiFetchOptions = {},
 ): Promise<T> {
@@ -242,7 +456,7 @@ export async function apiFetch<T = unknown>(
   if (res.status === 401 && !opts._retried && getRefreshToken()) {
     const ok = await tryRefresh();
     if (ok) {
-      return apiFetch<T>(path, { ...opts, _retried: true });
+      return performRequest<T>(path, { ...opts, _retried: true });
     }
     notifySessionExpired();
     throw new ApiError(401, "Session expired. Please login again.");
@@ -251,6 +465,48 @@ export async function apiFetch<T = unknown>(
   if (!res.ok) throw await readError(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+// ---------------------------------------------------------------------------
+// apiFetch — har authenticated request yahin se jayegi (cache wali parat).
+// ---------------------------------------------------------------------------
+
+export async function apiFetch<T = unknown>(
+  path: string,
+  opts: ApiFetchOptions = {},
+): Promise<T> {
+  const method = (opts.method ?? "GET").toUpperCase();
+
+  if (method === "GET" && cacheablePath(path)) {
+    const hit = readCacheEntry(path);
+    if (hit) {
+      if (Date.now() - hit.t < CACHE_TTL_MS) {
+        // Taaza cache — network par jana hi nahi.
+        return hit.d as T;
+      }
+      // Purana cache: turant wahi do (screen na ruke), peeche taaza lao.
+      revalidateInBackground<T>(path, opts);
+      return hit.d as T;
+    }
+    const fresh = await performRequest<T>(path, opts);
+    writeCacheEntry(path, fresh);
+    return fresh;
+  }
+
+  const result = await performRequest<T>(path, opts);
+
+  if (method !== "GET") {
+    // Naya login = nayi shuruaat: purana cache (kisi aur ka bhi ho
+    // sakta hai) saaf. Logout clearSession se saaf hota hai.
+    if (method === "POST" && path === "/api/auth/login") {
+      clearApiCache();
+    } else if (!path.startsWith("/api/auth")) {
+      // Apna badlav turant dikhe — judi families ka cache uda do.
+      invalidateCacheForMutation(path);
+    }
+  }
+
+  return result;
 }
 
 // Chhote helpers — migration batches me pages inhi ko use karengi.

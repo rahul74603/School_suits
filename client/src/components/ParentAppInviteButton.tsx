@@ -5,6 +5,7 @@ import {
   buildParentAppInviteUrl,
   normalizeMobile,
 } from "@/lib/parentApp";
+import { openExternal } from "@/lib/openExternal";
 import { MessageCircle } from "lucide-react";
 
 // =============================================================================
@@ -78,7 +79,9 @@ export default function ParentAppInviteButton({
       });
       return;
     }
-    window.open(url, "_blank");
+    // v3.1: openExternal — WhatsApp link app ke andar (Custom Tab)
+    // khule, seedha Chrome me nahi.
+    void openExternal(url);
   };
 
   return (

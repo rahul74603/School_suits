@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { openExternal } from "@/lib/openExternal";
 import { useAuth } from "@/lib/auth";
 // 📲 Parent App invite (v2.1) — parent ko WhatsApp par app ka link
 // bhejne wala button (shared component, Admissions par bhi yahi hai).
@@ -441,9 +442,11 @@ export default function StudentProfile() {
         return;
       }
 
-      // PDF ya anya file — bartav pehle jaisa (naya page / download).
-      const win = window.open(url, "_blank");
-      if (!win) {
+      // PDF ya anya file — openExternal (v3.1): blob URL Browser
+      // plugin nahi khol sakta, isliye andar window.open hi chalega,
+      // par khul na paye to download wala purana fallback pakka hai.
+      const opened = await openExternal(url);
+      if (!opened) {
         const a = document.createElement("a");
         a.href = url;
         a.download = file.fileName || "document";
@@ -890,7 +893,7 @@ export default function StudentProfile() {
           if (!open) closeDocViewer();
         }}
       >
-        <DialogContent className="max-w-3xl max-h-[92vh] flex flex-col">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-3xl max-h-[92vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="truncate pr-8 text-base">
               {viewer?.fileName || "Document"}

@@ -289,7 +289,7 @@ export default function StaffSalary() {
       {/* Header */}
       <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-slate-800">
             <IndianRupee className="h-8 w-8 text-green-600" /> Staff Salary
           </h1>
           <p className="text-gray-500 mt-1">Manage staff salaries and payments</p>
@@ -491,7 +491,7 @@ export default function StaffSalary() {
 
       {/* Pay Salary Dialog */}
       <Dialog open={isPayDialogOpen} onOpenChange={setIsPayDialogOpen}>
-        <DialogContent className="max-w-md bg-white z-[9999]">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md bg-white z-[9999]">
           <DialogHeader>
             <DialogTitle>Pay Salary - {selectedStaff?.name}</DialogTitle>
           </DialogHeader>

@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
+import { openExternal } from "@/lib/openExternal";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 
@@ -386,9 +387,11 @@ export default function Staff() {
         return;
       }
 
-      // PDF ya anya file — bartav pehle jaisa (naya page / download).
-      const win = window.open(url, "_blank");
-      if (!win) {
+      // PDF ya anya file — openExternal (v3.1): blob URL Browser
+      // plugin nahi khol sakta, isliye andar window.open hi chalega,
+      // par khul na paye to download wala purana fallback pakka hai.
+      const opened = await openExternal(url);
+      if (!opened) {
         const a = document.createElement("a");
         a.href = url;
         a.download = file.fileName || "document";
@@ -586,7 +589,7 @@ export default function Staff() {
 
       {/* Add Staff Dialog - FIXED DROPDOWNS */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Plus className="h-5 w-5" /> Add New Staff
@@ -670,7 +673,7 @@ export default function Staff() {
 
       {/* Edit Staff Dialog - FIXED DROPDOWNS */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Edit className="h-5 w-5" /> Edit Staff
@@ -762,7 +765,7 @@ export default function Staff() {
 
       {/* View Staff Dialog */}
       <Dialog open={isViewOpen} onOpenChange={setIsViewOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Staff Details</DialogTitle>
           </DialogHeader>
@@ -906,7 +909,7 @@ export default function Staff() {
 
       {/* Delete Confirmation */}
       <Dialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="text-red-600 flex items-center gap-2">
               <Trash2 className="h-5 w-5" /> Delete Staff
@@ -932,7 +935,7 @@ export default function Staff() {
           if (!open) closeDocViewer();
         }}
       >
-        <DialogContent className="max-w-3xl max-h-[92vh] flex flex-col">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-3xl max-h-[92vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="truncate pr-8 text-base">
               {docViewer?.fileName || "Document"}

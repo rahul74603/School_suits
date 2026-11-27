@@ -364,7 +364,7 @@ export default function Exams() {
       {/* Header */}
       <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-slate-800">
             <GraduationCap className="h-8 w-8 text-blue-600" /> Examination
           </h1>
           <p className="text-gray-500 mt-1">Manage exams and student results</p>
@@ -563,7 +563,7 @@ export default function Exams() {
 
       {/* Add Exam Dialog */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-        <DialogContent className="max-w-2xl bg-white z-[9999]">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-2xl bg-white z-[9999]">
           <DialogHeader>
             <DialogTitle>Create New Exam</DialogTitle>
           </DialogHeader>
@@ -685,7 +685,7 @@ export default function Exams() {
 
       {/* Marks Entry Dialog */}
       <Dialog open={isMarksOpen} onOpenChange={setIsMarksOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-white z-[9999]">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-4xl max-h-[90vh] overflow-y-auto bg-white z-[9999]">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
               <span>Enter Marks - {selectedExam?.exam_name}</span>

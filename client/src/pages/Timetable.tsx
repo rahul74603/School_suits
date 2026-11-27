@@ -18,6 +18,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import PrintViewer from "@/components/PrintViewer";
 import { apiGet, apiPost, apiDel, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
@@ -98,6 +99,12 @@ export default function Timetable() {
   const [parentClass, setParentClass] = useState<string>("");
 
   const [cell, setCell] = useState<CellTarget | null>(null);
+  // Mobile day-list (v3.1): aaj ka din pehle se chuna hua
+  // (Sunday ho to Monday dikhao).
+  const [mobileDay, setMobileDay] = useState<number>(() => {
+    const d = new Date().getDay();
+    return d >= 1 && d <= 6 ? d : 1;
+  });
   const [subject, setSubject] = useState("");
   const [teacherId, setTeacherId] = useState<string>("none");
   const [saving, setSaving] = useState(false);
@@ -226,36 +233,28 @@ export default function Timetable() {
     }
   };
 
-  // Print: ReportCards/Broadsheet wala hi tareeka — nayi window me
-  // sirf grid.
+  // Print (v3.1): pehle window.open + document.write se nayi browser
+  // window khulti thi — user ki shikayat yahi thi ("table khol lia to
+  // ab close nahi ho rahi": window Chrome me khul jati thi, back use
+  // band nahi karta tha). Ab grid app ke andar PrintViewer me khulta
+  // hai — Band karo button + hardware back dono pakka band karte
+  // hain. Print CSS wahi purani hai, bas ab viewer ke andar lagti hai.
+  const TIMETABLE_PRINT_CSS = `
+    @page { size: A4 landscape; margin: 10mm; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 12px; }
+    h1 { font-size: 18px; text-align: center; margin: 0 0 2px; }
+    p.sub { text-align: center; font-size: 12px; color: #555; margin: 0 0 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border: 1px solid #333; padding: 6px; text-align: center; }
+    th { background: #1e40af; color: #fff; }
+    td.subj { font-weight: 600; }
+    span.t { display: block; font-size: 10px; color: #555; font-weight: normal; }
+    @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
+  `;
+  const [printHtml, setPrintHtml] = useState<string | null>(null);
   const handlePrint = () => {
     if (!printRef.current) return;
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) return;
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Timetable - Class ${isParent ? parentClass : className}</title>
-          <style>
-            @page { size: A4 landscape; margin: 10mm; }
-            body { font-family: Arial, sans-serif; margin: 0; padding: 12px; }
-            h1 { font-size: 18px; text-align: center; margin: 0 0 2px; }
-            p.sub { text-align: center; font-size: 12px; color: #555; margin: 0 0 12px; }
-            table { width: 100%; border-collapse: collapse; font-size: 12px; }
-            th, td { border: 1px solid #333; padding: 6px; text-align: center; }
-            th { background: #1e40af; color: #fff; }
-            td.subj { font-weight: 600; }
-            span.t { display: block; font-size: 10px; color: #555; font-weight: normal; }
-            @media print { body { print-color-adjust: exact; -webkit-print-color-adjust: exact; } }
-          </style>
-        </head>
-        <body>
-          ${printRef.current.innerHTML}
-          <script>window.onload = () => { window.print(); window.close(); };</script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+    setPrintHtml(printRef.current.innerHTML);
   };
 
   if (isSuperAdmin) {
@@ -351,7 +350,12 @@ export default function Timetable() {
               Timetable aa raha hai…
             </p>
           ) : (
-            <div className="overflow-x-auto" ref={printRef}>
+            <>
+            {/* Desktop (md+): purani poori grid. Print bhi isi
+                (printRef) se hota hai — print ka behaviour
+                bilkul nahi badla, sirf mobile par ye grid
+                chhupi rehti hai. */}
+            <div className="overflow-x-auto hidden md:block" ref={printRef}>
               <h2 className="text-center font-bold text-lg pt-4 px-4">
                 {school?.name || "School Guardian Suite"}
               </h2>
@@ -418,13 +422,85 @@ export default function Timetable() {
                 </p>
               )}
             </div>
+
+            {/* Mobile (v3.1): 8-period wali chaudi grid phone par
+                right se kat jati thi (user ki shikayat). Ab mobile
+                par din chune ke chips + us din ke periods ki saaf
+                list — koi horizontal scroll nahi, kuch katta nahi.
+                Entry par tap = wahi purana edit dialog. */}
+            <div className="md:hidden">
+              <h2 className="text-center font-bold text-base pt-4 px-4">
+                {school?.name || "School Guardian Suite"}
+              </h2>
+              <p className="text-center text-sm text-gray-500 pb-3 px-4">
+                Timetable — Class {headingClass}
+              </p>
+              <div className="flex flex-wrap gap-2 px-3 pb-3">
+                {DAYS.map((day) => (
+                  <button
+                    key={day.value}
+                    type="button"
+                    onClick={() => setMobileDay(day.value)}
+                    className={`px-3 py-2 rounded-full text-sm font-medium border min-h-[40px] ${
+                      mobileDay === day.value
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white text-slate-700 border-slate-300"
+                    }`}
+                  >
+                    {day.short}
+                  </button>
+                ))}
+              </div>
+              <div className="divide-y border-t">
+                {PERIODS.map((period) => {
+                  const entry = entryAt(mobileDay, period);
+                  return (
+                    <div
+                      key={period}
+                      onClick={() => openCell(mobileDay, period)}
+                      className={`flex items-center gap-3 px-3 py-3 ${
+                        canEdit ? "cursor-pointer active:bg-blue-50" : ""
+                      }`}
+                    >
+                      <span className="shrink-0 w-16 text-xs font-semibold text-slate-500">
+                        Period {period}
+                      </span>
+                      {entry ? (
+                        <span className="min-w-0">
+                          <span className="block font-semibold text-slate-800 break-words">
+                            {entry.subject}
+                          </span>
+                          {entry.teacherName && (
+                            <span className="block text-xs text-gray-500 break-words">
+                              {entry.teacherName}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400 text-sm">
+                          {canEdit ? "+ Khaali — tap karke bharein" : "— Khaali"}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {loadedOnce && entries.length === 0 && (
+                <p className="text-gray-500 text-sm py-4 text-center px-4">
+                  {isParent
+                    ? "Is class ka timetable abhi school ne nahi bhara hai."
+                    : "Is class ka timetable abhi khaali hai — kisi period par tap karke bharein."}
+                </p>
+              )}
+            </div>
+            </>
           )}
         </CardContent>
       </Card>
 
       {/* Cell edit dialog */}
       <Dialog open={cell != null} onOpenChange={(open) => !open && setCell(null)}>
-        <DialogContent className="max-w-md bg-white z-[9999]">
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-md bg-white z-[9999]">
           <DialogHeader>
             <DialogTitle>
               {cell
@@ -491,6 +567,15 @@ export default function Timetable() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {printHtml !== null && (
+        <PrintViewer
+          title={`Timetable - Class ${isParent ? parentClass : className}`}
+          html={printHtml}
+          cssText={TIMETABLE_PRINT_CSS}
+          onClose={() => setPrintHtml(null)}
+        />
+      )}
     </div>
   );
 }

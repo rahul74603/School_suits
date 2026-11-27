@@ -726,7 +726,7 @@ export default function Students() {
           (session school-level setting hai, Settings se badalta hai) —
           ye sirf class badalta hai. */}
       <Dialog open={isPromoteOpen} onOpenChange={setIsPromoteOpen}>
-        <DialogContent className="bg-white">
+        <DialogContent className="bg-white max-w-[calc(100vw-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ArrowUpCircle className="h-5 w-5 text-green-600" /> Promote Students
@@ -821,7 +821,7 @@ export default function Students() {
 
       {/* Transport Popup */}
       <Dialog open={isTransportOpen} onOpenChange={setIsTransportOpen}>
-        <DialogContent className="bg-white">
+        <DialogContent className="bg-white max-w-[calc(100vw-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Update Transport: {selectedStudent?.name}</DialogTitle>
             <DialogDescription>Manage bus service for this student.</DialogDescription>

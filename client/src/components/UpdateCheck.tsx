@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { apiGet } from "@/lib/api";
+import { openExternal } from "@/lib/openExternal";
 import { APP_FLAVOR, APP_VERSION_CODE } from "@/lib/appVersion";
 import { shouldPromptUpdate } from "@/lib/updateLogic";
 import { Download } from "lucide-react";
@@ -80,9 +81,10 @@ export default function UpdateCheck() {
 
   const doUpdate = () => {
     if (update.apkUrl) {
-      // APK phone ke browser me download hota hai aur wahi key
-      // hone se purani app ke upar install ho jata hai.
-      window.open(update.apkUrl, "_blank");
+      // APK download link (v3.1): openExternal — native par in-app
+      // Custom Tab khulta hai (seedha Chrome nahi), wahi key hone
+      // se download hua APK purani app ke upar install ho jata hai.
+      void openExternal(update.apkUrl);
     }
     if (!mandatory) setUpdate(null);
   };

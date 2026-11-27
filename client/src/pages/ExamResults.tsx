@@ -267,7 +267,7 @@ export default function ExamResults() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6 max-w-[1400px] mx-auto">
-      <h1 className="text-3xl font-bold flex items-center gap-2">
+      <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2">
         <Calculator className="h-8 w-8 text-blue-600" /> Marks Entry
       </h1>
 

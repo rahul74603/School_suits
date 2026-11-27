@@ -241,7 +241,7 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-slate-800">Dashboard</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-800">Dashboard</h1>
           <p className="text-gray-500 mt-1">Welcome back to {school?.name || "School Guardian Suite"}</p>
         </div>
         <Button onClick={loadDashboardData} variant="outline" size="sm" disabled={loading}>
@@ -279,7 +279,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Students */}
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-500">Total Students</p>
@@ -305,7 +305,7 @@ export default function Dashboard() {
 
         {/* Today's Collection */}
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-500">Today's Collection</p>
@@ -331,7 +331,7 @@ export default function Dashboard() {
 
         {/* Fee Defaulters */}
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-500">Fee Defaulters</p>
@@ -352,7 +352,7 @@ export default function Dashboard() {
 
         {/* New Admissions */}
         <Card>
-          <CardContent className="p-6">
+          <CardContent className="p-4 sm:p-6">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-500">New Admissions</p>

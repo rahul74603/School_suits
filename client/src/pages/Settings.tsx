@@ -403,7 +403,7 @@ export default function SettingsPage() {
       {/* Header */}
       <div className="flex flex-wrap gap-3 justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2 text-slate-800">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 text-slate-800">
             <Settings className="h-8 w-8 text-blue-600" /> Settings
           </h1>
           <p className="text-gray-500 mt-1">Manage school configuration and fee structures</p>
@@ -781,7 +781,7 @@ export default function SettingsPage() {
 
       {/* Edit Fee Dialog */}
       <Dialog open={isFeeDialogOpen} onOpenChange={setIsFeeDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit Fee Structure - Class {feeForm.class_name}</DialogTitle>
           </DialogHeader>
@@ -828,7 +828,7 @@ export default function SettingsPage() {
 
       {/* Add Transport Dialog */}
       <Dialog open={isTransportDialogOpen} onOpenChange={setIsTransportDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Add Transport Route</DialogTitle>
           </DialogHeader>
@@ -860,7 +860,7 @@ export default function SettingsPage() {
 
       {/* Add Additional Fee Dialog */}
       <Dialog open={isAdditionalFeeDialogOpen} onOpenChange={setIsAdditionalFeeDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Add Additional Fee</DialogTitle>
           </DialogHeader>

@@ -85,11 +85,15 @@
 
 /* v1.9: global overflow guard — koi bhi page poori screen ko
    side me nahi dhakel sakta. Print par asar na pade isliye
-   screen-only; @media print block neeche jyon ka tyon hai. */
+   screen-only; @media print block neeche jyon ka tyon hai.
+   v3.1: html par bhi overflow-x clip pakka kiya (pehle sirf
+   max-width tha), taaki koi bhi andar ka bada element poore
+   page ko side me na dhakele. */
 html {
   max-width: 100%;
 }
 @media screen {
+  html,
   body {
     max-width: 100%;
     overflow-x: clip;
@@ -98,6 +102,33 @@ html {
 #root {
   min-width: 0;
   max-width: 100%;
+}
+
+/* v3.1: media kabhi apne dabbe se bada na ho — bada logo/photo
+   layout na tode. */
+img,
+svg,
+video {
+  max-width: 100%;
+}
+
+@layer components {
+  /* v3.1: chaudi table ko uske apne dabbe ke andar scroll karne
+     ke liye taiyaar utility — page khud kabhi side nahi sarakti.
+     Istemal: <div className="sgs-table-wrap"><table … /></div> */
+  .sgs-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+}
+
+@layer base {
+  /* v3.1: lambe bina-space wale shabd (bade naam, email, link)
+     apni line tod kar andar hi rahein — screen se bahar na jayein. */
+  body {
+    overflow-wrap: break-word;
+  }
 }
 
 @layer base {
@@ -122,6 +153,26 @@ html {
     print-color-adjust: exact;
   }
   .no-print {
+    display: none !important;
+  }
+
+  /* 🖨 PrintViewer (v3.1): viewer khula ho to print me SIRF usi ka
+     content aaye — poori app (sidebar, topbar, peeche ki screen)
+     gayab. Viewer document.body par portal hota hai, isliye #root
+     chhupana kaafi hai. Viewer ka upar wala bar (title/Print/Band
+     karo) print nahi hota, aur fixed/overflow print me static ho
+     jata hai taaki lamba content poora print ho, kata na. */
+  body.sg-print-viewer-open #root {
+    display: none !important;
+  }
+  .sg-print-viewer {
+    position: static !important;
+    overflow: visible !important;
+  }
+  .sg-print-viewer-body {
+    overflow: visible !important;
+  }
+  .sg-print-viewer-bar {
     display: none !important;
   }
 }

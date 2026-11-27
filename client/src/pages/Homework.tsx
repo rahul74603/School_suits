@@ -325,9 +325,9 @@ export default function HomeworkPage() {
                       </Badge>
                     )}
                   </div>
-                  <p className="font-medium">{row.title}</p>
+                  <p className="font-medium break-words">{row.title}</p>
                   {row.description && (
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-sm text-muted-foreground break-words">
                       {row.description}
                     </p>
                   )}
