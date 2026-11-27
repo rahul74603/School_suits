@@ -12,6 +12,8 @@ import { Printer } from "lucide-react";
 import { formatDobText, type IdCardSchool } from "./IdCard";
 
 // 📜 Certificates (v1.7) — TC (Transfer Certificate) + Bonafide.
+// (v2.0, Arena port #4: Character, Migration aur Birth Verification
+// templates bhi yahi jud gaye — wahi pattern, wahi print flow.)
 // NICHOD BAAD-ME #13 ka roz-ka roop: session ke ant/daakhile ke samay
 // office ko yahi do kagaz roz bante hain.
 //  - Saara student data AUTO bharata hai — sirf wahi fields jo asal me
@@ -28,7 +30,22 @@ import { formatDobText, type IdCardSchool } from "./IdCard";
 //    window me sirf certificate ka HTML + uski apni CSS jati hai,
 //    dialog ke buttons/inputs kabhi print nahi hote.
 
-export type CertificateType = "tc" | "bonafide";
+export type CertificateType =
+  | "tc"
+  | "bonafide"
+  | "character"
+  | "migration"
+  | "birth";
+
+// Har type ka poora title — dialog heading, certificate ki title
+// strip aur print window ka <title> teeno yahi se lete hain.
+export const CERT_TITLES: Record<CertificateType, string> = {
+  tc: "Transfer Certificate",
+  bonafide: "Bonafide Certificate",
+  character: "Character Certificate",
+  migration: "Migration Certificate",
+  birth: "Birth Verification Certificate",
+};
 
 export interface CertificateStudent {
   name: string;
@@ -103,6 +120,17 @@ export function CertificateDialog({
   );
   // Bonafide ka editable field
   const [purpose, setPurpose] = useState<string>("");
+  // Character ka editable field (v2.0) — TC wale conduct se alag
+  // default, kyunki ye sirf aacharan ka kagaz hai.
+  const [characterConduct, setCharacterConduct] = useState<string>(
+    "Very Good. The student's conduct, character and behaviour during the period of study in this school were very good.",
+  );
+  // Migration ka editable field (v2.0) — kis board/institution ki
+  // taraf ja raha hai; khaali ho to aam "any other Board" bhasha.
+  const [migrationTo, setMigrationTo] = useState<string>("");
+  // Birth Verification ka editable field (v2.0) — janm sthan schema
+  // me hai hi nahi, isliye sirf yahi haath se bhara jata hai (optional).
+  const [birthPlace, setBirthPlace] = useState<string>("");
   const certRef = useRef<HTMLDivElement>(null);
 
   // Dialog khulte hi type + defaults taaze — purane student ke bhare
@@ -116,6 +144,11 @@ export function CertificateDialog({
       "Good. The student's conduct and character during the period of study in this school was satisfactory.",
     );
     setPurpose("");
+    setCharacterConduct(
+      "Very Good. The student's conduct, character and behaviour during the period of study in this school were very good.",
+    );
+    setMigrationTo("");
+    setBirthPlace("");
   }, [open, initialType, student]);
 
   if (!student || !school) {
@@ -144,7 +177,7 @@ export function CertificateDialog({
     win.document.write(`
       <html>
         <head>
-          <title>${type === "tc" ? "Transfer Certificate" : "Bonafide Certificate"} - ${student.name}</title>
+          <title>${CERT_TITLES[type]} - ${student.name}</title>
           <style>
             @page { size: A4; margin: 14mm; }
             body { margin: 0; padding: 10px; }
@@ -166,7 +199,7 @@ export function CertificateDialog({
         <DialogHeader>
           <DialogTitle className="flex flex-wrap gap-3 justify-between items-center pr-6">
             <span>
-              {type === "tc" ? "Transfer Certificate (TC)" : "Bonafide Certificate"}
+              {type === "tc" ? "Transfer Certificate (TC)" : CERT_TITLES[type]}
             </span>
             <Button onClick={handlePrint} size="sm" className="bg-blue-600 hover:bg-blue-700">
               <Printer className="h-4 w-4 mr-2" /> Print Certificate
@@ -193,6 +226,33 @@ export function CertificateDialog({
             onClick={() => setType("bonafide")}
           >
             Bonafide
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={type === "character" ? "default" : "outline"}
+            className={type === "character" ? "bg-blue-600 hover:bg-blue-700" : ""}
+            onClick={() => setType("character")}
+          >
+            Character
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={type === "migration" ? "default" : "outline"}
+            className={type === "migration" ? "bg-blue-600 hover:bg-blue-700" : ""}
+            onClick={() => setType("migration")}
+          >
+            Migration
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={type === "birth" ? "default" : "outline"}
+            className={type === "birth" ? "bg-blue-600 hover:bg-blue-700" : ""}
+            onClick={() => setType("birth")}
+          >
+            Birth Verification
           </Button>
         </div>
 
@@ -226,7 +286,7 @@ export function CertificateDialog({
               />
             </div>
           </div>
-        ) : (
+        ) : type === "bonafide" ? (
           <div className="grid grid-cols-1 min-w-0 gap-3 no-print">
             <div className="space-y-1 min-w-0">
               <Label>Purpose (certificate kis kaam ke liye hai)</Label>
@@ -234,6 +294,41 @@ export function CertificateDialog({
                 value={purpose}
                 onChange={(e) => setPurpose(e.target.value)}
                 placeholder="e.g. opening a bank account / scholarship application"
+                className="w-full"
+              />
+            </div>
+          </div>
+        ) : type === "character" ? (
+          <div className="grid grid-cols-1 min-w-0 gap-3 no-print">
+            <div className="space-y-1 min-w-0">
+              <Label>Conduct / Character</Label>
+              <Input
+                value={characterConduct}
+                onChange={(e) => setCharacterConduct(e.target.value)}
+                className="w-full"
+              />
+            </div>
+          </div>
+        ) : type === "migration" ? (
+          <div className="grid grid-cols-1 min-w-0 gap-3 no-print">
+            <div className="space-y-1 min-w-0">
+              <Label>Migrating To (Board / University / Institution)</Label>
+              <Input
+                value={migrationTo}
+                onChange={(e) => setMigrationTo(e.target.value)}
+                placeholder="e.g. CBSE, New Delhi / MP Board, Bhopal"
+                className="w-full"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 min-w-0 gap-3 no-print">
+            <div className="space-y-1 min-w-0">
+              <Label>Place of Birth (optional — school record me ho to bharein)</Label>
+              <Input
+                value={birthPlace}
+                onChange={(e) => setBirthPlace(e.target.value)}
+                placeholder="e.g. Jhansi, Uttar Pradesh"
                 className="w-full"
               />
             </div>
@@ -266,9 +361,7 @@ export function CertificateDialog({
               </div>
             </div>
 
-            <div className="cert-title">
-              {type === "tc" ? "Transfer Certificate" : "Bonafide Certificate"}
-            </div>
+            <div className="cert-title">{CERT_TITLES[type]}</div>
 
             {type === "tc" ? (
               <>
@@ -310,7 +403,7 @@ export function CertificateDialog({
                   </tbody>
                 </table>
               </>
-            ) : (
+            ) : type === "bonafide" ? (
               <>
                 <p className="cert-body">
                   This is to certify that <b>{student.name}</b>, whose
@@ -352,6 +445,129 @@ export function CertificateDialog({
                   )}{" "}
                   on the request of the student/parent.
                 </p>
+              </>
+            ) : type === "character" ? (
+              <>
+                <p className="cert-body">
+                  This is to certify that <b>{student.name}</b>, whose
+                  father&apos;s name is <b>{student.fatherName}</b>
+                  {student.motherName ? (
+                    <> and mother&apos;s name is <b>{student.motherName}</b></>
+                  ) : null}
+                  , is a bona fide student of this school, presently
+                  studying in <b>Class {student.class} - {student.section}</b>
+                  {school.session ? (
+                    <> during the academic session <b>{school.session}</b></>
+                  ) : null}
+                  .
+                </p>
+                <p className="cert-body" style={{ marginTop: 12 }}>
+                  {characterConduct.trim() ||
+                    "The student's conduct and character during the period of study in this school were satisfactory."}{" "}
+                  To the best of the knowledge of the undersigned, the
+                  student bears a good moral character and has not taken
+                  part in any activity prejudicial to the interests of
+                  the school.
+                </p>
+                <table className="cert-fields">
+                  <tbody>
+                    <tr>
+                      <td className="k">Admission No.</td>
+                      <td>{student.admissionNo}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Date of Birth</td>
+                      <td>{student.dob ? formatDobText(student.dob) : "—"}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Class</td>
+                      <td>
+                        {student.class} - {student.section}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </>
+            ) : type === "migration" ? (
+              <>
+                <p className="cert-body">
+                  This is to certify that <b>{student.name}</b>, whose
+                  father&apos;s name is <b>{student.fatherName}</b>
+                  {student.motherName ? (
+                    <> and mother&apos;s name is <b>{student.motherName}</b></>
+                  ) : null}
+                  , was a bona fide student of this school and last
+                  studied in <b>Class {student.class} - {student.section}</b>
+                  {school.session ? (
+                    <> during the academic session <b>{school.session}</b></>
+                  ) : null}
+                  .
+                </p>
+                <p className="cert-body" style={{ marginTop: 12 }}>
+                  This school has <b>no objection</b> to the student
+                  seeking admission to{" "}
+                  <b>
+                    {migrationTo.trim() ||
+                      "any other Board / University / Institution"}
+                  </b>
+                  . This certificate is issued on the request of the
+                  student/parent for the purpose of migration.
+                </p>
+                <table className="cert-fields">
+                  <tbody>
+                    <tr>
+                      <td className="k">Admission No.</td>
+                      <td>{student.admissionNo}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Date of Birth</td>
+                      <td>{student.dob ? formatDobText(student.dob) : "—"}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Class Last Studied</td>
+                      <td>
+                        {student.class} - {student.section}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </>
+            ) : (
+              <>
+                <p className="cert-body">
+                  This is to certify, as per the Admission &amp; Scholar
+                  Register of this school, that the Date of Birth of{" "}
+                  <b>{student.name}</b>, whose father&apos;s name is{" "}
+                  <b>{student.fatherName}</b>
+                  {student.motherName ? (
+                    <> and mother&apos;s name is <b>{student.motherName}</b></>
+                  ) : null}
+                  , admitted to this school under{" "}
+                  <b>Admission No. {student.admissionNo}</b> in{" "}
+                  <b>Class {student.class} - {student.section}</b>, is
+                  recorded as{" "}
+                  <b>{student.dob ? formatDobText(student.dob) : "—"}</b>.
+                  This entry is genuine and unaltered as per the school
+                  records.
+                </p>
+                <table className="cert-fields">
+                  <tbody>
+                    <tr>
+                      <td className="k">Admission No.</td>
+                      <td>{student.admissionNo}</td>
+                    </tr>
+                    <tr>
+                      <td className="k">Date of Birth (as per school record)</td>
+                      <td>{student.dob ? formatDobText(student.dob) : "—"}</td>
+                    </tr>
+                    {birthPlace.trim() ? (
+                      <tr>
+                        <td className="k">Place of Birth</td>
+                        <td>{birthPlace.trim()}</td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </>
             )}
 

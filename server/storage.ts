@@ -374,6 +374,237 @@ export async function buildSchoolExportImpl(
 }
 
 // ---------------------------------------------------------------------------
+// Parent overview (v2.0, Arena port #5) — parent ki home screen ka
+// EK-call jawab. Arena ke /api/parent-app/overview se DESIGN liya hai,
+// lekin account model main ka hi hai: bacche SIRF parent_students
+// links se aayenge (Arena ke student-accounts nahi). Har hisaab
+// maujooda storage methods se hi banta hai — khaaskar fees ke liye
+// getStudentStatus, wahi hisaab jo Fees page / student status API
+// dikhata hai, taaki parent ko office se alag rakam kabhi na dikhe.
+// ---------------------------------------------------------------------------
+
+export interface ParentOverviewExamSubject {
+  subject: string | null;
+  marksObtained: number | null;
+  maxMarks: number | null;
+}
+
+export interface ParentOverviewExam {
+  examId: number;
+  examName: string;
+  examType: string | null;
+  examDate: string | null;
+  subjects: ParentOverviewExamSubject[];
+  totalObtained: number;
+  totalMax: number;
+  percentage: number | null;
+}
+
+export interface ParentOverviewChild {
+  student: {
+    id: number;
+    name: string;
+    class: string;
+    section: string;
+    rollNo: string | null;
+    admissionNo: string;
+    fatherName: string;
+  };
+  // Is mahine ki hajri — getStudentAttendanceSummary ka seedha jawab.
+  attendance: Awaited<ReturnType<IStorage["getStudentAttendanceSummary"]>>;
+  fees: {
+    monthlyFee: number;
+    admissionTotal: number;
+    admissionPaidSoFar: number;
+    admissionBalance: number;
+    admissionPaid: boolean;
+    // fee_payments ki kul rakam (saare saal) — "kul jama".
+    totalPaid: number;
+    pendingDues: Awaited<
+      ReturnType<IStorage["getStudentStatus"]>
+    >["pendingDues"];
+    pendingDuesTotal: number;
+    // Jin mahino ki tuition abhi due hai (getStudentStatus ke naam).
+    dueMonths: string[];
+    monthStatus: Awaited<
+      ReturnType<IStorage["getStudentStatus"]>
+    >["monthStatus"];
+  };
+  // Sirf APPROVED exams — draft exam parent ke liye "hai hi nahi"
+  // (#69 wala hi niyam). Latest pehle, zyada se zyada 5 exams.
+  results: { exams: ParentOverviewExam[] };
+  // Bacche ki class ka hafta — withTeacherName wala hi teacherName
+  // saath (parent /api/staff nahi padh sakta).
+  timetable: Array<TimetableEntry & { teacherName: string | null }>;
+}
+
+export interface ParentOverview {
+  children: ParentOverviewChild[];
+  // School ke parent-visible notices (audience all | parents),
+  // naye pehle, zyada se zyada 5. Main ke notices me class-targeting
+  // hai hi nahi — audience hi ekmatra filter hai (NOTES me darj hai).
+  notices: Array<Pick<Notice, "id" | "title" | "body" | "audience" | "createdAt">>;
+}
+
+export async function buildParentOverviewImpl(
+  store: IStorage,
+  schoolId: number,
+  parentUserId: number,
+): Promise<ParentOverview> {
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const currentYear = now.getFullYear();
+
+  // Notices school-level hain (har bacche ke liye ek jaise) — ek baar.
+  // Filter noticeVisibleTo(audience, "parent") ke barabar: all + parents.
+  const notices = (await store.getNotices(schoolId))
+    .filter((notice) => {
+      const audience = notice.audience ?? "all";
+      return audience === "all" || audience === "parents";
+    })
+    .sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (tb !== ta) return tb - ta;
+      return b.id - a.id;
+    })
+    .slice(0, 5)
+    .map((notice) => ({
+      id: notice.id,
+      title: notice.title,
+      body: notice.body,
+      audience: notice.audience,
+      createdAt: notice.createdAt,
+    }));
+
+  // † NIYAM (ownership): bacche SIRF is parent ke parent_students
+  // links se aayenge. Koi student id bahar se nahi aata, isliye
+  // unlinked baccha is jawab me aa hi nahi sakta. Link galti se
+  // dusri school ke student ko point kare to schoolId jaanch use
+  // bhi rok deti hai.
+  const links = await store.getParentStudentLinks(parentUserId);
+  const children: ParentOverviewChild[] = [];
+  for (const link of links) {
+    const student = await store.getStudent(link.studentId);
+    if (!student || student.schoolId !== schoolId) continue;
+
+    const attendance = await store.getStudentAttendanceSummary(
+      student.id,
+      currentMonth,
+    );
+
+    // Fees: getStudentStatus hi authoritative hisaab hai (Fees page
+    // aur /api/students/:id/status yahi dikhate hain).
+    const status = await store.getStudentStatus(
+      student.id,
+      student.class,
+      currentYear,
+    );
+    const payments = await store.getFeePayments(schoolId, student.id);
+    const totalPaid = payments.reduce(
+      (sum, payment) => sum + (payment.amount ?? 0),
+      0,
+    );
+
+    // Results: #69 wala hi tareeka — marks + exam detail, lekin
+    // parent ke liye sirf approved; exam-wise jod (summary) karke.
+    const markRows = await store.getStudentMarks(student.id);
+    const byExam = new Map<number, ParentOverviewExam>();
+    for (const row of markRows) {
+      const exam = await store.getExam(row.examId);
+      if (!exam) continue;
+      if ((exam.resultsStatus ?? "approved") !== "approved") continue;
+      let entry = byExam.get(exam.id);
+      if (!entry) {
+        entry = {
+          examId: exam.id,
+          examName: exam.examName,
+          examType: exam.examType ?? null,
+          examDate: exam.examDate ?? null,
+          subjects: [],
+          totalObtained: 0,
+          totalMax: 0,
+          percentage: null,
+        };
+        byExam.set(exam.id, entry);
+      }
+      entry.subjects.push({
+        subject: exam.subject ?? null,
+        marksObtained: row.marksObtained ?? null,
+        maxMarks: exam.maxMarks ?? null,
+      });
+      if (row.marksObtained != null) entry.totalObtained += row.marksObtained;
+      if (exam.maxMarks != null) entry.totalMax += exam.maxMarks;
+    }
+    const exams = Array.from(byExam.values())
+      .sort((a, b) => {
+        const byDate = (b.examDate ?? "").localeCompare(a.examDate ?? "");
+        return byDate !== 0 ? byDate : b.examId - a.examId;
+      })
+      .slice(0, 5)
+      .map((entry) => ({
+        ...entry,
+        percentage:
+          entry.totalMax > 0
+            ? Math.round((entry.totalObtained / entry.totalMax) * 1000) / 10
+            : null,
+      }));
+
+    // Timetable: bacche ki class ka hafta, teacher ke naam ke saath
+    // (routes ke withTeacherName wala hi scope-niyam yahan bhi).
+    const timetableRows = await store.getTimetableEntries(
+      schoolId,
+      student.class,
+    );
+    const timetable: ParentOverviewChild["timetable"] = [];
+    for (const row of timetableRows) {
+      let teacherName: string | null = null;
+      if (row.teacherId != null) {
+        const member = await store.getStaffMember(row.teacherId);
+        if (member && member.schoolId === schoolId) {
+          teacherName = member.name;
+        }
+      }
+      timetable.push({ ...row, teacherName });
+    }
+
+    children.push({
+      student: {
+        id: student.id,
+        name: student.name,
+        class: student.class,
+        section: student.section,
+        rollNo: student.rollNo ?? null,
+        admissionNo: student.admissionNo,
+        fatherName: student.fatherName,
+      },
+      attendance,
+      fees: {
+        monthlyFee: status.monthlyFee,
+        admissionTotal: status.admissionTotal,
+        admissionPaidSoFar: status.admissionPaidSoFar,
+        admissionBalance: status.admissionBalance,
+        admissionPaid: status.admissionPaid,
+        totalPaid,
+        pendingDues: status.pendingDues,
+        pendingDuesTotal: status.pendingDues.reduce(
+          (sum, due) => sum + due.amount,
+          0,
+        ),
+        dueMonths: status.monthStatus
+          .filter((month) => month.tuitionStatus === "due")
+          .map((month) => month.name),
+        monthStatus: status.monthStatus,
+      },
+      results: { exams },
+      timetable,
+    });
+  }
+
+  return { children, notices };
+}
+
+// ---------------------------------------------------------------------------
 // Attendance office reports (v1.7) — DatabaseStorage aur MockStorage dono
 // yahi do PURE helpers istemal karte hain, taaki hisaab har jagah ek
 // jaisa rahe (summarizeAttendance wala hi usool). Helpers sirf diye gaye
@@ -774,6 +1005,9 @@ export interface IStorage {
   // (markAttendanceBulk wala hi pattern).
   getTimetableEntries(schoolId: number, className: string): Promise<TimetableEntry[]>;
   getTimetableEntry(id: number): Promise<TimetableEntry | undefined>;
+  // Clash jaanch (v2.0): ek teacher ki school-bhar ki entries —
+  // route inhi me same day/period ki dusri class dhoondhta hai.
+  getTimetableEntriesByTeacher(schoolId: number, teacherId: number): Promise<TimetableEntry[]>;
   upsertTimetableEntry(entry: InsertTimetableEntry): Promise<TimetableEntry>;
   deleteTimetableEntry(id: number): Promise<void>;
 
@@ -853,6 +1087,8 @@ export interface IStorage {
     installments: FeeInstallmentInput[],
   ): Promise<GenerateInstallmentsResult>;
   getSchoolExport(schoolId: number): Promise<SchoolExportData>;
+  // Parent overview (v2.0) — buildParentOverviewImpl hi asal kaam hai.
+  getParentOverview(schoolId: number, parentUserId: number): Promise<ParentOverview>;
 } // <-- interface yahan band hona chahiye tha
 
 // 2. Database Implementation
@@ -1367,6 +1603,12 @@ export class DatabaseStorage implements IStorage {
     return entry;
   }
 
+  async getTimetableEntriesByTeacher(schoolId: number, teacherId: number): Promise<TimetableEntry[]> {
+    const rows = await db.select().from(timetableEntries)
+      .where(and(eq(timetableEntries.schoolId, schoolId), eq(timetableEntries.teacherId, teacherId)));
+    return rows.sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.periodNo - b.periodNo);
+  }
+
   // Upsert: pehle (school, class, day, period) par select — maujood ho
   // to subject/teacher update, warna insert. Schema me is chaar par
   // unique index bhi hai, isliye dohra record DB star par bhi nahi
@@ -1680,6 +1922,10 @@ export class DatabaseStorage implements IStorage {
 
   async getSchoolExport(schoolId: number): Promise<SchoolExportData> {
     return buildSchoolExportImpl(this, schoolId);
+  }
+
+  async getParentOverview(schoolId: number, parentUserId: number): Promise<ParentOverview> {
+    return buildParentOverviewImpl(this, schoolId, parentUserId);
   }
 }
 
@@ -2306,6 +2552,12 @@ export class MockStorage implements IStorage {
     return this.timetableEntriesData.find((item) => item.id === id);
   }
 
+  async getTimetableEntriesByTeacher(schoolId: number, teacherId: number): Promise<TimetableEntry[]> {
+    return this.timetableEntriesData
+      .filter((item) => item.schoolId === schoolId && item.teacherId === teacherId)
+      .sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.periodNo - b.periodNo);
+  }
+
   async upsertTimetableEntry(entry: InsertTimetableEntry): Promise<TimetableEntry> {
     const existing = this.timetableEntriesData.find(
       (item) =>
@@ -2634,6 +2886,10 @@ export class MockStorage implements IStorage {
 
   async getSchoolExport(schoolId: number): Promise<SchoolExportData> {
     return buildSchoolExportImpl(this, schoolId);
+  }
+
+  async getParentOverview(schoolId: number, parentUserId: number): Promise<ParentOverview> {
+    return buildParentOverviewImpl(this, schoolId, parentUserId);
   }
 }
 

@@ -18,7 +18,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { apiGet, apiPost, apiDel } from "@/lib/api";
+import { apiGet, apiPost, apiDel, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Link } from "wouter";
 import {
@@ -186,11 +186,22 @@ export default function Timetable() {
       setCell(null);
       void loadEntries();
     } catch (e) {
-      toast({
-        title: "Save nahi hua",
-        description: "Dobara koshish karein.",
-        variant: "destructive",
-      });
+      // Clash (v2.0): server 409 + apna saaf message bhejta hai —
+      // wahi dikhao taaki office ko pata chale teacher kahan busy
+      // hai. Dialog khula rehta hai, dusra teacher chun sakte hain.
+      if (e instanceof ApiError && e.status === 409) {
+        toast({
+          title: "Teacher Clash — Save nahi hua",
+          description: e.message,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Save nahi hua",
+          description: "Dobara koshish karein.",
+          variant: "destructive",
+        });
+      }
     } finally {
       setSaving(false);
     }

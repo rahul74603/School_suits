@@ -2811,6 +2811,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   );
 
   // ---------------------------------------------------------------------
+  // Parent overview (v2.0, Arena port #5) — parent login ke baad ki
+  // home screen ka EK call. Jawab buildParentOverviewImpl banata hai:
+  // har linked bacche ka profile, is mahine ki hajri, fee status
+  // (getStudentStatus wala hi hisaab — Fees page se hamesha mail),
+  // approved results ka exam-wise summary, class timetable, aur
+  // school ke parent-visible notices.
+  // † niyam: bacche SIRF parent_students links se aate hain — is
+  // route me koi :id/studentId parameter hai hi nahi jise badalkar
+  // dusre ka baccha dekha ja sake. Sirf parent role; baaki roles ko
+  // ye screen chahiye hi nahi (unke apne pages hain).
+  // ---------------------------------------------------------------------
+  app.get(
+    "/api/parent/overview",
+    requireAuth,
+    requireRole("parent"),
+    async (req, res) => {
+      const schoolId = requireSchoolId(req, res);
+      if (schoolId == null) return;
+      const overview = await storage.getParentOverview(
+        schoolId,
+        req.user!.id,
+      );
+      res.json(overview);
+    },
+  );
+
+  // ---------------------------------------------------------------------
   // Notices (§5.8 #70–72) — audience: all | teachers | parents.
   // Parent ko teachers-wale notices kabhi nahi; teacher/staff ko
   // parents-wale nahi. Principal/accountant/super-hooked roles sab
@@ -3082,6 +3109,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // #78 — ek entry upsert: (school, class, day, period) par maujood
   // ho to wahi entry badalti hai, warna nayi banti hai. teacherId
   // aaya ho to wo staff ISI school ka hona lazmi (warna 400).
+  // v2.0: teacher usi din/period me dusri class me pehle se ho to
+  // 409 TIMETABLE_TEACHER_CLASH (neeche handler me jaanch).
   app.post(
     "/api/timetable",
     requireAuth,
@@ -3097,6 +3126,42 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res
             .status(400)
             .json({ message: "Teacher does not belong to this school" });
+        }
+        // Clash jaanch (v2.0, Arena port #1): wahi teacher, wahi
+        // school, wahi din + period, lekin DUSRI class = teacher
+        // double-booked — 409. Apni hi class ka wahi slot upsert ka
+        // target hai (update), clash nahi. Class ka apna clash
+        // (ek class, ek din/period, do entries) schema ke unique
+        // index + is upsert se pehle se hi namumkin hai — dusri
+        // entry banti hi nahi, wahi entry update hoti hai.
+        const teacherEntries = await storage.getTimetableEntriesByTeacher(
+          schoolId,
+          result.data.teacherId,
+        );
+        const clash = teacherEntries.find(
+          (entry) =>
+            entry.dayOfWeek === result.data.dayOfWeek &&
+            entry.periodNo === result.data.periodNo &&
+            entry.className !== result.data.className,
+        );
+        if (clash) {
+          const dayNames = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+          ];
+          const dayName =
+            dayNames[clash.dayOfWeek - 1] ?? `Day ${clash.dayOfWeek}`;
+          return res.status(409).json({
+            code: "TIMETABLE_TEACHER_CLASH",
+            message:
+              `Teacher ${member.name} is samay pehle se Class ${clash.className} ` +
+              `me padha rahe hain (${dayName}, Period ${clash.periodNo} — ${clash.subject}). ` +
+              `Ek teacher ek hi samay par do class me nahi padha sakta.`,
+          });
         }
       }
       const saved = await storage.upsertTimetableEntry({

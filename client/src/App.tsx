@@ -30,6 +30,11 @@ import Attendance from "@/pages/Attendance";
 // screen ab bani (list sab roles ko, banana principal/teacher ko)
 import Notices from "@/pages/Notices";
 
+// 🏠 Parent Home (v2.0): parent login ke baad ki pehli screen —
+// bacche ki hajri/fees/notices/results/timetable ek hi jagah
+// (GET /api/parent/overview). Sirf parent role ke liye.
+import ParentHome from "@/pages/ParentHome";
+
 // 🗓️ Timetable (v1.7): class ka hafta-grid — dekhna sab roles ko,
 // badalna principal/teacher ko (page ke andar gating hai)
 import Timetable from "@/pages/Timetable";
@@ -92,6 +97,10 @@ function Sidebar({
     // 🏫 Schools sirf Super Admin ko — dusre roles ke liye link hi nahi banta.
     ...(user?.role === "super_admin"
       ? [{ href: "/schools", label: "Schools", icon: Building2 }]
+      : []),
+    // 🏠 Parent Home sirf parent ko — uski pehli screen yahi hai.
+    ...(user?.role === "parent"
+      ? [{ href: "/parent", label: "Parent Home", icon: Home }]
       : []),
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/students", label: "Students", icon: Users },
@@ -159,7 +168,7 @@ function Sidebar({
         })}
       </nav>
 
-      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 1.9</div>
+      <div className="px-4 pb-4 text-[11px] text-slate-500">Version 2.0</div>
     </div>
   );
 }
@@ -268,7 +277,16 @@ function Router() {
             {user?.role === "super_admin" && (
               <Route path="/schools" component={Schools} />
             )}
-            <Route path="/" component={Dashboard} />
+            {/* 🏠 Parent login ke baad seedha Parent Home par utarta
+                hai (office Dashboard uske kaam ka nahi) — /schools
+                wale role-gate wala hi pattern. */}
+            {user?.role === "parent" && (
+              <Route path="/parent" component={ParentHome} />
+            )}
+            <Route
+              path="/"
+              component={user?.role === "parent" ? ParentHome : Dashboard}
+            />
             <Route path="/students" component={Students} />
             <Route path="/attendance" component={Attendance} />
             <Route path="/timetable" component={Timetable} />
